@@ -27,7 +27,7 @@ def test_policy_block_is_handled_and_cannot_reach_runtime_work():
     assert 'SW_LOG.logExecResult("intel_dks_policy_block", 0, detail)' in MAIN
     assert '"worker_started=false", "handled=true", "fatal=false"' in MAIN
     dispatch_guard = MAIN.index("if isDrumKitWorkflow and intelMacDrumsepUnsupported() then")
-    dependency_guard = MAIN.index("ensureDependenciesInteractive()", dispatch_guard)
+    dependency_guard = MAIN.index("verifyDependenciesReadyForProcessing()", dispatch_guard)
     assert MAIN.index("showIntelMacDksPolicyBlock(workflowSourceState)", dispatch_guard) < dependency_guard
     assert MAIN.index("return", dispatch_guard) < dependency_guard
 

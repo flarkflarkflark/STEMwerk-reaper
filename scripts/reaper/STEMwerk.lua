@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description STEMwerk - AI Stem Separation
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.0.7
+-- @version 2.3.1.0
 -- @changelog
 --   2026-04-24: Added quick-command path for toolbar explode actions that run without opening Main UI.
 --   2026-04-24: Fixed playback-state transfer for imported stem takes with source-length guard (prevents double-stretch/content mismatch).
@@ -54,7 +54,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.3.0.7"
+local APP_VERSION = "2.3.1.0"
 SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
@@ -447,13 +447,30 @@ local function canRunPython(pythonCmd)
     end
 
     local versionCmd = quoteArg(pythonCmd) .. " -c " .. quoteArg("import sys; print('{}.{}.{}'.format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))")
-    local versionRc, versionOut = execProcess(versionCmd, 12000)
-    if versionRc ~= 0 or not versionOut or versionOut == "" then
-        local h = io.popen(versionCmd .. " 2>&1")
-        if h then
-            versionOut = h:read("*a") or ""
-            local ok, _, code = h:close()
-            versionRc = (ok == true or code == 0) and 0 or (tonumber(code) or -1)
+
+    -- A single failed/timed-out version probe (e.g. a transient
+    -- reaper.ExecProcess sentinel/timeout such as rc=-999) does not prove
+    -- this interpreter is broken -- canRunPython already proved it launches
+    -- above. Retry once via the same ExecProcess-then-popen sequence before
+    -- concluding the probe genuinely failed: a transient PROBE_FAILURE must
+    -- not be treated as runtime-invalid (issue #110).
+    local versionRc, versionOut
+    for attempt = 1, 2 do
+        versionRc, versionOut = execProcess(versionCmd, 12000)
+        if versionRc ~= 0 or not versionOut or versionOut == "" then
+            local h = io.popen(versionCmd .. " 2>&1")
+            if h then
+                versionOut = h:read("*a") or ""
+                local ok, _, code = h:close()
+                versionRc = (ok == true or code == 0) and 0 or (tonumber(code) or -1)
+            end
+        end
+        if versionRc == 0 and versionOut and versionOut ~= "" then
+            break
+        end
+        if attempt == 1 then
+            debugLog("canRunPython " .. tostring(OS) .. ": version probe attempt 1 failed for "
+                .. tostring(pythonCmd) .. ", retrying (transient probe failure, not runtime-invalid)")
         end
     end
 
@@ -1046,6 +1063,7 @@ isPythonAvailable = SW_SETUP.isPythonAvailable
 runSetup = SW_SETUP.runSetup
 verifyRuntimeAfterBootstrap = SW_SETUP.verifyRuntimeAfterBootstrap
 ensureDependenciesInteractive = SW_SETUP.ensureDependenciesInteractive
+verifyDependenciesReadyForProcessing = SW_SETUP.verifyDependenciesReadyForProcessing
 persistPythonPath = SW_SETUP.persistPythonPath
 readCapabilities = SW_SETUP.readCapabilities
 
@@ -1178,6 +1196,10 @@ end
 
 -- Stem configuration (with selection state)
 -- First 4 are always shown, Guitar/Piano only for 6-stem model
+-- DKS import helpers (pure module, loaded before first delegation use).
+DKS_IMPORT = dofile(script_path .. "_internal/STEMwerk_DKS_Import.lua")
+-- Origin-project capture/validation for import targeting (issue #91).
+PROJECT_CONTEXT = dofile(script_path .. "_internal/STEMwerk_Project_Context.lua")
 STEMS = {
     { name = "Vocals", color = {255, 100, 100}, file = "vocals.wav", selected = true, key = "1", sixStemOnly = false },
     { name = "Drums",  color = {100, 200, 255}, file = "drums.wav", selected = true, key = "2", sixStemOnly = false },
@@ -1198,18 +1220,24 @@ local DRUMKIT_STEMS = {
 }
 
 local function activateWorkflowStemSet(isDirectDKS)
+    local beforeName = tostring(STEMS and STEMS[1] and STEMS[1].name or "?")
     STEMS = isDirectDKS and DRUMKIT_STEMS or STANDARD_STEMS
     if SETTINGS_MOD and SETTINGS_MOD.configure then
         SETTINGS_MOD.configure({ STEMS = STEMS })
     end
+    local caller = "?"
+    local info = debug and debug.getinfo and debug.getinfo(2, "Sl")
+    if info then caller = tostring(info.short_src or "?") .. ":" .. tostring(info.currentline or 0) end
+    if SW_LOG and SW_LOG.logExecResult then
+        SW_LOG.logExecResult("dks_stemset_activate isDirectDKS=" .. tostring(isDirectDKS)
+            .. " before_first=" .. beforeName
+            .. " after_first=" .. tostring(STEMS[1] and STEMS[1].name or "?")
+            .. " caller=" .. caller, nil, "")
+    end
 end
 
 function normalizeStemPathKey(name)
-    local key = tostring(name or ""):lower()
-    if key == "hihat" or key == "hh" then
-        return "hi-hat"
-    end
-    return key
+    return DKS_IMPORT.normalizeStemPathKey(name)
 end
 
 function normalizeStemPathMap(stemPaths)
@@ -1221,35 +1249,7 @@ function normalizeStemPathMap(stemPaths)
 end
 
 local function collectStemPathsFromStdoutJson(stdoutFile)
-    if not stdoutFile or stdoutFile == "" then return {} end
-    local f = io.open(stdoutFile, "r")
-    if not f then return {} end
-    local text = f:read("*a") or ""
-    f:close()
-    if text == "" then return {} end
-
-    local lastJsonLine = nil
-    for line in tostring(text):gmatch("[^\r\n]+") do
-        local trimmed = tostring(line or ""):match("^%s*(.-)%s*$") or ""
-        if trimmed:sub(1, 1) == "{" and trimmed:sub(-1) == "}" and trimmed:find('"%s*:%s*"', 1) then
-            lastJsonLine = trimmed
-        end
-    end
-    if not lastJsonLine then return {} end
-
-    local stems = {}
-    for rawKey, rawPath in lastJsonLine:gmatch('"([^"]+)"%s*:%s*"(.-)"') do
-        local key = normalizeStemPathKey(rawKey:gsub("_", "-"))
-        local path = tostring(rawPath or ""):gsub('\\"', '"'):gsub("\\\\", "\\")
-        if key ~= "" and path ~= "" then
-            local probe = io.open(path, "rb")
-            if probe then
-                probe:close()
-                stems[key] = path
-            end
-        end
-    end
-    return stems
+    return DKS_IMPORT.collectStemPathsFromStdoutJson(stdoutFile)
 end
 
 function stemPathMapLooksLikeDrumKit(stemPaths)
@@ -2060,7 +2060,7 @@ function showIntelMacDksPolicyBlock(source)
     local title = trSafeValue("drumsep_intel_mac_unsupported_title", "Drum Kit Split unavailable on Intel Mac")
     local body = trSafeValue(
         "drumsep_intel_mac_unsupported_body",
-        "Drum Kit Split is not available on Intel Mac in STEMwerk 2.3.0.6. Normal CPU stem separation, including the normal six-stem mode, remains available."
+        "Drum Kit Split is not available on Intel Mac in STEMwerk 2.3.1.0. Normal CPU stem separation, including the normal six-stem mode, remains available."
     )
     if reaper and type(reaper.ShowMessageBox) == "function" then
         reaper.ShowMessageBox(tostring(body), tostring(title), 0)
@@ -13403,6 +13403,24 @@ function renderFlarkLogo(ctx)
     gfx.drawstr(audioPart)
 end
 
+-- Issue #91 timing fix: capture the REAPER project requesting this
+-- processing action synchronously, at the moment of acceptance (Process
+-- click / quick preset) -- before any reaper.defer() call. If capture were
+-- left until inside the deferred callback (as runSeparationWorkflow used to
+-- do), a project-tab switch during the defer window would capture the
+-- wrong (now-active) project instead of the one the user actually accepted
+-- processing in. Callers must pass the returned context straight into
+-- runSeparationWorkflow() and never call PROJECT_CONTEXT.capture again for
+-- the same processing action (including retries/re-defers of it). See
+-- scripts/reaper/_internal/STEMwerk_Project_Context.lua.
+function captureOriginProjectContext(anchorItem)
+    local anchorTracks = {}
+    for anchorTrackIdx = 0, (reaper.CountSelectedTracks(0) or 0) - 1 do
+        anchorTracks[#anchorTracks + 1] = reaper.GetSelectedTrack(0, anchorTrackIdx)
+    end
+    return PROJECT_CONTEXT.capture(reaper, anchorItem, anchorTracks)
+end
+
 function finalizeDialogLoop(ctx)
     local char = (ctx and ctx.char) or -1
     if GUI.result == nil and char ~= -1 then
@@ -13445,8 +13463,13 @@ function finalizeDialogLoop(ctx)
         helpState.openedFrom = "dialog"
         reaper.defer(function() showArtGallery() end)
     elseif GUI.result then
+        -- Capture the origin project now, synchronously, before defer --
+        -- see captureOriginProjectContext() above.
+        local originProjectContext = captureOriginProjectContext(reaper.GetSelectedMediaItem(0, 0))
         reaper.defer(function()
-            local ok, err = xpcall(runSeparationWorkflow, function(e)
+            local ok, err = xpcall(function()
+                runSeparationWorkflow(originProjectContext)
+            end, function(e)
                 return tostring(e) .. "\n" .. debug.traceback("", 2)
             end)
             if not ok then
@@ -13745,6 +13768,327 @@ local function fileSizeBytes(p)
     local sz = f:seek("end")
     f:close()
     return tonumber(sz) or -1
+end
+
+B0_MODEL_BLOCK_MESSAGE =
+    "The required model for this workflow is not installed. Open STEMwerk Setup and run Repair to install the required models before processing."
+
+function B0_readSimpleEnvFile(path)
+    local out = {}
+    if not path or path == "" then return out end
+    local f = io.open(path, "r")
+    if not f then return out end
+    for line in f:lines() do
+        local k, v = tostring(line or ""):match("^([A-Z0-9_]+)=(.*)$")
+        if k then out[k] = v or "" end
+    end
+    f:close()
+    return out
+end
+
+function B0_getReadyToGoState()
+    local runtime = (type(getRuntimePaths) == "function") and getRuntimePaths() or nil
+    local stateDir = runtime and runtime.runtimeState or ""
+    if stateDir == "" then return {} end
+    return B0_readSimpleEnvFile(stateDir .. PATH_SEP .. "ready_to_go.env")
+end
+
+function B0_getDefaultModelCacheDir()
+    local ready = B0_getReadyToGoState()
+    if ready.CORE_MODEL_CACHE_DIR and ready.CORE_MODEL_CACHE_DIR ~= "" then
+        return ready.CORE_MODEL_CACHE_DIR
+    end
+    local home = (type(getHome) == "function" and getHome()) or os.getenv("HOME") or ""
+    if OS == "Windows" then
+        local localAppData = os.getenv("LOCALAPPDATA") or ""
+        if localAppData ~= "" then
+            return localAppData .. "\\STEMwerk\\models"
+        end
+        local userProfile = os.getenv("USERPROFILE") or home
+        return userProfile .. "\\AppData\\Local\\STEMwerk\\models"
+    end
+    if OS == "macOS" then
+        return home .. "/Library/Application Support/STEMwerk/models"
+    end
+    local xdg = os.getenv("XDG_DATA_HOME") or ""
+    if xdg ~= "" then
+        return xdg .. "/STEMwerk/models"
+    end
+    return home .. "/.local/share/STEMwerk/models"
+end
+
+function B0_joinModelPath(modelDir, filename)
+    local dir = tostring(modelDir or "")
+    if dir == "" then return tostring(filename or "") end
+    local sep = (dir:find("\\") and "\\") or PATH_SEP
+    if dir:sub(-1) == "/" or dir:sub(-1) == "\\" then
+        return dir .. tostring(filename or "")
+    end
+    return dir .. sep .. tostring(filename or "")
+end
+
+function B0_requiredNormalModelAssets(modelId)
+    local id = tostring(modelId or "htdemucs")
+    if id == "htdemucs_ft" then
+        return "Quality", {
+            { name = "htdemucs_ft.yaml", minBytes = 1 },
+            { name = "f7e0c4bc-ba3fe64a.th", minBytes = 1024 },
+            { name = "d12395a8-e57c48e6.th", minBytes = 1024 },
+            { name = "92cfc3b6-ef3bcb9c.th", minBytes = 1024 },
+            { name = "04573f0d-f3cf25b2.th", minBytes = 1024 },
+        }
+    end
+    if id == "htdemucs_6s" then
+        return "6 Stems", {
+            { name = "htdemucs_6s.yaml", minBytes = 1 },
+            { name = "5c90dfd2-34c22ccb.th", minBytes = 1024 },
+        }
+    end
+    return "Normal Stems", {
+        { name = "htdemucs.yaml", minBytes = 1 },
+        { name = "955717e8-8726e21a.th", minBytes = 1024 },
+    }
+end
+
+function B0_normalDescriptorReferences(filename)
+    -- weightColumns is the real per-model source count (confirmed by loading
+    -- each installed checkpoint through the vendored demucs.repo.BagOnlyRepo
+    -- and reading BagOfModels.sources), enforced only when a descriptor
+    -- chooses to include an optional weights block at all.
+    local references = {
+        ["htdemucs.yaml"] = { hashes = { "955717e8" }, weightColumns = 4 },
+        ["htdemucs_6s.yaml"] = { hashes = { "5c90dfd2" }, weightColumns = 6 },
+        ["htdemucs_ft.yaml"] = { hashes = { "f7e0c4bc", "d12395a8", "92cfc3b6", "04573f0d" }, weightColumns = 4 },
+    }
+    return references[tostring(filename or "")]
+end
+
+-- Strict parser for the narrow Demucs bag-of-models descriptor grammar
+-- STEMwerk actually ships. The real consumer (vendor/stemwerk-core's
+-- audio-separator dependency, demucs/repo.py BagOnlyRepo.get_model) does
+-- `yaml.safe_load(open(yaml_file))` and expects a mapping with a required
+-- "models" list of signature strings, plus an optional "weights" list of one
+-- row of floats per model (BagOfModels asserts len(weights) == len(models)
+-- and every row the same width). Every currently installed descriptor is
+-- exactly a single flow-style "models: [...]" line, optionally followed by a
+-- "weights: [" block with one bracketed, comma-terminated float row per
+-- model and a closing "]" line, and nothing else. This parser accepts
+-- exactly that shape (CRLF and a trailing "# comment" per line are
+-- tolerated, matching the pre-existing comment handling) and rejects
+-- anything else, including any unrecognized trailing content -- so a valid
+-- "models:" line can no longer mask corrupt or structurally invalid content
+-- after it. It is deliberately not a general YAML parser: block-list/flow-map
+-- spellings of the same data are valid YAML but are not shapes any shipped
+-- descriptor uses, so they are intentionally rejected rather than guessed at.
+function b0StripComment(line)
+    return (line:gsub("%s+#.*$", ""))
+end
+
+function b0Trim(s)
+    return s:match("^%s*(.-)%s*$")
+end
+
+function B0_parseNormalDescriptor(content)
+    if content == "" or not content:find("%S") then
+        return false, "descriptor_empty"
+    end
+    if content:find("%z") then
+        return false, "descriptor_malformed"
+    end
+
+    local lines = {}
+    for line in (content .. "\n"):gmatch("([^\n]*)\n") do
+        lines[#lines + 1] = (line:gsub("\r$", ""))
+    end
+    while #lines > 0 and b0Trim(lines[#lines]) == "" do
+        lines[#lines] = nil
+    end
+    if #lines == 0 then
+        return false, "descriptor_empty"
+    end
+
+    local idx = 1
+    local modelsBody = b0Trim(b0StripComment(lines[idx])):match("^models%s*:%s*%[(.-)%]%s*$")
+    if modelsBody == nil then
+        return false, "descriptor_malformed"
+    end
+    idx = idx + 1
+
+    local models = {}
+    if b0Trim(modelsBody) ~= "" then
+        for rawToken in modelsBody:gmatch("[^,]+") do
+            local token = b0Trim(rawToken)
+            local quoted = token:match("^'(.*)'$") or token:match('^"(.*)"$')
+            if quoted == nil or quoted == "" or not quoted:match("^[%w_.-]+$") then
+                return false, "descriptor_malformed"
+            end
+            models[#models + 1] = quoted
+        end
+    end
+    if #models == 0 then
+        return false, "descriptor_malformed"
+    end
+
+    local weightRows = nil
+    if idx <= #lines then
+        local header = b0Trim(b0StripComment(lines[idx]))
+        if not header:match("^weights%s*:%s*%[%s*$") then
+            return false, "descriptor_malformed"
+        end
+        idx = idx + 1
+        weightRows = {}
+        local closed = false
+        while idx <= #lines do
+            local rowLine = b0Trim(b0StripComment(lines[idx]))
+            idx = idx + 1
+            if rowLine == "]" then
+                closed = true
+                break
+            end
+            local rowBody = rowLine:match("^%[(.-)%],?$")
+            if rowBody == nil then
+                return false, "descriptor_malformed"
+            end
+            local row = {}
+            for rawNum in rowBody:gmatch("[^,]+") do
+                local numToken = b0Trim(rawNum)
+                if not numToken:match("^%-?%d+%.?%d*$") then
+                    return false, "descriptor_malformed"
+                end
+                row[#row + 1] = tonumber(numToken)
+            end
+            if #row == 0 then
+                return false, "descriptor_malformed"
+            end
+            weightRows[#weightRows + 1] = row
+        end
+        if not closed then
+            return false, "descriptor_malformed"
+        end
+    end
+
+    if idx <= #lines then
+        return false, "descriptor_malformed"
+    end
+
+    return true, nil, models, weightRows
+end
+
+function B0_validateNormalDescriptor(path, expectedReference)
+    local f = io.open(path, "rb")
+    if not f then return false, "descriptor_missing" end
+    local content = f:read("*a") or ""
+    f:close()
+
+    local ok, reason, models, weightRows = B0_parseNormalDescriptor(content)
+    if not ok then
+        return false, reason
+    end
+
+    local expectedHashes = (expectedReference and expectedReference.hashes) or {}
+    local found = {}
+    for _, model in ipairs(models) do
+        found[model] = true
+    end
+    local expectedCount = 0
+    for _, reference in ipairs(expectedHashes) do
+        expectedCount = expectedCount + 1
+        if not found[tostring(reference)] then
+            return false, "descriptor_missing_reference"
+        end
+    end
+    if #models ~= expectedCount then
+        return false, "descriptor_missing_reference"
+    end
+
+    if weightRows then
+        if #weightRows ~= #models then
+            return false, "descriptor_malformed"
+        end
+        local rowWidth = #weightRows[1]
+        if rowWidth == 0 then
+            return false, "descriptor_malformed"
+        end
+        for _, row in ipairs(weightRows) do
+            if #row ~= rowWidth then
+                return false, "descriptor_malformed"
+            end
+        end
+        local expectedColumns = expectedReference and expectedReference.weightColumns
+        if expectedColumns and rowWidth ~= expectedColumns then
+            return false, "descriptor_malformed"
+        end
+    end
+
+    return true, nil
+end
+
+function B0_directKitAssets()
+    return {
+        { name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt", minBytes = 1048576 },
+        { name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml", minBytes = 64 },
+    }
+end
+
+function B0_collectProcessingRequiredAssets(runOptions)
+    local workflowMode = tostring((runOptions and runOptions.workflowMode) or "")
+    local workflowSource = tostring((runOptions and runOptions.workflowSource) or "")
+    local requirements = {}
+    if workflowMode == "drumkit" and workflowSource == DKS_WORKFLOW.SOURCE_DIRECT then
+        requirements[#requirements + 1] = { route = "Direct Kit", assets = B0_directKitAssets() }
+        return requirements
+    end
+    if workflowMode == "drumkit" and workflowSource == DKS_WORKFLOW.SOURCE_EXTRACT then
+        local normalRoute, normalAssets = B0_requiredNormalModelAssets(effectiveRunModel and effectiveRunModel() or SETTINGS.model)
+        requirements[#requirements + 1] = { route = normalRoute, assets = normalAssets }
+        requirements[#requirements + 1] = { route = "Kit Split", assets = B0_directKitAssets() }
+        return requirements
+    end
+    local route, assets = B0_requiredNormalModelAssets(effectiveRunModel and effectiveRunModel() or SETTINGS.model)
+    requirements[#requirements + 1] = { route = route, assets = assets }
+    return requirements
+end
+
+function verifyProcessingAssetsReady(runOptions)
+    local modelDir = B0_getDefaultModelCacheDir()
+    local requirements = B0_collectProcessingRequiredAssets(runOptions)
+    local missing = {}
+    local routes = {}
+    for _, req in ipairs(requirements) do
+        routes[#routes + 1] = tostring(req.route or "")
+        for _, asset in ipairs(req.assets or {}) do
+            local path = B0_joinModelPath(modelDir, asset.name)
+            local descriptorReferences = B0_normalDescriptorReferences(asset.name)
+            local ready = true
+            local reason = nil
+            if descriptorReferences then
+                ready, reason = B0_validateNormalDescriptor(path, descriptorReferences)
+            else
+                local size = fileSizeBytes(path)
+                if size < tonumber(asset.minBytes or 1) then
+                    ready = false
+                    reason = (size < 0) and "asset_missing" or "asset_too_small"
+                end
+            end
+            if not ready then
+                missing[#missing + 1] = tostring(req.route or "workflow") .. ":" .. path
+                    .. "[" .. tostring(reason or "asset_invalid") .. "]"
+            end
+        end
+    end
+    if #missing == 0 then
+        SW_LOG.logExecResult("b0_preflight_ready routes=" .. table.concat(routes, ","), nil, "PROCESSING_MAY_DOWNLOAD=no")
+        return true
+    end
+    local detail = "missing_assets=" .. table.concat(missing, "|")
+    debugLog("b0_preflight_blocked " .. detail)
+    SW_LOG.logExecResult(
+        "b0_preflight_blocked worker_started=no download_started=no catalog_download_started=no",
+        -1,
+        detail
+    )
+    showMessage("Model Not Installed", B0_MODEL_BLOCK_MESSAGE, "warning", false)
+    return false
 end
 
 local TIMING_UNIX_OFFSET = nil
@@ -16562,6 +16906,7 @@ WORKFLOW.configure({
     captureWindowGeometry         = captureWindowGeometry,
     saveSettings                  = saveSettings,
     ensureDependenciesInteractive = ensureDependenciesInteractive,
+    verifyDependenciesReadyForProcessing = verifyDependenciesReadyForProcessing,
     getExtStateValue              = getExtStateValue,
     isAbsolutePath                = isAbsolutePath,
     quoteArg                      = quoteArg,
@@ -16577,6 +16922,7 @@ WORKFLOW.configure({
     refreshRuntimeDevices         = refreshRuntimeDevices,
     recordTimingEvent             = writeTimingEvent,
     effectiveRunDevice            = effectiveRunDevice,
+    verifyProcessingAssetsReady   = verifyProcessingAssetsReady,
     resolveStemSetForPaths        = resolveStemSetForPaths,
 })
 
@@ -16835,12 +17181,16 @@ function createStemTracks(item, stemPaths, itemPos, itemLen, options)
         stemSet = options.stemSet
         drumKitOutput = stemSet == DRUMKIT_STEMS
     end
+    local isExtractDrumKitImport = drumKitOutput and tostring(progressState.workflowSource or "") == DKS_WORKFLOW.SOURCE_EXTRACT
 
     reaper.Undo_BeginBlock()
 
     local selectedCount = 0
     for _, stem in ipairs(stemSet) do
         if stem.selected and normalizedStemPaths[normalizeStemPathKey(stem.name)] then selectedCount = selectedCount + 1 end
+    end
+    if isExtractDrumKitImport then
+        SW_LOG.logExecResult("lua_dks_extract_import_candidate_count=" .. tostring(selectedCount), nil, "")
     end
 
     local folderKind = drumKitOutput and activeDrumKitFolderSuffix() or "Stems"
@@ -16860,9 +17210,22 @@ function createStemTracks(item, stemPaths, itemPos, itemLen, options)
     end
 
     local importedCount = 0
+    local selectedImportCount = 0
     for _, stem in ipairs(stemSet) do
         if stem.selected then
-            local stemPath = normalizedStemPaths[normalizeStemPathKey(stem.name)]
+            selectedImportCount = selectedImportCount + 1
+            local stemKey = normalizeStemPathKey(stem.name)
+            local stemPath = normalizedStemPaths[stemKey]
+            if isExtractDrumKitImport then
+                SW_LOG.logExecResult(
+                    "import_stem_key=" .. tostring(stemKey)
+                        .. " path_exists=" .. tostring(stemPath ~= nil and stemPath ~= "")
+                        .. " imported=" .. tostring(stemPath ~= nil and stemPath ~= "")
+                        .. " path=" .. string.format("%q", tostring(stemPath or "")),
+                    nil,
+                    ""
+                )
+            end
             if stemPath then
                 reaper.InsertTrackAtIndex(trackIdx + importedCount, true)
                 local newTrack = reaper.GetTrack(0, trackIdx + importedCount)
@@ -16889,6 +17252,10 @@ function createStemTracks(item, stemPaths, itemPos, itemLen, options)
                 importedCount = importedCount + 1
             end
         end
+    end
+    if isExtractDrumKitImport then
+        SW_LOG.logExecResult("lua_dks_extract_import_selected_count=" .. tostring(selectedImportCount), nil, "")
+        SW_LOG.logExecResult("lua_dks_extract_import_created=" .. tostring(importedCount), nil, "")
     end
 
     if folderTrack and importedCount > 0 then
@@ -17700,6 +18067,33 @@ end
 WORKFLOW_TEMP_DIR = nil
 WORKFLOW_TEMP_INPUT = nil
 
+-- DKS import diagnostics: dump stem-map state with escaped representations so
+-- invisible differences (backslashes, CRs, quotes, encoding) become visible.
+-- Defined as globals: the main chunk is at Lua's 200-local limit.
+function dksLogDiag(msg)
+    debugLog(msg)
+    SW_LOG.logExecResult(msg, nil, "")
+end
+
+function dksDumpStemMap(tag, map)
+    local n = 0
+    for k, v in pairs(map or {}) do
+        n = n + 1
+        dksLogDiag(string.format("%s key=%q path=%q path_len=%d", tag, tostring(k), tostring(v), #tostring(v)))
+    end
+    dksLogDiag(string.format("%s count=%d", tag, n))
+end
+
+function dksDescribeStemSet(tag, set)
+    local names = {}
+    local sels = {}
+    for i, s in ipairs(set or {}) do
+        names[#names + 1] = tostring(s.name)
+        sels[#sels + 1] = tostring(s.name) .. "=" .. tostring(s.selected)
+    end
+    dksLogDiag(string.format("%s count=%d names=%q selected={%s}", tag, #(set or {}), table.concat(names, ","), table.concat(sels, ",")))
+end
+
 -- Process stems after separation completes (called from progress UI)
 function processStemsResult(stems)
     SW_LOG.logExecResult("timing:finalize_start single", nil, "")
@@ -17714,8 +18108,35 @@ function processStemsResult(stems)
         sourceTrackName = sourceTrackName or "Selection"
         sourceItemName = sourceItemName or "Selection"
     end
-    stems = HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName)
+    stems = HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName, resolveStemSetForPaths(stems))
+    local dksDiagActive = tostring(progressState.workflowSource or "") == DKS_WORKFLOW.SOURCE_EXTRACT
+    if dksDiagActive then
+        dksLogDiag("dks_import_context workflow_source=" .. tostring(progressState.workflowSource or "")
+            .. " stem_file_destination=" .. tostring(SETTINGS.stemFileDestination or "")
+            .. " custom_stem_dir=" .. string.format("%q", tostring(SETTINGS.customStemDir or ""))
+            .. " source_track_name=" .. string.format("%q", tostring(sourceTrackName))
+            .. " source_item_name=" .. string.format("%q", tostring(sourceItemName)))
+        dksDescribeStemSet("dks_global_STEMS", STEMS)
+        dksDumpStemMap("dks_import_input_post_finalize", stems)
+    end
     local stemSet, drumKitOutput = resolveStemSetForPaths(stems)
+    if dksDiagActive then
+        dksLogDiag("dks_resolved_stemset drumKitOutput=" .. tostring(drumKitOutput))
+        dksDescribeStemSet("dks_resolved_stemset", stemSet)
+    end
+
+    -- Hard success invariant for drum kit routes: the number of validated
+    -- output stems is what the import must deliver. Any mismatch is a
+    -- workflow failure (handled below), never a silent green success.
+    local dksExpectedOutputs = 0
+    if drumKitOutput then
+        for _, stem in ipairs(stemSet) do
+            if stem.selected and stems[normalizeStemPathKey(stem.name)] then
+                dksExpectedOutputs = dksExpectedOutputs + 1
+            end
+        end
+        SW_LOG.logExecResult("dks_expected_output_count=" .. tostring(dksExpectedOutputs), nil, "")
+    end
 
     writeTimingEvent(WORKFLOW_TEMP_DIR, "import_start", "single", {
         mode = SETTINGS.createNewTracks and "new_tracks" or "in_place",
@@ -18020,6 +18441,40 @@ function processStemsResult(stems)
 
     reaper.UpdateArrange()
 
+    -- Hard success invariant for drum kit routes (new-tracks import): the
+    -- imported track count must equal the validated output count. A mismatch
+    -- is a workflow failure: no green completion dialog, outputs preserved.
+    if drumKitOutput and SETTINGS.createNewTracks then
+        local importOk, importReason = DKS_IMPORT.validateImportResult(dksExpectedOutputs, tonumber(count) or 0)
+        SW_LOG.logExecResult("dks_imported_track_count=" .. tostring(count), nil, "")
+        SW_LOG.logExecResult("dks_import_validation_reason=" .. tostring(importReason), nil, "")
+        if not importOk then
+            SW_LOG.logExecResult(
+                "workflow_success=no",
+                nil,
+                "workflow_failure_reason=" .. tostring(importReason)
+                    .. " expected=" .. tostring(dksExpectedOutputs)
+                    .. " actual=" .. tostring(count)
+            )
+            SW_LOG.logExecResult("timing:finalize_end single", nil, "")
+            local failMsg = "Kit Split failed during REAPER import.\n\n"
+                .. "Expected " .. tostring(dksExpectedOutputs) .. " drum tracks, but "
+                .. tostring(count) .. " were created.\n\n"
+                .. "The generated drum WAV files were preserved for recovery.\n"
+                .. "Output folder: " .. tostring(WORKFLOW_TEMP_DIR or "unknown") .. "\n"
+                .. "Diagnostic log: " .. tostring(SW_LOG.getLogPath())
+            -- Diagnostics-state-only: without this, this failure path left
+            -- the run's current-processing state at "running" forever
+            -- (only the success path below ever wrote "completed").
+            if progressState.runContext then
+                SW_LOG.writeCurrentProcessingState(progressState.runContext, "failed")
+            end
+            showMessage("Kit Split Failed", failMsg, "error", false)
+            return false
+        end
+        SW_LOG.logExecResult("workflow_success=yes", nil, "")
+    end
+
     -- Show custom result window
     writeTimingEvent(WORKFLOW_TEMP_DIR, "import_end", "single", {
         mode = SETTINGS.createNewTracks and "new_tracks" or "in_place",
@@ -18030,6 +18485,9 @@ function processStemsResult(stems)
         SW_TIMING.endRun("success")
     end
     SW_LOG.logExecResult("timing:finalize_end single", nil, "")
+    if progressState.runContext then
+        SW_LOG.writeCurrentProcessingState(progressState.runContext, "completed")
+    end
     showResultWindow(selectedStemData, resultData or resultMsg)
 end
 
@@ -19054,7 +19512,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         applyTrustedWindowsRuntimeState(trustedWindowsRuntime)
     end
     if (not trustedWindowsRuntime) and (not canRunFfmpeg()) then
-        if not ensureDependenciesInteractive() then
+        if not verifyDependenciesReadyForProcessing() then
             if reaper and reaper.defer then
                 reaper.defer(function() showStemSelectionDialog() end)
             end
@@ -19092,6 +19550,20 @@ _sep.runSingleTrackSeparation = function(trackList)
 
     local baseTempDir = makeUniqueTempSubdir("STEMwerk")
     makeDir(baseTempDir)
+
+    -- Reuse the RunContext created by runSeparationWorkflow() (same
+    -- run_id); only the physical run_dir_name changes to this actually-used
+    -- base temp dir. Defensive fallback creates one if this entry point was
+    -- reached without going through runSeparationWorkflow() first.
+    if not progressState.runContext then
+        progressState.runContext = {
+            schema = 1,
+            run_id = (reaper and reaper.genGuid and reaper.genGuid()) or ("norunid_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))),
+            started_utc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+            project = PROJECT_CONTEXT.capture(reaper, selectedItem, nil),
+        }
+    end
+    progressState.runContext.run_dir_name = baseTempDir:match("([^/\\]+)$") or baseTempDir
 
     -- Check if we have a time selection
     local hasTimeSel = (timeSelectionMode and timeSelectionStart and timeSelectionEnd and timeSelectionEnd > timeSelectionStart)
@@ -19325,6 +19797,7 @@ _sep.runSingleTrackSeparation = function(trackList)
                     trackName = displayTrackName,
                     uiColor = getJobUIColor(track, jobIndex),
                     trackDir = itemDir,
+                    jobId = "item_" .. jobIndex,
                     inputFile = inputFile,
                     sourceItem = item,
                     sourceItems = {item},
@@ -19417,6 +19890,7 @@ _sep.runSingleTrackSeparation = function(trackList)
                     trackName = trackName,
                     uiColor = getJobUIColor(track, jobIndex),
                     trackDir = trackDir,
+                    jobId = "track_" .. jobIndex,
                     inputFile = inputFile,
                     sourceItem = sourceItem,
                     sourceItems = allSourceItems or {sourceItem},  -- All items for mute/delete
@@ -19456,6 +19930,7 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.totalTracks = #trackJobs
     multiTrackQueue.completedCount = 0
     multiTrackQueue.baseTempDir = baseTempDir
+    multiTrackQueue.runContext = progressState.runContext
     multiTrackQueue.workflowMode = workflowModeArg
     multiTrackQueue.workflowSource = workflowSourceArg
     multiTrackQueue.requestedStage2Model = requestedStage2ModelArg
@@ -19914,6 +20389,11 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
     job.execLogPath = SW_LOG.getLogPath()
     local execLogPath = job.execLogPath or SW_LOG.getLogPath()
     local jobTag = "item_" .. tostring(job.index or 0)
+    local runCtx = multiTrackQueue.runContext or progressState.runContext
+    local runIdArg = (runCtx and runCtx.run_id) or ""
+    local jobIdArg = job.jobId or jobTag
+    local runDirNameArg = (runCtx and runCtx.run_dir_name) or ""
+    local runStartedUtcArg = (runCtx and runCtx.started_utc) or ""
     job.rawPercent = 0
     job.percent = 0
     job.stage = isDrumKitWorkflowActive()
@@ -20065,6 +20545,10 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
             local exitF = escPS(exitCodeFile)
             local logPath = escPS(execLogPath)
             local jobTagEsc = escPS(jobTag)
+            local runIdEsc = escPS(runIdArg)
+            local jobIdEsc = escPS(jobIdArg)
+            local runDirNameEsc = escPS(runDirNameArg)
+            local runStartedUtcEsc = escPS(runStartedUtcArg)
 
             local psInner =
                 "$py='" .. python .. "';" ..
@@ -20077,6 +20561,11 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
                 "$jobTag='" .. jobTagEsc .. "';" ..
                 "$env:STEMWERK_LOG_PATH=$logPath;" ..
                 "$env:STEMWERK_JOB_TAG=$jobTag;" ..
+                "$env:STEMWERK_PROCESSING_MAY_DOWNLOAD='no';" ..
+                "$env:STEMWERK_RUN_ID='" .. runIdEsc .. "';" ..
+                "$env:STEMWERK_JOB_ID='" .. jobIdEsc .. "';" ..
+                "$env:STEMWERK_RUN_DIR_NAME='" .. runDirNameEsc .. "';" ..
+                "$env:STEMWERK_RUN_STARTED_UTC='" .. runStartedUtcEsc .. "';" ..
                 "Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue;" ..
                 "Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue;" ..
                 "$dq=[char]34;" ..
@@ -20113,7 +20602,11 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         else
             -- Fallback: run in foreground (old behavior)
             local cmd = string.format(
-                '%s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                'set STEMWERK_PROCESSING_MAY_DOWNLOAD=no && set STEMWERK_RUN_ID=%s && set STEMWERK_JOB_ID=%s && set STEMWERK_RUN_DIR_NAME=%s && set STEMWERK_RUN_STARTED_UTC=%s && %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                runIdArg,
+                jobIdArg,
+                runDirNameArg,
+                runStartedUtcArg,
                 quoteArg(PYTHON_PATH),
                 quoteArg(SEPARATOR_SCRIPT),
                 quoteArg(job.inputFile),
@@ -20152,7 +20645,12 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
               script:write("OUT=" .. quoteArg(job.trackDir) .. "\n")
               script:write("STEMWERK_LOG_PATH=" .. quoteArg(execLogPath) .. "\n")
               script:write("STEMWERK_JOB_TAG=" .. quoteArg(jobTag) .. "\n")
-              script:write("export STEMWERK_LOG_PATH STEMWERK_JOB_TAG\n")
+              script:write("STEMWERK_PROCESSING_MAY_DOWNLOAD=no\n")
+              script:write("STEMWERK_RUN_ID=" .. quoteArg(runIdArg) .. "\n")
+              script:write("STEMWERK_JOB_ID=" .. quoteArg(jobIdArg) .. "\n")
+              script:write("STEMWERK_RUN_DIR_NAME=" .. quoteArg(runDirNameArg) .. "\n")
+              script:write("STEMWERK_RUN_STARTED_UTC=" .. quoteArg(runStartedUtcArg) .. "\n")
+              script:write("export STEMWERK_LOG_PATH STEMWERK_JOB_TAG STEMWERK_PROCESSING_MAY_DOWNLOAD STEMWERK_RUN_ID STEMWERK_JOB_ID STEMWERK_RUN_DIR_NAME STEMWERK_RUN_STARTED_UTC\n")
               script:write("unset PYTHONPATH PYTHONHOME\n")
               script:write("MODEL=" .. quoteArg(modelArg) .. "\n")
               script:write("DEVICE=" .. quoteArg(deviceArg) .. "\n")
@@ -20202,7 +20700,11 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         else
             -- Fallback: run in foreground
             local cmd = string.format(
-                '%s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                'STEMWERK_PROCESSING_MAY_DOWNLOAD=no STEMWERK_RUN_ID=%s STEMWERK_JOB_ID=%s STEMWERK_RUN_DIR_NAME=%s STEMWERK_RUN_STARTED_UTC=%s %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                quoteArg(runIdArg),
+                quoteArg(jobIdArg),
+                quoteArg(runDirNameArg),
+                quoteArg(runStartedUtcArg),
                 quoteArg(PYTHON_PATH),
                 quoteArg(SEPARATOR_SCRIPT),
                 quoteArg(job.inputFile),
@@ -21608,6 +22110,9 @@ function multiTrackProgressLoop()
         gfx.quit()
         multiTrackQueue.active = false
         isProcessingActive = false  -- Reset guard so workflow can be restarted
+        if multiTrackQueue.runContext then
+            SW_LOG.writeCurrentProcessingState(multiTrackQueue.runContext, "cancelled")
+        end
 
         -- Preserve best-effort diagnostics before stopping workers; files may be partial on cancel.
         if multiTrackQueue.jobs then
@@ -21643,7 +22148,7 @@ function multiTrackProgressLoop()
 
         gfx.quit()
         -- Process all results
-        _sep.processAllStemsResult()
+        _sep.importAllStemsRespectingOriginProject()
         return
     end
 
@@ -21673,6 +22178,61 @@ end
 
 -- isProcessingActive is declared near the top of the file to avoid accidentally
 -- creating separate global/local variables in different parts of the script.
+
+-- Issue #91: import destination for a completed multi-track/parallel run
+-- must be the REAPER project that requested it, never whatever project is
+-- active when all jobs finish. Wraps the existing _sep.processAllStemsResult
+-- entry point (the sole call site below); does not change what that
+-- function does once it is safe to run. See
+-- scripts/reaper/_internal/STEMwerk_Project_Context.lua.
+_sep.importAllStemsRespectingOriginProject = function()
+    local runCtx = multiTrackQueue.runContext
+    if not PROJECT_CONTEXT then
+        -- Defensive: the project-context module failed to load. Fail closed
+        -- rather than import into an unvalidated/active project.
+        isProcessingActive = false
+        multiTrackQueue.active = false
+        showMessage(
+            "Original Project Unavailable",
+            "Processing completed, but stems could not be imported (project-context module unavailable).\n\n"
+                .. "Outputs remain available at:\n" .. tostring(multiTrackQueue.baseTempDir or "unknown"),
+            "warning", false
+        )
+        return
+    end
+    local originOk, originReason = PROJECT_CONTEXT.validateOriginProjectContext(reaper, runCtx)
+    if not originOk then
+        debugLog("multiTrackProgressLoop: import blocked, origin project unavailable (" .. tostring(originReason) .. ")")
+        SW_LOG.logExecResult("workflow_success=yes", nil, "import_result=origin_project_unavailable reason=" .. tostring(originReason))
+        isProcessingActive = false  -- Reset guard so workflow can be restarted
+        multiTrackQueue.active = false
+        if runCtx then
+            SW_LOG.writeCurrentProcessingState(runCtx, "completed")
+        end
+        showMessage(
+            "Original Project Unavailable",
+            "Processing completed successfully, but the REAPER project that requested it is no longer available.\n\n"
+                .. "Stems were not imported.\n\nOutputs remain available at:\n" .. tostring(multiTrackQueue.baseTempDir or "unknown"),
+            "warning", false
+        )
+        return
+    end
+    local pcallOk, err = PROJECT_CONTEXT.withProjectInstance(reaper, runCtx.project.ref, function()
+        _sep.processAllStemsResult()
+    end)
+    if not pcallOk then
+        debugLog("ERROR: multi-track import raised inside origin project scope: " .. tostring(err))
+        SW_LOG.logExecResult("workflow_success=yes", nil, "import_result=import_exception")
+        isProcessingActive = false
+        multiTrackQueue.active = false
+        showMessage(
+            "Import Error",
+            "Processing completed successfully, but an error occurred while importing stems into the original "
+                .. "project.\n\nOutputs remain available at:\n" .. tostring(multiTrackQueue.baseTempDir or "unknown"),
+            "error", false
+        )
+    end
+end
 
 -- Process all stems after parallel jobs complete
 _sep.processAllStemsResult = function()
@@ -21868,7 +22428,7 @@ _sep.processAllStemsResult = function()
         if next(stems) then
             local namingTrack = job.sourceTrackName or job.trackName or "Track"
             local namingItem = job.sourceItemName or job.sourceItemDisplayName or namingTrack
-            stems = HELPERS.finalizeStemFiles(stems, namingTrack, namingItem)
+            stems = HELPERS.finalizeStemFiles(stems, namingTrack, namingItem, resolveStemSetForPaths(stems))
             job.importedStemPaths = stems
             importPlan.stems = stems
             importPlan.hasStems = true
@@ -22319,6 +22879,16 @@ _sep.processAllStemsResult = function()
 
         multiTrackQueue.active = false
         isProcessingActive = false
+        -- Diagnostics-state-only: this is a genuine worker failure (zero
+        -- stems created across the whole run), so the run's current-
+        -- processing state must record "failed" here. Without this, the
+        -- state file was left at "running" forever (written once at
+        -- start, never updated on this failure path), which would make a
+        -- dead/crashed run look indistinguishable from one still in
+        -- progress to any later diagnostics read.
+        if multiTrackQueue.runContext then
+            SW_LOG.writeCurrentProcessingState(multiTrackQueue.runContext, "failed")
+        end
         showMessage("Separation Failed", msg, "error", false)
         return
     end
@@ -22622,11 +23192,46 @@ _sep.processAllStemsResult = function()
 
     SW_TIMING.endRun((multiTrackQueue.dksResultStatus == "partial") and "partial" or "success", { total_audio = totalAudioDur, rtf = realtimeFactor })
     SW_LOG.logExecResult("timing:finalize_end multi", nil, "")
+    if multiTrackQueue.runContext then
+        -- Diagnostics-state-only (does not affect actual import/processing
+        -- behavior above): a Drum Kit Split run's own dksResultStatus is
+        -- authoritative when present ("partial"/"failed" both mean this
+        -- run's diagnostics state must record a failure, never
+        -- "completed" -- a plain `== "partial"` check silently treated an
+        -- outright multi-job failure the same as success). Non-DKS
+        -- multi-track runs have no dksResultStatus at all, so they fall
+        -- back to whether every job actually imported its stems
+        -- (job.hadImportedStems, the same per-job success signal already
+        -- used above for timing) -- one or more failed jobs must record a
+        -- failed run, not a silently-completed one.
+        local multiRunWriteStatus
+        if multiTrackQueue.isDrumKitWorkflow then
+            multiRunWriteStatus = (multiTrackQueue.dksResultStatus == "partial" or multiTrackQueue.dksResultStatus == "failed")
+                and "failed" or "completed"
+        else
+            local anyJobFailed = false
+            for _, job in ipairs(multiTrackQueue.jobs or {}) do
+                if not job.hadImportedStems then anyJobFailed = true end
+            end
+            multiRunWriteStatus = anyJobFailed and "failed" or "completed"
+        end
+        SW_LOG.writeCurrentProcessingState(multiTrackQueue.runContext, multiRunWriteStatus)
+    end
     showResultWindow(selectedStemData, resultData)
 end
 
 -- Separation workflow
-function runSeparationWorkflow()
+-- originProjectContext: the requesting REAPER project, pre-captured
+-- synchronously at acceptance time by the caller (see
+-- captureOriginProjectContext() above finalizeDialogLoop) -- normal
+-- Process, quick presets, and retry/re-defer of the same processing action
+-- must all pass the SAME context through here rather than letting this
+-- function capture from whatever project happens to be active when the
+-- deferred callback actually runs. Falls back to a fresh capture only when
+-- omitted (defensive path for internal callers that bypass the released
+-- entry points above); no released deferred entry point relies on that
+-- fallback.
+function runSeparationWorkflow(originProjectContext)
     -- Prevent multiple concurrent runs
     if isProcessingActive then
         debugLog("=== runSeparationWorkflow BLOCKED - already processing ===")
@@ -22676,11 +23281,17 @@ function runSeparationWorkflow()
     activateWorkflowStemSet(isDrumKitWorkflow)
     setWorkflowContextForRun(runOptions)
 
+    if not verifyProcessingAssetsReady(runOptions) then
+        setWorkflowContextForRun(nil)
+        isProcessingActive = false
+        return
+    end
+
     if OS == "Windows" then
         showProcessingPlaceholderWindow(T("progress_checking_runtime") or "Checking runtime...")
     end
 
-    if (not trustedWindowsRuntime) and (not isDirectDKS) and (not ensureDependenciesInteractive()) then
+    if (not trustedWindowsRuntime) and (not isDirectDKS) and (not verifyDependenciesReadyForProcessing()) then
         if OS == "Windows" and progressState.windowOpen then
             closeProcessingWindow()
         end
@@ -22951,7 +23562,7 @@ function runSeparationWorkflow()
                     closeProcessingWindow()
                 end
                 isProcessingActive = false
-                reaper.defer(function() runSeparationWorkflow() end)
+                reaper.defer(function() runSeparationWorkflow(originProjectContext) end)
                 return
             end
         end
@@ -22984,6 +23595,38 @@ function runSeparationWorkflow()
     WORKFLOW_TEMP_INPUT = WORKFLOW_TEMP_DIR .. PATH_SEP .. "input.wav"
     debugLog("Temp dir: " .. WORKFLOW_TEMP_DIR)
     debugLog("Temp input: " .. WORKFLOW_TEMP_INPUT)
+
+    -- One authoritative RunContext per accepted processing action (Process
+    -- click / quick preset), created once here before any job is created or
+    -- launched. run_id is the authoritative logical identity (a GUID);
+    -- run_dir_name stays the physical temp-dir locator only. If the queue
+    -- later switches to the multi-track path, _sep.runSingleTrackSeparation
+    -- reuses this SAME run_id and only updates run_dir_name to the actual
+    -- base temp dir it creates.
+    --
+    -- project captures the REAPER project requesting this run (issue #91):
+    -- a live ReaProject* plus best-effort validation anchors. originProjectContext
+    -- is pre-captured by the caller at acceptance time -- before any async
+    -- work was launched -- so completed stems import back into that same
+    -- project even if the user switches project tabs while it runs. This is
+    -- a separate concern from the run_id/job_id diagnostics identity above;
+    -- see STEMwerk_Project_Context.lua.
+    local requestingOriginProjectContext = originProjectContext
+    if not requestingOriginProjectContext then
+        local requestingProjectAnchorTracks = {}
+        for anchorTrackIdx = 0, (reaper.CountSelectedTracks(0) or 0) - 1 do
+            requestingProjectAnchorTracks[#requestingProjectAnchorTracks + 1] = reaper.GetSelectedTrack(0, anchorTrackIdx)
+        end
+        requestingOriginProjectContext = PROJECT_CONTEXT.capture(reaper, selectedItem, requestingProjectAnchorTracks)
+    end
+    progressState.runContext = {
+        schema = 1,
+        run_id = (reaper and reaper.genGuid and reaper.genGuid()) or ("norunid_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))),
+        run_dir_name = WORKFLOW_TEMP_DIR:match("([^/\\]+)$") or WORKFLOW_TEMP_DIR,
+        started_utc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        project = requestingOriginProjectContext,
+    }
+    SW_LOG.writeCurrentProcessingState(progressState.runContext, "running")
 
     SW_TIMING.beginRun({ mode = "single", model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "" })
     SW_TIMING.beginJob("single", { model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "" })
@@ -23427,8 +24070,14 @@ main = function()
     if checkQuickPreset() then
         -- Quick mode: run immediately without dialog
         saveSettings()
+        -- Capture the origin project now, synchronously, before defer --
+        -- same rule as the normal Process path (see
+        -- captureOriginProjectContext() above finalizeDialogLoop).
+        local originProjectContext = captureOriginProjectContext(selectedItem)
         reaper.defer(function()
-            local ok, err = xpcall(runSeparationWorkflow, function(e)
+            local ok, err = xpcall(function()
+                runSeparationWorkflow(originProjectContext)
+            end, function(e)
                 return tostring(e) .. "\n" .. debug.traceback("", 2)
             end)
             if not ok then

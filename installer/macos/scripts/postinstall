@@ -3,8 +3,15 @@ set -euo pipefail
 
 # Postinstall runs as root. We copy STEMwerk into the *active user's* REAPER Scripts folder
 # so non-technical testers don't need to hunt paths or run scripts.
+#
+# Testability: STEMWERK_POSTINSTALL_{SRC,HOME}_OVERRIDE redirect the copy for staging tests
+# (and silence the Finder/dialog UX bits). Defaults are unchanged from earlier releases.
 
-SRC="/Users/Shared/STEMwerk-reaper"
+SRC="${STEMWERK_POSTINSTALL_SRC_OVERRIDE:-/Users/Shared/STEMwerk-reaper}"
+TEST_MODE="no"
+if [[ -n "${STEMWERK_POSTINSTALL_SRC_OVERRIDE:-}" || -n "${STEMWERK_POSTINSTALL_HOME_OVERRIDE:-}" ]]; then
+  TEST_MODE="yes"
+fi
 
 if [[ ! -d "$SRC" ]]; then
   echo "STEMwerk postinstall: source folder not found: $SRC"
@@ -18,7 +25,11 @@ if [[ -z "$CONSOLE_USER" || "$CONSOLE_USER" == "root" ]]; then
   exit 0
 fi
 
-HOME_DIR="$(eval echo "~$CONSOLE_USER" 2>/dev/null || true)"
+if [[ -n "${STEMWERK_POSTINSTALL_HOME_OVERRIDE:-}" ]]; then
+  HOME_DIR="$STEMWERK_POSTINSTALL_HOME_OVERRIDE"
+else
+  HOME_DIR="$(eval echo "~$CONSOLE_USER" 2>/dev/null || true)"
+fi
 if [[ -z "$HOME_DIR" || ! -d "$HOME_DIR" ]]; then
   echo "STEMwerk postinstall: could not determine home dir for user '$CONSOLE_USER'; skipping."
   exit 0
@@ -29,6 +40,23 @@ TARGET="$REAPER_SCRIPTS_DIR/STEMwerk-reaper"
 
 mkdir -p "$REAPER_SCRIPTS_DIR"
 
+# D4: refuse to wipe an existing full (bundled) installation. This online/thin package
+# stages no _bundled payload; its rsync --delete would silently destroy one (2.3.1.0).
+if [[ -f "$TARGET/_bundled/macos/apple-silicon/manifest.json" ]] && \
+   [[ ! -f "$SRC/_bundled/macos/apple-silicon/manifest.json" ]]; then
+  echo "STEMwerk postinstall: an existing full (bundled) STEMwerk installation was detected at:"
+  echo "  $TARGET"
+  echo "This online installer would remove its bundled runtime payload and has been stopped."
+  echo "Either install the full macOS Apple Silicon installer from:"
+  echo "  https://github.com/flarkflarkflark/STEMwerk-reaper/releases/latest"
+  echo "or remove the bundled payload first if you want to switch to the online variant:"
+  echo "  rm -rf \"$TARGET/_bundled\""
+  if [[ "$TEST_MODE" != "yes" ]] && command -v osascript >/dev/null 2>&1; then
+    sudo -u "$CONSOLE_USER" osascript -e 'display dialog "An existing full (bundled) STEMwerk installation was found. This online installer would remove its runtime payload, so the install has been stopped.\n\nInstall the full macOS Apple Silicon installer instead, or remove the existing _bundled folder first if you want to switch to the online variant." with title "STEMwerk Installer" buttons {"OK"}' >/dev/null 2>&1 || true
+  fi
+  exit 1
+fi
+
 # Copy full folder so relative paths in STEMwerk.lua remain valid.
 rsync -a --delete "$SRC/" "$TARGET/"
 
@@ -37,6 +65,10 @@ chown -R "$CONSOLE_USER":staff "$TARGET" 2>/dev/null || true
 
 echo "STEMwerk postinstall: copied to $TARGET"
 echo "Next step: Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua."
+
+if [[ "$TEST_MODE" == "yes" ]]; then
+  exit 0
+fi
 
 # Best-effort: reveal folder in Finder for convenience (won't fail CI if no GUI).
 if command -v open >/dev/null 2>&1; then

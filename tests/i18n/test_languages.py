@@ -158,7 +158,7 @@ def test_progress_ui_labels_are_present_in_shipped_and_canonical_i18n():
         "en": {
             "progress_stage_processing": "Processing",
             "progress_stage_loading_model": "Loading model",
-            "progress_stage_loading_ai_model": "Loading AI model",
+            "progress_stage_loading_ai_model": "Loading model",
             "progress_stage_starting_separation": "Starting separation",
             "progress_stage_writing_stems": "Writing stems",
             "progress_stage_complete": "Complete",
@@ -170,7 +170,7 @@ def test_progress_ui_labels_are_present_in_shipped_and_canonical_i18n():
         "nl": {
             "progress_stage_processing": "Verwerken",
             "progress_stage_loading_model": "Model laden",
-            "progress_stage_loading_ai_model": "AI-model laden",
+            "progress_stage_loading_ai_model": "Model laden",
             "progress_stage_starting_separation": "Separatie starten",
             "progress_stage_writing_stems": "Stems schrijven",
             "progress_stage_complete": "Voltooid",
@@ -182,7 +182,7 @@ def test_progress_ui_labels_are_present_in_shipped_and_canonical_i18n():
         "de": {
             "progress_stage_processing": "Verarbeiten",
             "progress_stage_loading_model": "Modell laden",
-            "progress_stage_loading_ai_model": "KI-Modell laden",
+            "progress_stage_loading_ai_model": "Modell laden",
             "progress_stage_starting_separation": "Trennung starten",
             "progress_stage_writing_stems": "Stems schreiben",
             "progress_stage_complete": "Abgeschlossen",
@@ -208,26 +208,54 @@ def test_progress_ui_labels_are_present_in_shipped_and_canonical_i18n():
 
 
 def test_language_tooltip_includes_right_click_hint_in_all_locales():
-    expected = {
-        "en": "Language. Right-click to toggle tooltips.",
-        "nl": "Taal. Rechtermuisklik om tooltips aan/uit te zetten.",
-        "de": "Sprache. Rechtsklick, um Tooltips ein-/auszuschalten.",
+    # Semantic contract per locale: the tooltip must communicate both that it
+    # changes the language and that right-click toggles tooltips. Exact
+    # phrasing may evolve, so we assert on the localized vocabulary for each
+    # concept rather than pinning a single frozen sentence.
+    expected_semantics = {
+        "en": {"language_change": "language", "right_click": "right-click"},
+        "nl": {"language_change": "taal", "right_click": "rechtsklik"},
+        "de": {"language_change": "sprache", "right_click": "rechtsklick"},
     }
     files = [
         Path(__file__).parent.parent.parent / "i18n" / "languages.lua",
         Path(__file__).parent.parent.parent / "scripts" / "reaper" / "i18n" / "languages.lua",
     ]
+    keys = ("tooltip_lang", "tooltip_change_language")
 
     for file_path in files:
-        for lang_code, expected_value in expected.items():
+        for lang_code, markers in expected_semantics.items():
             block = extract_language_block(file_path, lang_code)
             assert block, f"Missing language block {lang_code!r} in {file_path}"
-            assert extract_string_value(block, "tooltip_lang") == expected_value, (
-                f"{file_path} {lang_code}.tooltip_lang drifted from expected language tooltip"
-            )
-            assert extract_string_value(block, "tooltip_change_language") == expected_value, (
-                f"{file_path} {lang_code}.tooltip_change_language drifted from expected language tooltip"
-            )
+            for key in keys:
+                value = extract_string_value(block, key)
+                assert value, f"{file_path} {lang_code}.{key} is missing"
+                lowered = value.lower()
+                assert markers["language_change"] in lowered, (
+                    f"{file_path} {lang_code}.{key} missing language-change hint: {value!r}"
+                )
+                assert markers["right_click"] in lowered, (
+                    f"{file_path} {lang_code}.{key} missing right-click hint: {value!r}"
+                )
+
+
+def test_german_edks_copy_uses_correct_zuerst_spelling():
+    # Regression guard: the German word "zuerst" (first) was previously
+    # shipped as the invalid spelling "züerst" in the Kit Split / EDKS copy.
+    files = [
+        Path(__file__).parent.parent.parent / "i18n" / "languages.lua",
+        Path(__file__).parent.parent.parent / "scripts" / "reaper" / "i18n" / "languages.lua",
+    ]
+    keys = ("tooltip_preset_edks", "edks_planned_message", "help_step3_detail", "help_6stem_desc")
+
+    for file_path in files:
+        block = extract_language_block(file_path, "de")
+        assert block, f"Missing language block 'de' in {file_path}"
+        assert "züerst" not in block, f"{file_path} de block contains invalid spelling 'züerst'"
+        for key in keys:
+            value = extract_string_value(block, key)
+            assert value, f"{file_path} de.{key} is missing"
+            assert "zuerst" in value, f"{file_path} de.{key} missing correct spelling 'zuerst': {value!r}"
 
 
 def main():

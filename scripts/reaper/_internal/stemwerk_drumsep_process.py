@@ -200,6 +200,14 @@ def _json_default(value: Any) -> str:
 
 
 def write_result(path: Path, payload: dict[str, Any]) -> None:
+    # Carry the parent process's run/job identity into this helper's own
+    # evidence (purely additive; never overrides fields the caller set).
+    run_id = os.environ.get("STEMWERK_RUN_ID", "")
+    job_id = os.environ.get("STEMWERK_JOB_ID", "")
+    if run_id and "run_id" not in payload:
+        payload = {**payload, "run_id": run_id}
+    if job_id and "job_id" not in payload:
+        payload = {**payload, "job_id": job_id}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=_json_default) + "\n", encoding="utf-8")
 

@@ -14,6 +14,9 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parents[1]
 INDEX_XML = ROOT / "index.xml"
 VERSION_FILE = ROOT / "VERSION"
+PRODUCTION_PAYLOAD_CONTRACT = ROOT / "tools" / "production_payload_contract.txt"
+CONTRACT_PLATFORMS = ("common", "linux", "macos", "windows")
+CONTRACT_REQUIREMENT_CLASSES = ("required", "optional")
 
 REQUIRED_TOP_LEVEL_SCRIPTS = (
     "scripts/reaper/STEMwerk.lua",
@@ -25,6 +28,187 @@ RUNTIME_DEP_REGRESSION_TARGET = "scripts/reaper/_internal/STEMwerk_Timing.lua"
 BOOTSTRAP_MACOS = "scripts/reaper/STEMwerk_Bootstrap_macOS.sh"
 SAMPLERATE_GUARD_REL = "_internal/stemwerk_samplerate_guard.py"
 SAMPLERATE_GUARD_PAYLOAD_PATH = f"scripts/reaper/{SAMPLERATE_GUARD_REL}"
+
+# Edges reached only through a variable built from directory-resolution +
+# a literal filename, then dofile(var)/pcall(dofile, var) -- e.g.
+# `local x = someDir() .. "Target.lua"; pcall(dofile, x)`. The static scan
+# above only extracts literals that appear directly inside the
+# dofile/loadfile/pcall(dofile, ...) call parentheses, so it cannot see
+# these. Verified by manual trace of every dynamic dofile/pcall(dofile, ...)
+# call site in scripts/reaper as of 2.3.1.0 release prep.
+#
+# Each entry only fires when its source file exists AND its text contains
+# the literal filename substring (the same evidence the static scan above
+# requires, just indirected through a variable) -- so this stays inert
+# against unrelated/synthetic trees instead of unconditionally demanding
+# these targets everywhere. Add a new (source, literal, target) entry here
+# whenever a new dynamic dispatch of this shape is introduced.
+DYNAMIC_PRODUCTION_DEPENDENCIES = (
+    ("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua", "STEMwerk.lua", "scripts/reaper/STEMwerk.lua"),
+    ("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua", "STEMwerk_Save_Support_Bundle.lua", "scripts/reaper/STEMwerk_Save_Support_Bundle.lua"),
+    ("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua", "STEMwerk_Set_FFmpegPath.lua", "scripts/reaper/STEMwerk_Set_FFmpegPath.lua"),
+    ("scripts/reaper/STEMwerk-SETUP.lua", "STEMwerk_Setup_Internal.lua", "scripts/reaper/_internal/STEMwerk_Setup_Internal.lua"),
+    ("scripts/reaper/_internal/STEMwerk_I18N.lua", "stemwerk_language_wrapper.lua", "scripts/reaper/i18n/stemwerk_language_wrapper.lua"),
+)
+
+
+def collect_dynamic_production_dependencies(root: Path) -> set[str]:
+    deps: set[str] = set()
+    for source_rel, literal, target_rel in DYNAMIC_PRODUCTION_DEPENDENCIES:
+        source_path = root / source_rel
+        if not source_path.exists():
+            continue
+        if literal in read_text(source_path):
+            deps.add(target_rel)
+    return deps
+
+
+@dataclass
+class ProductionPayloadContract:
+    required: dict[str, set[str]]
+    optional: dict[str, set[str]]
+
+
+_WINDOWS_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+
+
+def _validate_contract_path(rel_path: str, path: Path, lineno: int) -> None:
+    """Validate a raw, unstripped path field. Rejects rather than
+    normalizes: any whitespace character anywhere in the string (ASCII or
+    Unicode -- space, tab, NBSP, and the Unicode line/paragraph separators
+    U+2028/U+2029 alike, not just at the edges), any C0 control character
+    or DEL anywhere in the string, and any Windows-drive-letter form (both
+    'C:/...' and drive-relative 'C:...') are hard failures, not silently
+    cleaned up. A real repo-relative path never legitimately contains
+    whitespace or control characters at any position, so this is a single
+    whole-string scan rather than an edges-only check. Canonical identity
+    must be exact -- see the module-level contract file header for why.
+    """
+    if not rel_path:
+        raise ValueError(f"{path}:{lineno}: empty path")
+    for ch in rel_path:
+        cp = ord(ch)
+        if cp < 0x20 or cp == 0x7F:
+            raise ValueError(
+                f"{path}:{lineno}: control character U+{cp:04X} not allowed in path: {rel_path!r}"
+            )
+        if ch.isspace():
+            raise ValueError(
+                f"{path}:{lineno}: whitespace character U+{cp:04X} not allowed in path: {rel_path!r}"
+            )
+    if rel_path.startswith("/"):
+        raise ValueError(f"{path}:{lineno}: absolute path not allowed: {rel_path!r}")
+    if _WINDOWS_DRIVE_PREFIX_RE.match(rel_path):
+        raise ValueError(f"{path}:{lineno}: Windows drive-letter path not allowed: {rel_path!r}")
+    if "\\" in rel_path:
+        raise ValueError(f"{path}:{lineno}: backslash not allowed, use forward slashes: {rel_path!r}")
+    segments = rel_path.split("/")
+    if any(seg in ("", ".", "..") for seg in segments):
+        raise ValueError(f"{path}:{lineno}: empty segment or path traversal not allowed: {rel_path!r}")
+    normalized = str(PurePosixPath(rel_path))
+    if normalized != rel_path:
+        raise ValueError(f"{path}:{lineno}: path is not normalized: {rel_path!r} (expected {normalized!r})")
+
+
+def parse_production_payload_contract(path: Path) -> ProductionPayloadContract:
+    """Parse tools/production_payload_contract.txt into required/optional
+    {platform: {paths}} maps.
+
+    This is the normative production payload definition for 2.3.1.0 --
+    independent of, and not derived from, any single distribution route.
+    Source-code reachability scanning (extract_internal_deps,
+    collect_dynamic_production_dependencies) stays supplemental
+    defense-in-depth; it does not define this contract.
+
+    Fails closed on malformed/ambiguous input: unknown requirement class or
+    platform, empty/absolute/backslashed/non-normalized/traversal paths,
+    exact duplicate entries, the same path declared with two different
+    requirement classes, and the same path declared both 'common' and any
+    specific platform (redundant/contradictory, since 'common' already
+    covers every platform). The same path declared under two *different*
+    non-common platforms (e.g. both 'macos' and 'linux') is legitimate and
+    allowed -- that is how a shared-but-not-universal requirement is
+    expressed.
+
+    Fields are validated on their raw, unstripped text -- not sanitized
+    then validated. Leading/trailing whitespace (ASCII or Unicode, e.g.
+    NBSP) around the requirement/platform/path fields is a hard failure,
+    not silently trimmed: a requirement/platform value with stray
+    whitespace simply fails exact match against the known set (raising
+    "unknown ..."), and the path field is checked explicitly (see
+    _validate_contract_path). Blank-line and '#'-comment-line detection
+    intentionally keeps the old permissive/trimmed check, since those
+    lines carry no semantic identity to corrupt.
+
+    Lines are split on '\\n' only (with a trailing '\\r' stripped per line
+    for CRLF support) -- not via str.splitlines(), whose broader Unicode
+    line-boundary definition (e.g. U+000B, U+000C, U+2028, U+2029) would
+    otherwise silently fragment a path containing one of those characters
+    into a bogus extra "line" instead of surfacing it as the invalid
+    control/separator character it is.
+    """
+    required: dict[str, set[str]] = {p: set() for p in CONTRACT_PLATFORMS}
+    optional: dict[str, set[str]] = {p: set() for p in CONTRACT_PLATFORMS}
+    seen: dict[str, list[tuple[str, str]]] = {}
+
+    text = read_text(path)
+    for lineno, raw_line in enumerate(text.split("\n"), start=1):
+        raw = raw_line[:-1] if raw_line.endswith("\r") else raw_line
+        if raw.strip() == "" or raw.strip().startswith("#"):
+            continue
+        parts = raw.split("\t")
+        if len(parts) != 3:
+            raise ValueError(
+                f"{path}:{lineno}: expected '<required|optional>\\t<platform>\\t<path>', got: {raw!r}"
+            )
+        requirement, platform, rel_path = parts
+        if requirement not in CONTRACT_REQUIREMENT_CLASSES:
+            raise ValueError(f"{path}:{lineno}: unknown requirement class {requirement!r}")
+        if platform not in CONTRACT_PLATFORMS:
+            raise ValueError(f"{path}:{lineno}: unknown platform {platform!r}")
+        _validate_contract_path(rel_path, path, lineno)
+
+        prior_entries = seen.setdefault(rel_path, [])
+        for prior_requirement, prior_platform in prior_entries:
+            if prior_requirement != requirement:
+                raise ValueError(
+                    f"{path}:{lineno}: {rel_path!r} already declared {prior_requirement!r}, "
+                    f"cannot also declare {requirement!r} for the same path"
+                )
+            if platform == prior_platform:
+                raise ValueError(f"{path}:{lineno}: exact duplicate entry for {rel_path!r} ({platform!r})")
+            if "common" in (platform, prior_platform):
+                raise ValueError(
+                    f"{path}:{lineno}: {rel_path!r} declared both platform {prior_platform!r} and "
+                    f"{platform!r} -- 'common' already covers every platform, remove the "
+                    "redundant/conflicting entry"
+                )
+        prior_entries.append((requirement, platform))
+
+        target = required if requirement == "required" else optional
+        target[platform].add(rel_path)
+
+    return ProductionPayloadContract(required=required, optional=optional)
+
+
+def required_files_for_platform(contract: ProductionPayloadContract, platform: str) -> set[str]:
+    if platform == "reapack":
+        # ReaPack serves every platform from one shared catalog: it needs
+        # the union of common plus every platform-specific entry.
+        result: set[str] = set()
+        for plat in CONTRACT_PLATFORMS:
+            result.update(contract.required[plat])
+        return result
+    return contract.required["common"] | contract.required.get(platform, set())
+
+
+def optional_files_for_platform(contract: ProductionPayloadContract, platform: str) -> set[str]:
+    if platform == "reapack":
+        result: set[str] = set()
+        for plat in CONTRACT_PLATFORMS:
+            result.update(contract.optional[plat])
+        return result
+    return contract.optional["common"] | contract.optional.get(platform, set())
 
 
 @dataclass
@@ -246,15 +430,19 @@ def check_runtime_dependencies(root: Path, payload_paths: set[str]) -> Section:
         deps.update(found)
         dynamic_warnings.extend(warns)
 
+    static_dep_count = len(deps)
+    dynamic_deps = collect_dynamic_production_dependencies(root)
+    deps.update(dynamic_deps)
+
     missing_local = sorted([d for d in deps if not (root / d).exists()])
     if missing_local:
-        section.fail("statically detected runtime dependencies missing locally:")
+        section.fail("runtime dependencies missing locally:")
         for d in missing_local:
             section.note(f" - {d}")
 
     missing_in_payload = sorted([d for d in deps if d not in payload_paths])
     if missing_in_payload:
-        section.fail("statically detected runtime dependencies missing from index.xml payload:")
+        section.fail("runtime dependencies missing from index.xml payload:")
         for d in missing_in_payload:
             section.note(f" - {d}")
 
@@ -268,7 +456,11 @@ def check_runtime_dependencies(root: Path, payload_paths: set[str]) -> Section:
     if timing_path not in payload_paths:
         section.fail(f"regression guard: missing index.xml payload entry for {timing_path}")
 
-    section.note(f"statically detected internal runtime deps: {len(deps)}")
+    section.note(
+        f"runtime deps checked: {len(deps)} "
+        f"({static_dep_count} statically detected, "
+        f"{len(dynamic_deps)} dynamic-dispatch)"
+    )
     return section
 
 
@@ -288,7 +480,6 @@ def check_bootstrap_guard_payload(root: Path, payload_paths: set[str]) -> Sectio
 
     if not (root / SAMPLERATE_GUARD_PAYLOAD_PATH).exists():
         section.fail(f"bootstrap references missing local helper: {SAMPLERATE_GUARD_PAYLOAD_PATH}")
-
     if SAMPLERATE_GUARD_PAYLOAD_PATH not in payload_paths:
         section.fail(
             "bootstrap references helper missing from index.xml payload: "
@@ -300,7 +491,141 @@ def check_bootstrap_guard_payload(root: Path, payload_paths: set[str]) -> Sectio
     return section
 
 
-def run_check(root: Path) -> tuple[list[Section], int]:
+VENDOR_WHEELS_ROOT = "scripts/reaper/vendor/wheels"
+
+
+def sha256_file(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def check_vendor_wheel_index_parity(root: Path, sources: list[SourceEntry], network: bool = False) -> Section:
+    """Every vendor wheel has exactly one <source> in index.xml and vice versa.
+
+    diffq lesson (2.3.0.7): a wheel without a <source> line is not distributed by ReaPack.
+    With --network each wheel-source URL is fetched and its bytes must hash-match the repo file.
+    """
+    section = Section("E. Vendor wheel ↔ index parity")
+    wheels_root = root / VENDOR_WHEELS_ROOT
+    disk_wheels = {
+        posix_path(p.relative_to(root))
+        for p in sorted(wheels_root.rglob("*.whl"))
+    } if wheels_root.exists() else set()
+
+    wheel_sources: dict[str, list[SourceEntry]] = {}
+    for s in sources:
+        if s.repo_path and s.repo_path.startswith(f"{VENDOR_WHEELS_ROOT}/") and s.repo_path.endswith(".whl"):
+            wheel_sources.setdefault(s.repo_path, []).append(s)
+
+    for wheel in sorted(disk_wheels):
+        count = len(wheel_sources.get(wheel, []))
+        if count == 0:
+            section.fail(f"vendor wheel without index.xml <source>: {wheel}")
+        elif count > 1:
+            section.fail(f"vendor wheel with {count} index.xml <source> entries (expected 1): {wheel}")
+    for repo_path in sorted(wheel_sources):
+        if repo_path not in disk_wheels:
+            section.fail(f"index.xml wheel <source> without repo file: {repo_path}")
+
+    if not disk_wheels and not wheel_sources:
+        section.note("no vendor wheels present")
+    elif section.status != "FAIL":
+        section.note(f"{len(disk_wheels)} vendor wheels, each with exactly one index.xml <source>")
+
+    if network and wheel_sources:
+        import urllib.request
+
+        for repo_path in sorted(wheel_sources):
+            for s in wheel_sources[repo_path]:
+                if not s.url:
+                    section.warn(f"no URL for wheel source: {repo_path}")
+                    continue
+                try:
+                    with urllib.request.urlopen(s.url, timeout=60) as resp:
+                        import hashlib
+
+                        remote_sha = hashlib.sha256(resp.read()).hexdigest()
+                except Exception as exc:  # noqa: BLE001 - release gate reports, never raises
+                    section.fail(f"could not fetch wheel URL {s.url}: {exc}")
+                    continue
+                local_sha = sha256_file(root / repo_path)
+                if remote_sha != local_sha:
+                    section.fail(
+                        f"wheel URL hash mismatch for {repo_path}: remote {remote_sha} != local {local_sha}"
+                    )
+                else:
+                    section.note(f"hash-match remote ↔ repo: {repo_path}")
+
+    return section
+
+
+def check_production_payload_contract(root: Path, payload_paths: set[str]) -> Section:
+    """Validate index.xml against tools/production_payload_contract.txt --
+    the normative production payload definition (see that file's header).
+    This is the primary completeness authority for 2.3.1.0; the static
+    scan in check_runtime_dependencies() is supplemental defense-in-depth
+    and does not define this contract.
+    """
+    section = Section("F. Production payload contract completeness")
+    contract_path = root / "tools" / "production_payload_contract.txt"
+    if not contract_path.exists():
+        section.fail(f"production payload contract not found: {contract_path}")
+        return section
+
+    try:
+        contract = parse_production_payload_contract(contract_path)
+    except ValueError as exc:
+        section.fail(f"could not parse production payload contract: {exc}")
+        return section
+
+    required = required_files_for_platform(contract, "reapack")
+
+    missing_local = sorted(r for r in required if not (root / r).exists())
+    if missing_local:
+        section.fail("contract-required files missing locally:")
+        for r in missing_local:
+            section.note(f" - {r}")
+
+    missing_in_payload = sorted(r for r in required if r not in payload_paths)
+    if missing_in_payload:
+        section.fail("contract-required files missing from index.xml payload:")
+        for r in missing_in_payload:
+            section.note(f" - {r}")
+
+    # Drift guard: anything the static/dynamic scan finds that the contract
+    # doesn't cover (as required or optional) is a signal the contract needs
+    # a review pass, not a release blocker on its own (the scan is
+    # non-exhaustive by design).
+    optional = optional_files_for_platform(contract, "reapack")
+    scanned: set[str] = set()
+    for lua_file in iter_lua_files(root):
+        found, _ = extract_internal_deps(root, lua_file, read_text(lua_file))
+        scanned.update(found)
+    scanned.update(collect_dynamic_production_dependencies(root))
+    uncontracted = sorted(s for s in scanned if s not in required and s not in optional)
+    if uncontracted:
+        section.warn("source-detected dependencies not present in the production payload contract (review the contract):")
+        for u in uncontracted:
+            section.note(f" - {u}")
+
+    # Optional entries never fail completeness; report presence only.
+    if optional:
+        missing_optional = sorted(o for o in optional if o not in payload_paths)
+        section.note(
+            f"optional entries: {len(optional) - len(missing_optional)}/{len(optional)} present in payload"
+            + (f"; not packaged: {missing_optional}" if missing_optional else "")
+        )
+
+    section.note(f"contract requires {len(required)} files for ReaPack (common + linux + macos + windows)")
+    return section
+
+
+def run_check(root: Path, network: bool = False) -> tuple[list[Section], int]:
     sections: list[Section] = []
     tree, index_raw, parse_errors = parse_index(root / "index.xml")
 
@@ -322,6 +647,8 @@ def run_check(root: Path) -> tuple[list[Section], int]:
     runtime_section = check_runtime_dependencies(root, payload_paths)
     sections.append(runtime_section)
     sections.append(check_bootstrap_guard_payload(root, payload_paths))
+    sections.append(check_vendor_wheel_index_parity(root, sources, network=network))
+    sections.append(check_production_payload_contract(root, payload_paths))
 
     fail_count = sum(1 for s in sections if s.status == "FAIL")
     return sections, fail_count
@@ -346,12 +673,13 @@ def print_report(sections: list[Section], fail_count: int) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="STEMwerk release gate / ReaPack payload audit")
     parser.add_argument("--check", action="store_true", help="Run release gate checks")
+    parser.add_argument("--network", action="store_true", help="Also verify wheel <source> URLs hash-match the repo files")
     args = parser.parse_args(argv)
 
     if not args.check:
         parser.error("only --check is supported")
 
-    sections, fail_count = run_check(ROOT)
+    sections, fail_count = run_check(ROOT, network=args.network)
     print_report(sections, fail_count)
     return 1 if fail_count else 0
 

@@ -117,16 +117,8 @@ jobs:
         if: ${{ github.event_name == 'push' || github.event.inputs.windows_bundled_asset == 'true' }}
         shell: powershell
         run: |
-          $pyDir = "installer\windows\payload\python"
-          $ffmpegDir = "installer\windows\payload\ffmpeg"
-          New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
-          New-Item -ItemType Directory -Force -Path $ffmpegDir | Out-Null
-
-          $pyOut = Join-Path $pyDir "python-3.11.8-amd64.exe"
-          $ffOut = Join-Path $ffmpegDir "ffmpeg-release-essentials.zip"
-
-          Invoke-WebRequest "https://www.python.org/ftp/python/3.11.8/python-3.11.8-amd64.exe" -OutFile $pyOut
-          Invoke-WebRequest "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $ffOut
+          $env:STEMWERK_SKIP_WHEELHOUSE = "1"
+          & ".\installer\windows\fetch_runtime_assets.ps1"
 
       - name: Build bundled .exe (Inno Setup)
         if: ${{ github.event_name == 'push' || github.event.inputs.windows_bundled_asset == 'true' }}

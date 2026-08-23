@@ -25,6 +25,24 @@ def destination_path(source: str, destination: str) -> str:
     return (destination.rstrip("\\") + "\\" + source.rsplit("\\", 1)[-1]).lower()
 
 
+def installed_repo_relative_paths() -> set[str]:
+    """Map each payload Source/DestDir pair to its scripts/reaper/-relative
+    installed identity ({app} maps 1:1 to scripts/reaper/). Some assets
+    (e.g. i18n/) are sourced from a different repo-relative mirror than
+    where they end up installed, so this compares by destination, not
+    source path.
+    """
+    installed = set()
+    for source, dest in payload_mappings():
+        filename = source.replace("\\", "/").rsplit("/", 1)[-1]
+        dest_posix = dest.replace("\\", "/")
+        if dest_posix == "{app}":
+            installed.add(f"scripts/reaper/{filename}")
+        elif dest_posix.startswith("{app}/"):
+            installed.add(f"scripts/reaper/{dest_posix[len('{app}/'):]}/{filename}")
+    return installed
+
+
 def test_windows_installer_uses_explicit_payload_include() -> None:
     text = ISS.read_text(encoding="utf-8")
     assert '#include "STEMwerk_Windows_Payload.iss"' in text
@@ -72,6 +90,32 @@ def test_windows_payload_preserves_required_shared_and_windows_files() -> None:
     assert required <= sources
 
 
+def test_windows_payload_satisfies_production_payload_contract() -> None:
+    from tools import release_gate
+
+    contract = release_gate.parse_production_payload_contract(release_gate.PRODUCTION_PAYLOAD_CONTRACT)
+    required = release_gate.required_files_for_platform(contract, "windows")
+
+    installed = installed_repo_relative_paths()
+    missing = sorted(req for req in required if req not in installed)
+    assert not missing, f"Windows payload missing production payload contract entries: {missing}"
+
+
+def test_windows_payload_contains_all_statically_detected_internal_dependencies() -> None:
+    from tools import release_gate
+
+    deps: set[str] = set()
+    for lua_file in release_gate.iter_lua_files(ROOT):
+        text = release_gate.read_text(lua_file)
+        found, _ = release_gate.extract_internal_deps(ROOT, lua_file, text)
+        deps.update(found)
+    deps.update(release_gate.collect_dynamic_production_dependencies(ROOT))
+
+    installed = installed_repo_relative_paths()
+    missing = sorted(dep for dep in deps if dep not in installed)
+    assert not missing, f"Windows payload missing statically detected or declared dynamic-dispatch runtime deps: {missing}"
+
+
 def test_windows_payload_sources_exist_and_are_explicit_files() -> None:
     mappings = payload_mappings()
     assert mappings
@@ -115,22 +159,22 @@ def test_current_windows_release_documents_identify_2306() -> None:
     ]
     for guide in guides:
         first_section = "\n".join(guide.read_text(encoding="utf-8").splitlines()[:5])
-        assert "2.3.0.6" in first_section, guide.name
-        assert "2.3.0.4" not in first_section, guide.name
+        assert "2.3.1.0" in first_section, guide.name
+        assert "2.3.0.6" not in first_section, guide.name
 
     license_text = (WINDOWS_DIR / "STEMwerk_License_Agreement.txt").read_text(
         encoding="utf-8"
     )
-    assert "Version: 2.3.0.6" in license_text
-    assert "Version: 2.3.0.4" not in license_text
+    assert "Version: 2.3.1.0" in license_text
+    assert "Version: 2.3.0.6" not in license_text
 
 
 def test_current_identity_has_no_2304_or_2305_but_history_is_preserved() -> None:
     english = (WINDOWS_DIR / "STEMwerk_Windows_Setup_Guide.md").read_text(
         encoding="utf-8"
     )
-    assert "install `2.3.0.6` fresh" in english
-    assert "latest Windows setup/runtime fixes from `2.3.0.4`" in english
+    assert "install `2.3.1.0` fresh" in english
+    assert "latest Windows setup/runtime fixes from `2.3.1.0`" in english
     for path in (
         WINDOWS_DIR / "STEMwerk_Windows_Setup_Guide.md",
         WINDOWS_DIR / "STEMwerk_Windows_Setup_Guide.nl.md",

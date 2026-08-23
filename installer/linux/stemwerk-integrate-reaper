@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf 'ERROR: %s\n' "$1" >&2
+  exit 1
+}
+
+if [[ "${EUID}" -eq 0 ]]; then
+  fail "stemwerk-integrate-reaper must not be run as root; run it as your normal desktop user."
+fi
+
+source_input="${STEMWERK_INTEGRATION_SOURCE:-/usr/share/stemwerk-reaper}"
+if [[ -n "${REAPER_RESOURCE_PATH:-}" ]]; then
+  resource_input="$REAPER_RESOURCE_PATH"
+else
+  [[ -n "${HOME:-}" ]] || fail "unsafe REAPER resource path: HOME is unset."
+  resource_input="$HOME/.config/REAPER"
+fi
+
+[[ "$source_input" == /* ]] || fail "unsafe integration source: expected an absolute path."
+[[ "$resource_input" == /* && "$resource_input" != "/" ]] \
+  || fail "unsafe REAPER resource path: expected a non-root absolute path."
+[[ -d "$source_input" ]] || fail "integration source not found: $source_input"
+[[ -r "$source_input/STEMwerk-SETUP.lua" && -r "$source_input/STEMwerk.lua" ]] \
+  || fail "integration source is missing required STEMwerk entry scripts."
+
+source_root="$(realpath -e -- "$source_input")"
+resource_root="$(realpath -m -- "$resource_input")"
+scripts_dir="$resource_root/Scripts"
+target="$scripts_dir/STEMwerk-reaper"
+
+[[ "$resource_root" != "/" && "$target" != "/" ]] \
+  || fail "unsafe REAPER resource path: refusing root target."
+[[ "$source_root" != "$target" && "$target" != "$source_root"/* && "$source_root" != "$target"/* ]] \
+  || fail "unsafe integration target: source and target overlap."
+if [[ -L "$scripts_dir" ]]; then
+  fail "unsafe integration target: the REAPER Scripts directory is a symbolic link."
+fi
+if [[ -e "$scripts_dir" && ! -d "$scripts_dir" ]]; then
+  fail "unsafe integration target: the REAPER Scripts path is not a directory."
+fi
+if [[ -L "$target" ]]; then
+  fail "unsafe integration target: symbolic links are not supported."
+fi
+if [[ -e "$target" && ! -d "$target" ]]; then
+  fail "unsafe integration target: destination exists and is not a directory."
+fi
+
+mkdir -p "$scripts_dir" "$target"
+rsync -a --delete --safe-links "$source_root/" "$target/"
+
+printf 'STEMwerk scripts updated at: %s\n' "$target"
+printf '\nNext steps in REAPER:\n'
+printf '1. Open Actions -> Show action list -> ReaScript: Load...\n'
+printf '2. Select: %s/STEMwerk_Setup_Toolbar.lua\n' "$target"
+printf '3. Run STEMwerk: Setup.\n'

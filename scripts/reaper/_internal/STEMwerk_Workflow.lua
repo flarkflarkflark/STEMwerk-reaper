@@ -427,6 +427,11 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
     C.progressState.execLogPath = SW_LOG.getLogPath()
     local execLogPath = C.progressState.execLogPath or SW_LOG.getLogPath()
     local jobTag = "single"
+    local runCtx = C.progressState.runContext
+    local runIdArg = (runCtx and runCtx.run_id) or ""
+    local jobIdArg = "single"
+    local runDirNameArg = (runCtx and runCtx.run_dir_name) or ""
+    local runStartedUtcArg = (runCtx and runCtx.started_utc) or ""
 
     -- Preflight checks so failures show up clearly in logs/UI.
     local function fileExistsLocal(p)
@@ -512,7 +517,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             return false
         end
         if not canRunFfmpeg() then
-            if not C.ensureDependenciesInteractive() then
+            if type(C.verifyDependenciesReadyForProcessing) ~= "function" or not C.verifyDependenciesReadyForProcessing() then
                 return false
             end
         end
@@ -600,6 +605,10 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             local exitF = escPS(exitCodeFile)
             local logPath = escPS(execLogPath)
             local jobTagEsc = escPS(jobTag)
+            local runIdEsc = escPS(runIdArg)
+            local jobIdEsc = escPS(jobIdArg)
+            local runDirNameEsc = escPS(runDirNameArg)
+            local runStartedUtcEsc = escPS(runStartedUtcArg)
 
             -- Build the PowerShell command that Start-Process the Python worker and writes PID
             local psInner =
@@ -613,6 +622,11 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
                 "$jobTag='" .. jobTagEsc .. "';" ..
                 "$env:STEMWERK_LOG_PATH=$logPath;" ..
                 "$env:STEMWERK_JOB_TAG=$jobTag;" ..
+                "$env:STEMWERK_PROCESSING_MAY_DOWNLOAD='no';" ..
+                "$env:STEMWERK_RUN_ID='" .. runIdEsc .. "';" ..
+                "$env:STEMWERK_JOB_ID='" .. jobIdEsc .. "';" ..
+                "$env:STEMWERK_RUN_DIR_NAME='" .. runDirNameEsc .. "';" ..
+                "$env:STEMWERK_RUN_STARTED_UTC='" .. runStartedUtcEsc .. "';" ..
                 "Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue;" ..
                 "Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue;" ..
                 "$dq=[char]34;" ..
@@ -733,6 +747,12 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             else
             script:write("IN=" .. C.quoteArg(inputFile) .. "\n")
             script:write("OUT=" .. C.quoteArg(outputDir) .. "\n")
+            script:write("STEMWERK_PROCESSING_MAY_DOWNLOAD=no\n")
+            script:write("STEMWERK_RUN_ID=" .. C.quoteArg(runIdArg) .. "\n")
+            script:write("STEMWERK_JOB_ID=" .. C.quoteArg(jobIdArg) .. "\n")
+            script:write("STEMWERK_RUN_DIR_NAME=" .. C.quoteArg(runDirNameArg) .. "\n")
+            script:write("STEMWERK_RUN_STARTED_UTC=" .. C.quoteArg(runStartedUtcArg) .. "\n")
+            script:write("export STEMWERK_PROCESSING_MAY_DOWNLOAD STEMWERK_RUN_ID STEMWERK_JOB_ID STEMWERK_RUN_DIR_NAME STEMWERK_RUN_STARTED_UTC\n")
             script:write("unset PYTHONPATH PYTHONHOME\n")
             script:write("MODEL=" .. C.quoteArg(modelArg) .. "\n")
             script:write("DEVICE=" .. C.quoteArg(deviceArg) .. "\n")
@@ -793,7 +813,11 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
                 extraArgs = extraArgs .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)
             end
             local cmd = string.format(
-                '%s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE > %s',
+                'STEMWERK_PROCESSING_MAY_DOWNLOAD=no STEMWERK_RUN_ID=%s STEMWERK_JOB_ID=%s STEMWERK_RUN_DIR_NAME=%s STEMWERK_RUN_STARTED_UTC=%s %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE > %s',
+                C.quoteArg(runIdArg),
+                C.quoteArg(jobIdArg),
+                C.quoteArg(runDirNameArg),
+                C.quoteArg(runStartedUtcArg),
                 C.quoteArg(PYTHON_PATH),
                 C.quoteArg(SEPARATOR_SCRIPT),
                 C.quoteArg(inputFile),
@@ -857,6 +881,9 @@ function WORKFLOW.progressLoop()
             SW_LOG.preserveDiagnosticsForRun(C.progressState.outputDir, { reason = "user_cancel" })
         end
         if SW_TIMING then SW_TIMING.endJob("single", "user_cancel"); SW_TIMING.endRun("user_cancel") end
+        if C.progressState.runContext then
+            SW_LOG.writeCurrentProcessingState(C.progressState.runContext, "cancelled")
+        end
 
         -- Best-effort kill of running worker (otherwise cancel leaves a hidden Python process running)
         HELPERS.killProcessFromPidFile(C.progressState.pidFile)
@@ -920,6 +947,41 @@ function WORKFLOW.progressLoop()
     reaper.defer(WORKFLOW.progressLoop)
 end
 
+-- Issue #91: import completed stems into the REAPER project that requested
+-- this run, never into whatever project happens to be active when
+-- processing finishes. Wraps the existing processStemsResult(stems) import
+-- call; does not change what processStemsResult itself does once it is safe
+-- to run. See scripts/reaper/_internal/STEMwerk_Project_Context.lua.
+--
+-- Returns importResult, originReason:
+--   originReason == "ok"  -> import ran (scoped to the origin project);
+--                            importResult is processStemsResult's own
+--                            return value, unchanged.
+--   originReason ~= "ok"  -> import did NOT run; origin project could not
+--                            be proven live (or the import itself raised,
+--                            originReason == "import_exception").
+--                            importResult is always false.
+local function importStemsRespectingOriginProject(stems)
+    if not PROJECT_CONTEXT then
+        -- Defensive: the project-context module failed to load. Fail closed
+        -- rather than import into an unvalidated/active project.
+        return false, "project_context_unavailable"
+    end
+    local runCtx = C.progressState and C.progressState.runContext
+    local originOk, originReason = PROJECT_CONTEXT.validateOriginProjectContext(reaper, runCtx)
+    if not originOk then
+        return false, originReason
+    end
+    local pcallOk, result = PROJECT_CONTEXT.withProjectInstance(reaper, runCtx.project.ref, function()
+        return processStemsResult(stems)
+    end)
+    if not pcallOk then
+        debugLog("ERROR: import raised inside origin project scope: " .. tostring(result))
+        return false, "import_exception"
+    end
+    return result, "ok"
+end
+
 -- Finish separation after progress completes
 function WORKFLOW.finishSeparationCallback()
     -- Small delay to ensure files are written
@@ -969,6 +1031,10 @@ function WORKFLOW.finishSeparationCallback()
         end
         debugLog("lua_result_probe_top_level_count=" .. tostring(topLevelCount))
         append_diag_log("lua_result_probe_top_level_count=" .. tostring(topLevelCount))
+        SW_LOG.logExecResult("dks_probe_stemset first=" .. tostring(STEMS and STEMS[1] and STEMS[1].name or "?")
+            .. " stemset_count=" .. tostring(STEMS and #STEMS or 0)
+            .. " top_level_count=" .. tostring(topLevelCount)
+            .. " workflow_source=" .. tostring(C.progressState.workflowSource or ""), nil, "")
 
         if next(stems) == nil then
             debugLog("lua_result_probe_stdout_json_attempt=yes")
@@ -1000,6 +1066,21 @@ function WORKFLOW.finishSeparationCallback()
             append_diag_log("lua_result_probe_stdout_json_attempt=no")
         end
 
+        if next(stems) and tostring(C.progressState.workflowSource or "") == "dks_extract" then
+            local probeCount = 0
+            for k, v in pairs(stems) do
+                probeCount = probeCount + 1
+                local ev = string.format("dks_import_input_path key=%q path=%q path_len=%d", tostring(k), tostring(v), #tostring(v))
+                debugLog(ev)
+                append_diag_log(ev)
+                SW_LOG.logExecResult(ev, nil, "")
+            end
+            local cntMsg = "dks_validated_output_count=" .. tostring(probeCount)
+            debugLog(cntMsg)
+            append_diag_log(cntMsg)
+            SW_LOG.logExecResult(cntMsg, nil, "")
+        end
+
         if next(stems) then
             debugLog("[LOG] Output detected for job (finishSeparationCallback)")
             persistWithExitCodeRetry(function()
@@ -1011,7 +1092,33 @@ function WORKFLOW.finishSeparationCallback()
                     append_diag_log("lua_dks_extract_import_start")
                     SW_LOG.logExecResult("lua_dks_extract_import_start", nil, "")
                 end
-                processStemsResult(stems)
+                local importOk, originReason = importStemsRespectingOriginProject(stems)
+                if originReason == "import_exception" then
+                    debugLog("[LOG] Import raised while targeting origin project")
+                    SW_LOG.logExecResult("workflow_success=yes", nil, "import_result=import_exception")
+                    C.showMessage(
+                        "Import Error",
+                        "Processing completed successfully, but an error occurred while importing stems into "
+                            .. "the original project.\n\nOutputs remain available at:\n"
+                            .. tostring(C.progressState.outputDir or "unknown"),
+                        "error", false
+                    )
+                elseif originReason ~= "ok" then
+                    debugLog("[LOG] Import blocked: origin project unavailable (" .. tostring(originReason) .. ")")
+                    SW_LOG.logExecResult("workflow_success=yes", nil, "import_result=origin_project_unavailable reason=" .. tostring(originReason))
+                    if C.progressState.runContext then
+                        SW_LOG.writeCurrentProcessingState(C.progressState.runContext, "completed")
+                    end
+                    C.showMessage(
+                        "Original Project Unavailable",
+                        "Processing completed successfully, but the REAPER project that requested it is no longer "
+                            .. "available.\n\nStems were not imported.\n\nOutputs remain available at:\n"
+                            .. tostring(C.progressState.outputDir or "unknown"),
+                        "warning", false
+                    )
+                elseif importOk == false then
+                    SW_LOG.logExecResult("workflow_success=no", nil, "workflow_failure_reason=dks_import_invariant_violation")
+                end
                 if tostring(C.progressState.workflowSource or "") == "dks_extract" then
                     debugLog("lua_dks_extract_import_end")
                     append_diag_log("lua_dks_extract_import_end")
@@ -1019,7 +1126,7 @@ function WORKFLOW.finishSeparationCallback()
                 end
                 debugLog("[LOG] Import end (processStemsResult)")
                 debugLog("[LOG] Finalize start (cleanupTempWorkDir)")
-                C.cleanupTempWorkDir(C.progressState.outputDir, { success = true, keepStemPaths = stems })
+                C.cleanupTempWorkDir(C.progressState.outputDir, { success = (importOk ~= false), keepStemPaths = stems })
                 debugLog("[LOG] Finalize end (cleanupTempWorkDir)")
             end)
         elseif checkCount < 10 then
@@ -1075,6 +1182,14 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model, runOpti
     C.updateTheme()
 
     if preflightNormalWorkflowDeviceRoute(runOptions) == false then
+        if OS == "Windows" and C.progressState.windowOpen then
+            closeProcessingWindow()
+        end
+        isProcessingActive = false
+        return
+    end
+
+    if type(C.verifyProcessingAssetsReady) == "function" and C.verifyProcessingAssetsReady(runOptions) == false then
         if OS == "Windows" and C.progressState.windowOpen then
             closeProcessingWindow()
         end
@@ -1144,7 +1259,7 @@ function WORKFLOW.runSeparation(inputFile, outputDir, model)
             )
             pythonCmd = pythonCmd:gsub('"', '""')
             -- Prepend set commands for env vars
-            local envPrefix = 'set STEMWERK_LOG_PATH=' .. logPath .. ' && set STEMWERK_JOB_TAG=' .. jobTag .. ' && '
+            local envPrefix = 'set STEMWERK_LOG_PATH=' .. logPath .. ' && set STEMWERK_JOB_TAG=' .. jobTag .. ' && set STEMWERK_PROCESSING_MAY_DOWNLOAD=no && '
             envPrefix = envPrefix:gsub('"', '""')
             vbsFile:write('Set WshShell = CreateObject("WScript.Shell")\n')
             vbsFile:write('WshShell.Run "cmd /c ' .. envPrefix .. pythonCmd .. ' >""' .. stdoutFile .. '"" 2>""' .. logFile .. '""", 0, True\n')

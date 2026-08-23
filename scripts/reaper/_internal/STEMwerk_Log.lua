@@ -48,6 +48,119 @@ function SW_LOG.getRunsLogDir()
     return SW_LOG.getLogDir() .. sep .. "runs"
 end
 
+-- Directory holding one current-processing state record per run_id (see
+-- SW_LOG.writeCurrentProcessingState). Keyed by run_id rather than a single
+-- shared pointer file so that two concurrent STEMwerk script instances
+-- (independent Lua interpreters, e.g. two toolbar actions run back to back
+-- on different projects) each own their own record and never clobber each
+-- other's identity; support-bundle diagnostics reads the whole directory
+-- rather than trusting a single "latest" file.
+function SW_LOG.getCurrentProcessingDir()
+    local sep = SW_LOG.isWindows() and "\\" or "/"
+    return SW_LOG.getLogDir() .. sep .. "current_processing"
+end
+
+local function sw_jsonStringField(value)
+    local text = tostring(value or ""):gsub("\\", "\\\\"):gsub('"', '\\"')
+    return '"' .. text .. '"'
+end
+
+-- Writes/updates this run's current-processing state record (schema,
+-- run_id, run_dir_name, started_utc, status), one file per run_id under
+-- SW_LOG.getCurrentProcessingDir(). run_id is exact structured identity,
+-- never inferred from run_dir_name/timestamps.
+--
+-- Concurrency: each run_id's file is written only by the one script
+-- instance that owns that run_id, so there is never contention between
+-- different runs. Within that single owner, status transitions
+-- (running -> completed/failed/cancelled) are sequential, not concurrent
+-- with themselves. Writes go to a "<run_id>.json.tmp" file first, then
+-- os.rename() into place. On POSIX this rename is atomic. On Windows,
+-- os.rename() (mapped to C rename(), which behaves like MoveFileEx without
+-- MOVEFILE_REPLACE_EXISTING) fails when the destination already exists --
+-- i.e. on every transition after the initial "running" write -- so this
+-- falls back to os.remove() then os.rename(). That fallback has a narrow
+-- non-atomic window where the destination is briefly missing, but since
+-- no other process ever writes this run_id's file, nothing can observe a
+-- torn read there except this run's own next status write -- a known,
+-- documented, accepted limitation (a reader sees "no state" during that
+-- window, never a corrupt one). If the rename still fails after that
+-- retry, this NEVER falls back to writing/truncating the destination
+-- path directly: that would risk leaving a partial/truncated JSON file
+-- behind, which is strictly worse than a missing one (a reader could
+-- mistake it for a real, if incomplete, record). Instead it fails safe --
+-- the old file (already removed) simply stays absent, and no half-written
+-- destination is ever produced.
+-- Injectable seam for the temp-file open/write/close step below, so tests
+-- can simulate an OS-level write/close failure (disk full, permission
+-- error, ...) without needing to actually break the filesystem. Production
+-- never sets this; it defaults to plain io.open and is exercised exactly
+-- like the real path otherwise (same tmpPath, same payload).
+SW_LOG._openForWrite = SW_LOG._openForWrite or io.open
+
+function SW_LOG.writeCurrentProcessingState(runContext, status)
+    if not runContext or not runContext.run_id or runContext.run_id == "" then
+        return nil
+    end
+    local dir = SW_LOG.getCurrentProcessingDir()
+    SW_LOG.ensureDir(dir)
+    local sep = SW_LOG.isWindows() and "\\" or "/"
+    local path = dir .. sep .. tostring(runContext.run_id) .. ".json"
+    local tmpPath = path .. ".tmp"
+    local payload = "{\n"
+        .. '  "schema": 1,\n'
+        .. '  "run_id": ' .. sw_jsonStringField(runContext.run_id) .. ',\n'
+        .. '  "run_dir_name": ' .. sw_jsonStringField(runContext.run_dir_name) .. ',\n'
+        .. '  "started_utc": ' .. sw_jsonStringField(runContext.started_utc) .. ',\n'
+        .. '  "status": ' .. sw_jsonStringField(status) .. ',\n'
+        .. '  "updated_utc": ' .. sw_jsonStringField(os.date("!%Y-%m-%dT%H:%M:%SZ")) .. '\n'
+        .. "}\n"
+    local f = SW_LOG._openForWrite(tmpPath, "w")
+    if not f then return nil end
+    -- The temp write/close sequence must fully succeed before the rename
+    -- below is ever attempted: file:write()/file:close() both return a
+    -- truthy value on success and nil (+ an error message) on failure --
+    -- e.g. a disk-full or permission error surfacing only at close() time,
+    -- since writes can be buffered. Ignoring those return values (as
+    -- before) risked promoting a short/partial .tmp file via rename.
+    local writeOk = f:write(payload)
+    local closeOk = f:close()
+    if not writeOk or not closeOk then
+        os.remove(tmpPath)
+        return nil
+    end
+    -- Belt-and-braces existence check: the temp file must actually be
+    -- present on disk (readable) before it is ever promoted -- guards
+    -- against the exotic case of a write/close that reported success but
+    -- left no file behind.
+    local verify = io.open(tmpPath, "rb")
+    if not verify then
+        return nil
+    end
+    verify:close()
+    local ok = os.rename(tmpPath, path)
+    if not ok then
+        os.remove(path)
+        ok = os.rename(tmpPath, path)
+    end
+    if not ok then
+        -- Never fall back to writing/truncating the destination path
+        -- directly: a direct write can be interrupted mid-write (process
+        -- killed, disk full, REAPER crash) and leave a PARTIAL/truncated
+        -- authoritative JSON file behind, which a reader could mistake
+        -- for a real (if incomplete) record. A missing destination file
+        -- is a safe, unambiguous "no current state" the reader already
+        -- treats as absent; a torn/partial one is not. So on persistent
+        -- rename failure this fails safe instead: the old state file (if
+        -- any) is left exactly as it was, no half-written destination is
+        -- ever produced, and the leftover .tmp file is removed so it
+        -- cannot be mistaken for the real record either.
+        os.remove(tmpPath)
+        return nil
+    end
+    return path
+end
+
 function SW_LOG.logExecResult(cmd, rc, out)
     local logDir = SW_LOG.getLogDir()
     SW_LOG.ensureDir(logDir)
@@ -214,6 +327,14 @@ function SW_LOG.persistRunDiagnostics(outputDir, opts)
         "benchmark_resource_samples.jsonl",
         "benchmark_resource_summary.json",
         "benchmark_resource_summary.txt",
+        "worker_context.json",
+        -- Direct Kit's DrumSep helper writes its result at the job's own
+        -- top level (<job-root>/drumsep_result.json, no stage2_drumsep
+        -- subdirectory -- see probeWorkerJobEvidence's comment in
+        -- STEMwerk_Save_Support_Bundle.lua on the real per-flow helper
+        -- result path). Kit Split's copy remains nested under
+        -- stage2_drumsep, handled separately below.
+        "drumsep_result.json",
     }
     for _, name in ipairs(allowed) do
         local src = outputDir .. sep .. name

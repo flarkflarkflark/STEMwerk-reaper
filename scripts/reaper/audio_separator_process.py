@@ -165,6 +165,10 @@ def _is_darwin_arm64() -> bool:
     return sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}
 
 
+def _is_windows_runtime() -> bool:
+    return os.name == "nt" or sys.platform.startswith("win")
+
+
 def _is_demucs_model(model_name: Optional[str]) -> bool:
     name = str(model_name or "").lower()
     return name.startswith("htdemucs") or name.startswith("hdemucs")
@@ -243,6 +247,43 @@ def _resolve_normal_workflow_backend(selected_device: Optional[str]) -> str:
     if device == "auto":
         return "unknown"
     return "unknown"
+
+
+# Ordered so the primary runtime/backend classification is the first thing a
+# reader (and the support-bundle parser) sees for a normal-workflow run.
+_NORMAL_RUNTIME_EVIDENCE_KEYS = (
+    "runtime_selected",
+    "backend_runtime",
+    "selected_device",
+    "selected_device_name",
+    "directml_init_mode",
+    "accelerator_status_supersedes_library_log",
+    "separator_torch_device",
+    "separator_onnx_provider",
+)
+
+
+def _emit_normal_runtime_evidence(separator: object) -> None:
+    """Emit authoritative final runtime evidence for a normal-workflow run.
+
+    Sourced from the separator's own post-configuration state, so it reflects
+    the device STEMwerk actually bound rather than any intermediate
+    third-party initialisation message. Emits nothing when the runtime could
+    not be proven, so absent evidence is never turned into a false claim.
+    """
+    evidence = getattr(separator, "runtime_evidence", None)
+    if not isinstance(evidence, dict) or not evidence:
+        print("normal_workflow_runtime_evidence=not_proven", file=sys.stderr)
+        return
+    for key in _NORMAL_RUNTIME_EVIDENCE_KEYS:
+        value = str(evidence.get(key, "") or "").strip()
+        if value:
+            print(f"{key}={value}", file=sys.stderr)
+    # device_name is the key the support bundle already consumes for the
+    # friendly adapter label.
+    adapter = str(evidence.get("selected_device_name", "") or "").strip()
+    if adapter and adapter.lower() != "unknown":
+        print(f"device_name={adapter}", file=sys.stderr)
 
 
 def _read_benchmark_dks_stage2_cap_request() -> tuple[Optional[int], str]:
@@ -1588,6 +1629,7 @@ def _direct_dks_preflight_check(
     model_cache_dir: Path,
     runtime_info: Optional[Dict[str, Any]] = None,
     allow_direct_demix: bool = False,
+    allow_downloads: bool = True,
 ) -> Tuple[bool, str, str, Optional[str]]:
     # Force an explicit model-catalog lookup before normal workflow setup.
     # This prevents delayed failure in sep.separate()/load_model for known
@@ -1605,23 +1647,30 @@ def _direct_dks_preflight_check(
     for filename, source_url in asset_map.items():
         print(f"drumsep_catalog_asset={filename}|{source_url}", file=sys.stderr)
     asset_map = _normalize_direct_dks_asset_map(asset_map)
-    ok, check_detail = _ensure_runtime_download_checks_has_drumsep(
-        model_cache_dir,
-        DIRECT_DKS_MODEL_ENTRY_NAME,
-        asset_map,
-        source_path,
-    )
-    if not ok:
-        return False, requested_model, resolved_model, check_detail
+    print(f"processing_may_download={'yes' if allow_downloads else 'no'}", file=sys.stderr)
+    if allow_downloads:
+        ok, check_detail = _ensure_runtime_download_checks_has_drumsep(
+            model_cache_dir,
+            DIRECT_DKS_MODEL_ENTRY_NAME,
+            asset_map,
+            source_path,
+        )
+        if not ok:
+            return False, requested_model, resolved_model, check_detail
     print(f"requested_model={requested_model}", file=sys.stderr)
     print(f"resolved_model={resolved_model}", file=sys.stderr)
     print(f"catalog_source={source_path if source_path else 'none'}", file=sys.stderr)
-    dl_ok, dl_detail = _download_direct_dks_assets(model_cache_dir, asset_map)
-    if not dl_ok:
-        return False, requested_model, resolved_model, dl_detail
     ready, missing_targets = _direct_dks_assets_ready(model_cache_dir, asset_map)
     if not ready:
-        return False, requested_model, resolved_model, "asset_ready_check_failed:" + "|".join(missing_targets)
+        detail = "asset_ready_check_failed:" + "|".join(missing_targets)
+        if not allow_downloads:
+            return False, requested_model, resolved_model, "processing_download_blocked:" + detail
+        dl_ok, dl_detail = _download_direct_dks_assets(model_cache_dir, asset_map)
+        if not dl_ok:
+            return False, requested_model, resolved_model, dl_detail
+        ready, missing_targets = _direct_dks_assets_ready(model_cache_dir, asset_map)
+        if not ready:
+            return False, requested_model, resolved_model, "asset_ready_check_failed:" + "|".join(missing_targets)
     yaml_ok, yaml_detail = _validate_direct_dks_yaml(asset_map, model_cache_dir, requested_model or resolved_model)
     if not yaml_ok:
         return False, requested_model, resolved_model, yaml_detail
@@ -1755,6 +1804,35 @@ def _setup_reaper_io(output_dir: Optional[str]):
     return None
 
 
+def _write_worker_context(output_dir: Optional[str]) -> None:
+    """Persist the run/job identity this process was launched with, so
+    support-bundle diagnostics can read exact structured identity instead of
+    inferring it from directory names/timestamps. Purely additive evidence:
+    never read back by this process, never affects processing/output.
+    """
+    if not output_dir:
+        return
+    run_id = os.environ.get("STEMWERK_RUN_ID", "")
+    job_id = os.environ.get("STEMWERK_JOB_ID", "")
+    if not run_id and not job_id:
+        return
+    payload = {
+        "schema": 1,
+        "run_id": run_id,
+        "job_id": job_id,
+        "run_dir_name": os.environ.get("STEMWERK_RUN_DIR_NAME", ""),
+        "started_utc": os.environ.get("STEMWERK_RUN_STARTED_UTC", ""),
+    }
+    try:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "worker_context.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
 def _read_simple_env_file(path: Path) -> Dict[str, str]:
     values: Dict[str, str] = {}
     try:
@@ -1790,7 +1868,7 @@ def _runtime_base_candidates() -> List[Path]:
         seen.add(key)
         candidates.append(path)
 
-    if os.name == "nt":
+    if _is_windows_runtime():
         local_appdata = os.environ.get("LOCALAPPDATA")
         if local_appdata:
             add(Path(local_appdata) / "STEMwerk")
@@ -1808,7 +1886,7 @@ def _runtime_base_candidates() -> List[Path]:
 def _drumsep_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
     base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
     runtime_dir = base / DRUMSEP_RUNTIME_DIRNAME
-    if os.name == "nt":
+    if _is_windows_runtime():
         return runtime_dir / "Scripts" / "python.exe"
     return runtime_dir / "bin" / "python"
 
@@ -1816,7 +1894,7 @@ def _drumsep_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
 def _main_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
     base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
     runtime_dir = base / ".venv"
-    if os.name == "nt":
+    if _is_windows_runtime():
         return runtime_dir / "Scripts" / "python.exe"
     return runtime_dir / "bin" / "python"
 
@@ -1824,7 +1902,7 @@ def _main_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
 def _drumsep_rocm_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
     base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
     runtime_dir = base / DRUMSEP_RUNTIME_ROCM_DIRNAME
-    if os.name == "nt":
+    if _is_windows_runtime():
         return runtime_dir / "Scripts" / "python.exe"
     return runtime_dir / "bin" / "python"
 
@@ -1832,7 +1910,7 @@ def _drumsep_rocm_runtime_python_path(runtime_base: Optional[Path] = None) -> Pa
 def _drumsep_cuda_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
     base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
     runtime_dir = base / DRUMSEP_RUNTIME_CUDA_DIRNAME
-    if os.name == "nt":
+    if _is_windows_runtime():
         return runtime_dir / "Scripts" / "python.exe"
     return runtime_dir / "bin" / "python"
 
@@ -1840,7 +1918,7 @@ def _drumsep_cuda_runtime_python_path(runtime_base: Optional[Path] = None) -> Pa
 def _drumsep_directml_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
     base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
     runtime_dir = base / DRUMSEP_RUNTIME_DIRECTML_DIRNAME
-    if os.name == "nt":
+    if _is_windows_runtime():
         return runtime_dir / "Scripts" / "python.exe"
     return runtime_dir / "bin" / "python"
 
@@ -2156,7 +2234,6 @@ def _select_drumsep_runtime(
     explicit_cuda = device_norm == "cuda" or bool(re.match(r"^cuda:\d+$", device_norm))
     explicit_rocm = device_norm == "rocm"
     explicit_directml = device_norm == "directml" or device_norm.startswith("directml:")
-
     def _normalized_device_request(value: str) -> str:
         if value == "cpu":
             return "cpu"
@@ -2199,7 +2276,7 @@ def _select_drumsep_runtime(
         reason = "missing" if directml_detail == "missing" else "broken"
         return None, reason, info
 
-    if os.name == "nt" and explicit_cuda:
+    if _is_windows_runtime() and explicit_cuda:
         print("drumsep_runtime_selection_policy=explicit_cuda", file=sys.stderr)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
         selected_cuda_python, cuda_detail, cuda_payload, cuda_attempts = _probe_drumsep_runtime_candidates(
@@ -2224,7 +2301,7 @@ def _select_drumsep_runtime(
         reason = "missing" if cuda_detail == "missing" else "broken"
         return None, reason, info
 
-    if os.name == "nt" and normalized_request in {"auto", "gpu"}:
+    if _is_windows_runtime() and normalized_request in {"auto", "gpu"}:
         selection_policy = "gpu_prefer_cuda" if normalized_request == "gpu" else "auto_prefer_cuda"
         print(f"drumsep_runtime_selection_policy={selection_policy}", file=sys.stderr)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
@@ -4115,6 +4192,7 @@ def main():
         print(f"STEMWERK_DIAG runtime_base_prefix={getattr(sys, 'base_prefix', '')}", file=sys.stderr)
 
     write_done = _setup_reaper_io(args.output_dir if args.output_dir else None)
+    _write_worker_context(args.output_dir if args.output_dir else None)
     emit_phase("python_start")
     ffmpeg_path, ffmpeg_wrapper, ffmpeg_path_prefix = _configure_ffmpeg_runtime()
     model_cache_dir = _configure_model_cache_runtime()
@@ -4271,6 +4349,7 @@ def main():
             model_cache_dir,
             runtime_info=runtime_info,
             allow_direct_demix=use_direct_demix,
+            allow_downloads=False,
         )
         if not ok:
             known_err_text = str(known_err or "")
@@ -4459,6 +4538,7 @@ def main():
                 model_cache_dir,
                 runtime_info=runtime_info,
                 allow_direct_demix=use_direct_demix,
+                allow_downloads=False,
             )
             if not ok:
                 known_err_text = str(known_err or "")
@@ -4585,7 +4665,12 @@ def main():
 
         with _working_directory(output_root):
             emit_phase("separate_start")
-            result = sep.separate(args.input, str(output_root), stems=stems or None)
+            try:
+                result = sep.separate(args.input, str(output_root), stems=stems or None)
+            finally:
+                # Final runtime truth is known once the separator has been
+                # configured, so emit it even when separation itself fails.
+                _emit_normal_runtime_evidence(sep)
             emit_phase("separate_end")
 
         # audio-separator writes model outputs inside sep.separate(); this phase

@@ -12,6 +12,15 @@ DRUMSEP_HELPER = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py")
 SETUP_INTERNAL = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua")
 
 
+def _load_audio_separator_process_module():
+    path = Path("scripts/reaper/audio_separator_process.py")
+    spec = importlib.util.spec_from_file_location("audio_separator_process_2306_test", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_drumsep_helper():
     spec = importlib.util.spec_from_file_location("stemwerk_2306_drumsep", DRUMSEP_HELPER)
     module = importlib.util.module_from_spec(spec)
@@ -20,20 +29,24 @@ def _load_drumsep_helper():
     return module
 
 
-def test_apple_silicon_missing_payload_fails_before_runtime_cleanup(tmp_path):
-    if os.name == "nt":
-        pytest.skip("POSIX bootstrap fixture")
-    script_dir = tmp_path / "reaper"
-    script_dir.mkdir()
-    bootstrap = script_dir / MACOS_BOOTSTRAP.name
-    shutil.copy2(MACOS_BOOTSTRAP, bootstrap)
-
+def _arm64_fake_bin(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     uname = fake_bin / "uname"
     uname.write_text("#!/bin/sh\nprintf 'arm64\\n'\n", encoding="utf-8")
     uname.chmod(0o755)
+    sw_vers = fake_bin / "sw_vers"
+    sw_vers.write_text("#!/bin/sh\nprintf '26.5.2\\n'\n", encoding="utf-8")
+    sw_vers.chmod(0o755)
+    # Blokkeer elke echte download in de fixture (managed python e.d.).
+    for tool in ("curl", "wget"):
+        shim = fake_bin / tool
+        shim.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        shim.chmod(0o755)
+    return fake_bin
 
+
+def _sentinel_runtime(tmp_path):
     runtime = tmp_path / "runtime"
     sentinel = runtime / ".venv" / "sentinel"
     sentinel.parent.mkdir(parents=True)
@@ -41,15 +54,14 @@ def test_apple_silicon_missing_payload_fails_before_runtime_cleanup(tmp_path):
     ready = runtime / "state" / "ready_to_go.env"
     ready.parent.mkdir(parents=True)
     ready.write_text("READY_TO_GO_STATUS=ok\nMAIN_RUNTIME_STATUS=ok\n", encoding="utf-8")
-    state = tmp_path / "state.env"
-    log = tmp_path / "bootstrap.log"
+    return runtime, sentinel
 
-    env = dict(os.environ)
-    env["PATH"] = f"{fake_bin}:{env['PATH']}"
-    result = subprocess.run(
+
+def _run_bootstrap(script_dir, runtime, state, log, env, mode="repair"):
+    return subprocess.run(
         [
             "/bin/sh",
-            str(bootstrap),
+            str(script_dir / MACOS_BOOTSTRAP.name),
             "--runtime-base",
             str(runtime),
             "--state-file",
@@ -57,23 +69,126 @@ def test_apple_silicon_missing_payload_fails_before_runtime_cleanup(tmp_path):
             "--log-file",
             str(log),
             "--mode",
-            "rebuild-venv",
+            mode,
         ],
         env=env,
         capture_output=True,
         text=True,
     )
 
+
+def test_apple_silicon_missing_payload_uses_online_fallback_without_early_exit(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX bootstrap fixture")
+    script_dir = tmp_path / "reaper"
+    script_dir.mkdir()
+    shutil.copy2(MACOS_BOOTSTRAP, script_dir / MACOS_BOOTSTRAP.name)
+
+    fake_bin = _arm64_fake_bin(tmp_path)
+    runtime, sentinel = _sentinel_runtime(tmp_path)
+    state = tmp_path / "state.env"
+    log = tmp_path / "bootstrap.log"
+
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    result = _run_bootstrap(script_dir, runtime, state, log, env, mode="repair")
+
+    # 2.3.1.0: een afwezige payload is géén vroege apple_silicon_requires_bundled_payload
+    # meer; de run valt door naar het online-pad, maar faalt in de diepe preflight
+    # voordat managed-Python acquisitie of runtime-mutatie mag starten.
     assert result.returncode != 0
     assert sentinel.read_text(encoding="utf-8") == "preserved\n"
-    ready_text = ready.read_text(encoding="utf-8")
+    state_text = state.read_text(encoding="utf-8")
+    assert "STATUS_REASON=apple_silicon_requires_bundled_payload" not in state_text
+    assert "STATUS=deps_failed" in state_text
+    assert "STATUS_REASON=online_fallback_failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_REASON=online_fallback_failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
+
+
+def test_apple_silicon_missing_payload_offline_preflight_is_zero_mutation(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX bootstrap fixture")
+    script_dir = tmp_path / "reaper"
+    script_dir.mkdir()
+    shutil.copy2(MACOS_BOOTSTRAP, script_dir / MACOS_BOOTSTRAP.name)
+
+    fake_bin = _arm64_fake_bin(tmp_path)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    before = sorted(str(path.relative_to(runtime)) for path in runtime.rglob("*"))
+    state = tmp_path / "state.env"
+    log = tmp_path / "bootstrap.log"
+
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["HTTP_PROXY"] = "http://127.0.0.1:9"
+    env["HTTPS_PROXY"] = "http://127.0.0.1:9"
+    env["PIP_INDEX_URL"] = "http://127.0.0.1:9/simple"
+    env["NO_PROXY"] = ""
+    env["no_proxy"] = ""
+    result = _run_bootstrap(script_dir, runtime, state, log, env, mode="repair")
+    after = sorted(str(path.relative_to(runtime)) for path in runtime.rglob("*"))
+
+    assert result.returncode != 0
+    assert after == before == []
+    state_text = state.read_text(encoding="utf-8")
+    assert "STATUS=deps_failed" in state_text
+    assert "STATUS_REASON=online_fallback_failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_REASON=online_fallback_failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
+
+
+def test_direct_dks_processing_preflight_blocks_without_download(tmp_path, monkeypatch):
+    module = _load_audio_separator_process_module()
+
+    def fail_download(*_args, **_kwargs):
+        raise AssertionError("processing preflight must not download Direct Kit assets")
+
+    monkeypatch.setattr(module, "_download_direct_dks_assets", fail_download)
+    ok, requested, resolved, detail = module._direct_dks_preflight_check(
+        module.DIRECT_DKS_MODEL_ALIAS,
+        tmp_path,
+        allow_downloads=False,
+    )
+    assert ok is False
+    assert requested == module.DIRECT_DKS_MODEL_ALIAS
+    assert resolved == module.DIRECT_DKS_MODEL_FILENAME
+    assert str(detail).startswith("processing_download_blocked:asset_ready_check_failed:")
+
+
+def test_apple_silicon_corrupt_payload_fails_before_runtime_cleanup(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX bootstrap fixture")
+    script_dir = tmp_path / "reaper"
+    script_dir.mkdir()
+    shutil.copy2(MACOS_BOOTSTRAP, script_dir / MACOS_BOOTSTRAP.name)
+    # _bundled aanwezig maar incompleet/corrupt (geen manifest/wheels/python/ffmpeg).
+    corrupt = script_dir / "_bundled/macos/apple-silicon"
+    corrupt.mkdir(parents=True)
+    (corrupt / "junk.txt").write_text("broken\n", encoding="utf-8")
+
+    fake_bin = _arm64_fake_bin(tmp_path)
+    runtime, sentinel = _sentinel_runtime(tmp_path)
+    state = tmp_path / "state.env"
+    log = tmp_path / "bootstrap.log"
+
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    result = _run_bootstrap(script_dir, runtime, state, log, env, mode="rebuild-venv")
+
+    assert result.returncode != 0
+    assert sentinel.read_text(encoding="utf-8") == "preserved\n"
+    ready_text = (runtime / "state" / "ready_to_go.env").read_text(encoding="utf-8")
     assert "READY_TO_GO_STATUS=missing" in ready_text
     assert "MAIN_RUNTIME_STATUS=missing" in ready_text
     assert "apple_silicon_requires_bundled_payload" in ready_text
     state_text = state.read_text(encoding="utf-8")
     assert "STATUS_REASON=apple_silicon_requires_bundled_payload" in state_text
     assert "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed" in state_text
-    assert "MACOS_PAYLOAD_PREFLIGHT_REASON=bundled_payload_missing_or_incomplete" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_REASON=bundled_payload_incomplete_or_corrupt" in state_text
     assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
     assert not (runtime / "bin").exists()
     assert not (runtime / "ffmpeg").exists()
@@ -83,18 +198,26 @@ def test_apple_silicon_missing_payload_fails_before_runtime_cleanup(tmp_path):
 def test_apple_silicon_preflight_contract_precedes_runtime_mutation():
     script = MACOS_BOOTSTRAP.read_text(encoding="utf-8")
     gate = script.index(
-        'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then'
+        'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" = "present" ]; then'
     )
-    failure_marker = script.index('log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"', gate)
+    corrupt_gate = script.index(
+        'elif [ "${MAC_ARCH}" = "arm64" ] && [ -d "${BUNDLED_PAYLOAD_DIR}" ]; then',
+        gate,
+    )
+    failure_marker = script.index('log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"', corrupt_gate)
     readiness = script.index(
         'write_ready_to_go_state "mps" "missing" "missing" '
         '"apple_silicon_requires_bundled_payload" "missing"',
-        gate,
+        corrupt_gate,
+    )
+    online_branch = script.index(
+        'MACOS_PAYLOAD_PREFLIGHT_REASON="online_fallback"',
+        readiness,
     )
     runtime_dirs = script.index(
         'mkdir -p "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"'
     )
-    assert gate < failure_marker < readiness < runtime_dirs
+    assert gate < corrupt_gate < failure_marker < readiness < online_branch < runtime_dirs
 
 
 def _complete_payload_fixture(script_dir):
@@ -116,11 +239,7 @@ def test_healthy_repair_policy_mismatch_preserves_existing_runtime(tmp_path):
     shutil.copy2(MACOS_BOOTSTRAP, bootstrap)
     _complete_payload_fixture(script_dir)
 
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    uname = fake_bin / "uname"
-    uname.write_text("#!/bin/sh\nprintf 'arm64\\n'\n", encoding="utf-8")
-    uname.chmod(0o755)
+    fake_bin = _arm64_fake_bin(tmp_path)
 
     runtime = tmp_path / "runtime"
     python = runtime / ".venv/bin/python"
@@ -186,6 +305,9 @@ def test_runtime_policy_gate_preserves_matching_and_missing_recovery_paths():
     script = MACOS_BOOTSTRAP.read_text(encoding="utf-8")
     policy_gate = script.index('if [ "${MODE}" = "repair" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then')
     match = script.index('MACOS_RUNTIME_POLICY_STATUS="match"', policy_gate)
+    match_status = script.index('set_status "ok" ""', match)
+    match_write = script.index("write_state", match_status)
+    match_exit = script.index("exit 0", match_write)
     mismatch_branch = script.index('mismatch\\|*)', match)
     mismatch_exit = script.index('set_status "repair_required" "${MACOS_RUNTIME_POLICY_REASON}"', match)
     missing = script.index('MACOS_RUNTIME_POLICY_REASON="missing_runtime_recovery"', mismatch_exit)
@@ -194,19 +316,69 @@ def test_runtime_policy_gate_preserves_matching_and_missing_recovery_paths():
     )
     mutation = script.index('MACOS_RUNTIME_POLICY_MUTATION_STARTED="true"', explicit_rebuild)
     venv_create = script.index('log "Creating STEMwerk virtual environment..."', mutation)
+    assert policy_gate < match < match_status < match_write < match_exit < mismatch_exit
     assert policy_gate < match < mismatch_exit < missing < explicit_rebuild < mutation < venv_create
     assert "exit 1" not in script[match:mismatch_branch]
 
 
+def test_runtime_policy_match_repair_short_circuits_without_mutation(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX bootstrap fixture")
+    script_dir = tmp_path / "reaper"
+    script_dir.mkdir()
+    shutil.copy2(MACOS_BOOTSTRAP, script_dir / MACOS_BOOTSTRAP.name)
+
+    fake_bin = _arm64_fake_bin(tmp_path)
+    runtime = tmp_path / "runtime"
+    python = runtime / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' 'match|python=3.12;architecture=arm64;"
+        "audio-separator=0.23.0;numpy=1.26.4;numba=0.59.1;llvmlite=0.42.0;"
+        "torch=2.5.1;torchaudio=2.5.1;samplerate=0.1.0'\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    sentinel = runtime / ".venv/STEMWERK_MACOS_MATCH_TEST_SENTINEL"
+    sentinel.write_text("preserved\n", encoding="utf-8")
+    before = {path.relative_to(runtime): path.read_bytes() for path in runtime.rglob("*") if path.is_file()}
+    state = tmp_path / "state.env"
+    log = tmp_path / "bootstrap.log"
+
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["HTTP_PROXY"] = "http://127.0.0.1:9"
+    env["HTTPS_PROXY"] = "http://127.0.0.1:9"
+    env["PIP_INDEX_URL"] = "http://127.0.0.1:9/simple"
+    env["NO_PROXY"] = ""
+    env["no_proxy"] = ""
+    result = _run_bootstrap(script_dir, runtime, state, log, env, mode="repair")
+
+    assert result.returncode == 0
+    after = {path.relative_to(runtime): path.read_bytes() for path in runtime.rglob("*") if path.is_file()}
+    assert after == before
+    assert sentinel.read_text(encoding="utf-8") == "preserved\n"
+    state_text = state.read_text(encoding="utf-8")
+    assert "STATUS=ok" in state_text
+    assert "STATUS_REASON=" not in state_text
+    assert "MACOS_RUNTIME_POLICY_STATUS=match" in state_text
+    assert "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
+    log_text = log.read_text(encoding="utf-8")
+    assert "STEP 3/5: Installing STEMwerk runtime" not in log_text
+    assert "127.0.0.1:9" not in log_text
+
+
 def test_explicit_rebuild_remains_after_complete_payload_preflight():
     script = MACOS_BOOTSTRAP.read_text(encoding="utf-8")
-    payload_gate = script.index(
-        'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then'
+    payload_ok_branch = script.index(
+        'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" = "present" ]; then'
     )
-    payload_failure_exit = script.index("exit 1", payload_gate)
-    explicit_rebuild = script.index('MACOS_RUNTIME_POLICY_STATUS="explicit_rebuild"', payload_failure_exit)
+    corrupt_exit = script.index("exit 1", payload_ok_branch)
+    explicit_rebuild = script.index('MACOS_RUNTIME_POLICY_STATUS="explicit_rebuild"', corrupt_exit)
     removal = script.index('if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then')
-    assert payload_gate < payload_failure_exit < explicit_rebuild < removal
+    assert payload_ok_branch < corrupt_exit < explicit_rebuild < removal
 
 
 def test_setup_does_not_normalize_runtime_policy_mismatch_back_to_ok():
@@ -219,7 +391,16 @@ def test_setup_does_not_normalize_runtime_policy_mismatch_back_to_ok():
     assert 'if authoritativeRuntimeVerified and not runtimePolicyBlocked then' in script
     assert 'local authoritativeRuntimeVerified = authoritativeBootstrapVerified' in script
     assert 'and not windowsTorchaudioVerificationFailed' in script
-    assert 'and readyHealthy and bootstrapComplete and not runtimePolicyRequiresRebuild(state)' in script
+    # The 2.3.1.0 "keep current failures authoritative" follow-up removed
+    # buildWindowsSetupOverview's separate staleRunning/staleGuardFailed/
+    # staleFailedState cached-state-to-ok normalization entirely (see
+    # tests/support/run_setup_final_rows_headless.lua's
+    # windows-deps-failed-cannot-be-overridden-by-old-success-log and
+    # windows-running-cannot-be-finalized-by-old-success-log fixtures for the
+    # real behavioral coverage) -- a current runtime-policy mismatch (or any
+    # other current failure) can no longer be silently normalized back to ok
+    # by that path, by construction, since the path no longer exists.
+    assert 'local staleFailedState' not in script
 
 
 def _managed_cache(tmp_path, alias_bytes=None):

@@ -40,6 +40,22 @@ jobs:
           python scripts/reaper/audio_separator_process.py --list-models
           python scripts/reaper/audio_separator_process.py --help
 
+      - name: Run release-relevant pytest suite
+        run: |
+          python -m pytest -q \
+            tests/test_release_gate.py \
+            tests/test_b0_model_preflight.py \
+            tests/test_b0_small_model_descriptor_2310.py \
+            tests/test_2310_run_context_identity.py \
+            tests/test_2310_diagnostics_truthfulness.py \
+            tests/test_project_context_targeting.py \
+            tests/test_dks_extract_import_invariants.py \
+            tests/test_windows_payload_contract_2306.py \
+            tests/test_linux_package_portability_2306.py \
+            tests/test_macos_intel_dks_diagnostics_2306.py \
+            tests/test_2306_narrow_hotfix.py \
+            tests/i18n/test_languages.py
+
       - name: Test i18n completeness
         run: |
           python tests/i18n/test_languages.py

@@ -1,7 +1,12 @@
 post_install() {
   echo
   echo "STEMwerk installed to /usr/share/stemwerk-reaper"
-  echo "Next step: Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua."
+  echo "Run as your normal desktop user:"
+  echo "  stemwerk-integrate-reaper"
+  echo "Then in REAPER:"
+  echo "  Actions -> Show action list -> ReaScript: Load..."
+  echo "  Select STEMwerk_Setup_Toolbar.lua from the copied STEMwerk-reaper folder."
+  echo "  Run STEMwerk: Setup."
   echo
 
   if [[ -n "${DISPLAY}${WAYLAND_DISPLAY}" ]]; then
@@ -12,7 +17,12 @@ post_install() {
 STEMwerk is installed to /usr/share/stemwerk-reaper
 
 <b>Next step</b>
-Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.'
+Run as your normal desktop user:
+<tt>stemwerk-integrate-reaper</tt>
+
+Then in REAPER, use Actions -&gt; Show action list -&gt; ReaScript: Load...
+and select STEMwerk_Setup_Toolbar.lua from the copied STEMwerk-reaper folder.
+Then run STEMwerk: Setup.'
       zenity --info --width=520 --title="STEMwerk Installer" --text="$rich_message" >/dev/null 2>&1 || true
     elif command -v kdialog >/dev/null 2>&1; then
       local rich_message
@@ -21,10 +31,15 @@ Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.'
 STEMwerk is installed to /usr/share/stemwerk-reaper
 
 <b>Next step</b>
-Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.'
+Run as your normal desktop user:
+<tt>stemwerk-integrate-reaper</tt>
+
+Then in REAPER, use Actions -&gt; Show action list -&gt; ReaScript: Load...
+and select STEMwerk_Setup_Toolbar.lua from the copied STEMwerk-reaper folder.
+Then run STEMwerk: Setup.'
       kdialog --msgbox "$rich_message" --title "STEMwerk Installer" >/dev/null 2>&1 || true
     elif command -v notify-send >/dev/null 2>&1; then
-      notify-send -i stemwerk "STEMwerk Installer" "STEMwerk installed to /usr/share/stemwerk-reaper. Open REAPER and run STEMwerk-SETUP.lua." >/dev/null 2>&1 || true
+      notify-send -i stemwerk "STEMwerk Installer" "Run stemwerk-integrate-reaper as your normal user, then load STEMwerk_Setup_Toolbar.lua in REAPER and run STEMwerk: Setup." >/dev/null 2>&1 || true
     fi
   fi
 }

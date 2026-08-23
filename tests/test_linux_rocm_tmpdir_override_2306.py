@@ -180,11 +180,43 @@ def test_runtime_xdg_and_rocm_dependency_contracts_remain_unchanged() -> None:
 
 def test_macos_and_windows_bootstraps_remain_release_baseline_bytes() -> None:
     expected = {
+        # 2.3.1.0: macOS online Repair (managed wheelhouse, deep preflight,
+        # arch guard, per-arch onnxruntime pins) — hash updated from 2.3.0.7.
+        # Hash re-pinned again for the narrow release-corrective slice that
+        # fixed the stale "bundled 2.3.0.6 dependency policy" log message to
+        # correctly say 2.3.1.0.
+        # Hash re-pinned for the clean offline first-run bootstrap release
+        # blocker fix: the final-verification STATUS-clearing block no
+        # longer re-derives "was this transient failure already superseded"
+        # by enumerating three literal torch/onnxruntime STATUS_REASON
+        # strings -- it clears any stale STATUS once FINAL_RUNTIME_VERIFIED
+        # (the same exhaustive re-check that already covers numba,
+        # samplerate, audio-separator, onnxruntime, stemwerk-core, and the
+        # full pinned torch stack) is genuinely "yes", so a first-run-only
+        # transient sticky failure recorded for any reason no longer
+        # survives a fully successful final verification.
         "scripts/reaper/STEMwerk_Bootstrap_macOS.sh": (
-            "7cab0f6b042014825dfe65dd4a9ea8d23012cb15282be5d26ec5612575b5b466"
+            "6a62b67ab71640262de4122bfd825824d3f8f357db6afb6e179fcc0395526543"
         ),
+        # Hash re-pinned for the 2.3.1.0 bundled-online DrumSep FFmpeg
+        # propagation fix: VerifyDrumsepRuntime (CPU) now resolves FFmpeg and
+        # wraps its child process invocation in
+        # InvokeWithResolvedFfmpegEnvironment, matching the pattern its CUDA/
+        # DirectML siblings already used -- fixing a release blocker where
+        # bootstrap-time DrumSep verification failed with no-system-FFmpeg
+        # even though the bundled FFmpeg had already been resolved.
+        # Hash re-pinned for the 2.3.1.0 diagnostics-truthfulness slice: the
+        # DrumSep DirectML verification probe now passes use_directml=True to
+        # Separator() when the installed audio-separator build exposes that
+        # flag (detected by signature introspection, so older builds keep
+        # their previous behaviour). Without it the probe constructed a
+        # default CPU separator and logged "No hardware acceleration could be
+        # configured, running in CPU mode" while verifying the DirectML
+        # runtime, immediately before printing its own DRUMSEP_DIRECTML_VERIFY
+        # ok/provider evidence. Verification semantics, exit codes and the
+        # final evidence line are unchanged.
         "scripts/reaper/STEMwerk_Bootstrap_Windows.ps1": (
-            "facfd0090c87d9ef0ebadbe6d9d79c68e27307b39695cd7c75e75d63cf436679"
+            "9b52321c609bf65ef9efe037622588119e88fec5d1105f13e32124db25b31a92"
         ),
     }
     for relative, wanted in expected.items():

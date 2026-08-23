@@ -12,6 +12,7 @@ PINNED_NUMBA_VERSION="0.59.1"
 PINNED_LLVMLITE_VERSION="0.42.0"
 PINNED_AUDIO_SEPARATOR_VERSION="0.23.0"
 PINNED_SAMPLERATE_VERSION="0.1.0"
+PINNED_ONNXRUNTIME_VERSION=""
 PINNED_PYTHON_MAJOR_MINOR="3.12"
 PINNED_TORCH_VERSION=""
 PINNED_TORCHVISION_VERSION=""
@@ -79,8 +80,6 @@ bundled_payload_available() {
     && [ -f "${BUNDLED_PAYLOAD_DIR}/manifest.json" ] \
     && [ -d "${BUNDLED_PAYLOAD_DIR}/wheels" ] \
     && [ -d "${BUNDLED_PAYLOAD_DIR}/python" ] \
-    && [ -d "${BUNDLED_PAYLOAD_DIR}/models" ] \
-    && [ -d "${BUNDLED_PAYLOAD_DIR}/drumsep" ] \
     && { [ -x "${BUNDLED_PAYLOAD_DIR}/ffmpeg/ffmpeg" ] || [ -x "${BUNDLED_PAYLOAD_DIR}/ffmpeg/bin/ffmpeg" ]; }
 }
 
@@ -141,6 +140,13 @@ install_with_optional_bundled_wheels() {
   if [ -n "${BUNDLED_WHEELS_DIR:-}" ] && [ -d "${BUNDLED_WHEELS_DIR}" ]; then
     MACOS_BUNDLED_WHEELHOUSE_STATUS="ok"
     "${_py}" -m pip install --no-index --find-links "${BUNDLED_WHEELS_DIR}" "$@"
+    return $?
+  fi
+  if [ -n "${MANAGED_WHEELS_DIR:-}" ] && [ -d "${MANAGED_WHEELS_DIR}" ]; then
+    # Online-pad met managed wheelhouse-overlay: pip kiest de platform-getagde managed
+    # wheels (diffq/samplerate/stemwerk_core) boven PyPI; de rest komt online (2.3.1.0).
+    MACOS_MANAGED_WHEELHOUSE_STATUS="used"
+    "${_py}" -m pip install --find-links "${MANAGED_WHEELS_DIR}" "$@"
     return $?
   fi
   "${_py}" -m pip install "$@"
@@ -301,6 +307,18 @@ write_ready_to_go_state() {
   if [ "${_main_runtime_status}" != "ok" ]; then
     _ready="missing"
   fi
+  _normal_model_ready="no"
+  _quality_ready="no"
+  _six_stem_ready="no"
+  _direct_kit_ready="no"
+  _kit_split_ready="no"
+  [ "${_main_runtime_status}" = "ok" ] && [ "${_fast}" = "ok" ] && _normal_model_ready="yes"
+  [ "${_main_runtime_status}" = "ok" ] && [ "${_quality}" = "ok" ] && _quality_ready="yes"
+  [ "${_main_runtime_status}" = "ok" ] && [ "${_sixstem}" = "ok" ] && _six_stem_ready="yes"
+  if [ "${_runtime_status}" = "ok" ] && [ "${_drumsep_model_status}" = "ok" ]; then
+    _direct_kit_ready="yes"
+    [ "${_normal_model_ready}" = "yes" ] && _kit_split_ready="yes"
+  fi
   {
     echo "READY_TO_GO_STATUS=${_ready}"
     echo "READY_TO_GO_DETAIL=${_detail}"
@@ -316,6 +334,11 @@ write_ready_to_go_state() {
     echo "DRUMSEP_STATUS=${_drumsep_status}"
     echo "DKS_SUPPORTED=${_dks_supported}"
     echo "NORMAL_STEMS_SUPPORTED=${_normal_stems_supported}"
+    echo "NORMAL_STEMS_MODEL_READY=${_normal_model_ready}"
+    echo "QUALITY_READY=${_quality_ready}"
+    echo "SIX_STEM_READY=${_six_stem_ready}"
+    echo "DIRECT_KIT_READY=${_direct_kit_ready}"
+    echo "KIT_SPLIT_READY=${_kit_split_ready}"
   } > "$(ready_to_go_state_file)"
 }
 
@@ -543,9 +566,11 @@ repair_samplerate_if_arch_mismatch() {
   fi
 
   if [ -n "${BUNDLED_WHEELS_DIR:-}" ] && [ -d "${BUNDLED_WHEELS_DIR}" ]; then
-    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"
+    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" --repair-version "${PINNED_SAMPLERATE_VERSION}" 2>&1)"
+  elif [ -n "${MANAGED_WHEELS_DIR:-}" ] && [ -d "${MANAGED_WHEELS_DIR}" ]; then
+    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${MANAGED_WHEELS_DIR}" --repair-version "${PINNED_SAMPLERATE_VERSION}" 2>&1)"
   else
-    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"
+    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --repair-version "${PINNED_SAMPLERATE_VERSION}" 2>&1)"
   fi
   _guard_rc=$?
   [ -n "${_guard_out}" ] && printf "%s\n" "${_guard_out}" >> "${LOG_FILE}"
@@ -605,6 +630,78 @@ EOF
     return 1
   fi
   BACKEND_DEPS_REASON=""
+  return 0
+}
+
+# D7 (2.3.1.0): algemene arch-verificatie van de venv — wiel-platformtags (*.dist-info/WHEEL)
+# en file(1)-classificatie van alle .dylib/.so in site-packages. Faalt luid met module, pad
+# en verwacht arch. Draait op arm64 én x86_64.
+verify_venv_arch() {
+  [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ] || return 0
+  MACOS_ARCH_GUARD_STATUS="not_run"
+  MACOS_ARCH_GUARD_DETAIL=""
+  _arch_out="$("${VENV_PY}" - <<'PY' 2>&1
+import glob, os, platform, subprocess, sys
+
+host = platform.machine()
+expected = "arm64/universal2" if host == "arm64" else "x86_64/universal2"
+sp = next((p for p in sys.path if p.endswith("site-packages")), "")
+bad = []
+
+def wheel_ok(tag):
+    plat = tag.rsplit("-", 1)[-1]
+    if plat == "any":
+        return True
+    if host == "arm64":
+        return ("arm64" in plat) or ("universal2" in plat)
+    return ("x86_64" in plat) or ("universal2" in plat)
+
+if sp and os.path.isdir(sp):
+    for wheel_file in glob.glob(os.path.join(sp, "*.dist-info", "WHEEL")):
+        try:
+            tags = [l.split(":", 1)[1].strip() for l in open(wheel_file, encoding="utf-8") if l.startswith("Tag:")]
+        except Exception:
+            continue
+        for tag in tags:
+            if not wheel_ok(tag):
+                bad.append(f"{os.path.relpath(wheel_file, sp)} tag={tag} expected={expected}")
+    for root, _dirs, files in os.walk(sp):
+        for name in files:
+            if not (name.endswith(".dylib") or name.endswith(".so")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                out = subprocess.run(["file", path], capture_output=True, text=True, timeout=30).stdout
+            except Exception:
+                continue
+            if host == "arm64":
+                ok = ("arm64" in out) or ("universal" in out.lower())
+            else:
+                ok = ("x86_64" in out) or ("universal" in out.lower())
+            if not ok:
+                bad.append(f"{os.path.relpath(path, sp)} binary={out.strip()} expected={expected}")
+
+if bad:
+    print("MACOS_ARCH_GUARD status=mismatch")
+else:
+    print("MACOS_ARCH_GUARD status=ok")
+for entry in bad:
+    print(f"MACOS_ARCH_GUARD bad={entry}")
+PY
+)"
+  _arch_rc=$?
+  [ -n "${_arch_out}" ] && printf "%s\n" "${_arch_out}" >> "${LOG_FILE}"
+  MACOS_ARCH_GUARD_DETAIL="$(printf "%s\n" "${_arch_out}" | grep "^MACOS_ARCH_GUARD bad=" | head -3 | sed 's/^MACOS_ARCH_GUARD bad=//' | tr '\n' ';')"
+  if [ "${_arch_rc}" -ne 0 ] || printf "%s\n" "${_arch_out}" | grep -q "status=mismatch"; then
+    MACOS_ARCH_GUARD_STATUS="mismatch"
+    log "macOS arch guard mismatch (expected ${MAC_ARCH}); first offending items:"
+    printf "%s\n" "${_arch_out}" | grep "^MACOS_ARCH_GUARD bad=" | head -5 | while IFS= read -r _line; do
+      log "  ${_line#MACOS_ARCH_GUARD bad=}"
+    done
+    return 1
+  fi
+  MACOS_ARCH_GUARD_STATUS="ok"
+  log "macOS arch guard passed: all installed wheels and binaries match ${MAC_ARCH}"
   return 0
 }
 
@@ -759,6 +856,7 @@ expected_torch = "${PINNED_TORCH_VERSION}"
 expected_torchvision = "${PINNED_TORCHVISION_VERSION}"
 expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
 expected_audio_separator = "${PINNED_AUDIO_SEPARATOR_VERSION}"
+expected_onnxruntime = "${PINNED_ONNXRUNTIME_VERSION}"
 expected_profile = "${PINNED_TORCH_STACK_LABEL}"
 mac_arch = "${MAC_ARCH}"
 
@@ -837,6 +935,8 @@ try:
         add_failure("torchaudio", expected_torchaudio, torchaudio_ver or "missing")
     if core(audio_separator_ver) != expected_audio_separator:
         add_failure("audio-separator", expected_audio_separator, audio_separator_ver or "missing")
+    if core(onnxruntime_ver) != expected_onnxruntime:
+        add_failure("onnxruntime", expected_onnxruntime, onnxruntime_ver or "missing")
 
     ordered_names = (
         "mac_arch",
@@ -1062,6 +1162,10 @@ write_state() {
       echo "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
       echo "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
       echo "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
+      echo "MACOS_MANAGED_WHEELHOUSE_STATUS=${MACOS_MANAGED_WHEELHOUSE_STATUS}"
+      echo "MACOS_ONNXRUNTIME_PIN=${MACOS_ONNXRUNTIME_PIN}"
+      echo "MACOS_ARCH_GUARD_STATUS=${MACOS_ARCH_GUARD_STATUS}"
+      echo "MACOS_ARCH_GUARD_DETAIL=${MACOS_ARCH_GUARD_DETAIL}"
       echo "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
       echo "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
       echo "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
@@ -1182,12 +1286,43 @@ else
 fi
 log "Selected torch stack profile: ${PINNED_TORCH_STACK_LABEL}"
 log "Selected torch stack versions: torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
+
+# Per-arch (en per macOS-major) onnxruntime-pin (2.3.1.0). PyPI-dekking cp312 mac:
+# 11_0_universal2 <= 1.17.x; 13_0_(universal2|arm64) 1.20-1.23.x; 14_0_arm64 >= 1.24.1;
+# laatste cp312 x86_64-mac-wheel = 1.23.2. audio-separator 0.23.0 eist onnxruntime>=1.17.
+MACOS_VERSION_MAJOR="$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)"
+case "${MACOS_VERSION_MAJOR}" in ''|*[!0-9]*) MACOS_VERSION_MAJOR="0" ;; esac
+MACOS_MIN_SUPPORTED="12"
+if [ "${MAC_ARCH}" = "x86_64" ]; then
+  MACOS_MIN_SUPPORTED="11"
+  if [ "${MACOS_VERSION_MAJOR}" -ge 13 ]; then
+    PINNED_ONNXRUNTIME_VERSION="1.23.2"
+  elif [ "${MACOS_VERSION_MAJOR}" -ge 11 ]; then
+    PINNED_ONNXRUNTIME_VERSION="1.19.2"
+  else
+    PINNED_ONNXRUNTIME_VERSION="unsupported_macos_version"
+  fi
+elif [ "${MACOS_VERSION_MAJOR}" -ge 14 ]; then
+  PINNED_ONNXRUNTIME_VERSION="1.27.0"
+elif [ "${MACOS_VERSION_MAJOR}" -eq 13 ]; then
+  PINNED_ONNXRUNTIME_VERSION="1.23.2"
+elif [ "${MACOS_VERSION_MAJOR}" -eq 12 ]; then
+  PINNED_ONNXRUNTIME_VERSION="1.17.3"
+else
+  PINNED_ONNXRUNTIME_VERSION="unsupported_macos_version"
+fi
+log "Selected onnxruntime pin: onnxruntime==${PINNED_ONNXRUNTIME_VERSION} (macOS major ${MACOS_VERSION_MAJOR}, arch ${MAC_ARCH})"
+MACOS_ONNXRUNTIME_PIN="${PINNED_ONNXRUNTIME_VERSION}"
 MACOS_BUNDLED_PAYLOAD_STATUS="missing"
 MACOS_BUNDLED_FFMPEG_STATUS="missing"
 MACOS_BUNDLED_WHEELHOUSE_STATUS="missing"
 MACOS_BUNDLED_MODELS_STATUS="missing"
 MACOS_BUNDLED_DRUMSEP_STATUS="missing"
+MACOS_MANAGED_WHEELHOUSE_STATUS="missing"
+MACOS_ARCH_GUARD_STATUS="not_run"
+MACOS_ARCH_GUARD_DETAIL=""
 BUNDLED_WHEELS_DIR=""
+MANAGED_WHEELS_DIR=""
 
 if bundled_payload_available; then
   MACOS_BUNDLED_PAYLOAD_STATUS="present"
@@ -1196,12 +1331,19 @@ if bundled_payload_available; then
   [ -n "$(bundled_models_dir || true)" ] && MACOS_BUNDLED_MODELS_STATUS="present"
   [ -n "$(bundled_drumsep_dir || true)" ] && MACOS_BUNDLED_DRUMSEP_STATUS="present"
 fi
+# Managed repo-wheelhouse (2.3.1.0): kleine platform-wheelhouse in de ReaPack-tree.
+# Kandidaat-volgorde analoog aan Linux: managed repo-wheelhouse beschikbaar als overlay,
+# bundled payload eerst (offline) als die compleet is, anders online. Modellen komen
+# altijd online via de catalogus.
+if [ -d "${SCRIPT_DIR}/vendor/wheels/darwin-${MAC_ARCH}-cp312" ]; then
+  MANAGED_WHEELS_DIR="${SCRIPT_DIR}/vendor/wheels/darwin-${MAC_ARCH}-cp312"
+  MACOS_MANAGED_WHEELHOUSE_STATUS="present"
+fi
 log "MACOS_BUNDLED_PAYLOAD_STATUS=${MACOS_BUNDLED_PAYLOAD_STATUS}"
 log "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
 log "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
 log "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
-
-mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs"
+log "MACOS_MANAGED_WHEELHOUSE_STATUS=${MACOS_MANAGED_WHEELHOUSE_STATUS}"
 
 STATUS="ok"
 STATUS_REASON=""
@@ -1210,12 +1352,6 @@ FFMPEG=""
 VENV_PY=""
 # Conservative default on macOS to avoid GPU extras with limited wheel support.
 PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
-ONNX_PACKAGE="onnxruntime"
-ONNX_FALLBACK_PACKAGE=""
-if [ "$(uname -m)" = "arm64" ]; then
-  ONNX_PACKAGE="onnxruntime-silicon"
-  ONNX_FALLBACK_PACKAGE="onnxruntime"
-fi
 PROFILE="mac-cpu"
 BACKEND="cpu"
 BACKEND_REASON=""
@@ -1267,10 +1403,33 @@ if command -v managed_python_init_state >/dev/null 2>&1; then
   managed_python_init_state
 fi
 
-if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then
+# macOS-minimum voor het runtime-installatiepad: scipy/onnxruntime publiceren geen cp312-wheels
+# voor oudere macOS-versies (bron: PyPI release-tags per package) — faal vroeg met een
+# duidelijke melding i.p.v. diep in pip (geldt voor het bundled- én het online-pad).
+if [ "${MACOS_VERSION_MAJOR}" -lt "${MACOS_MIN_SUPPORTED}" ]; then
   MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
-  MACOS_PAYLOAD_PREFLIGHT_REASON="bundled_payload_missing_or_incomplete"
-  log "Apple Silicon Repair requires a complete bundled payload; online fallback is unsupported"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="macos_version_unsupported"
+  log "STEMwerk runtime on macOS (${MAC_ARCH}) requires macOS ${MACOS_MIN_SUPPORTED} or later (detected major ${MACOS_VERSION_MAJOR}); the PyPI dependency wheels needed for Repair are not published for this macOS version"
+  set_status "deps_failed" "macos_version_unsupported"
+  write_ready_to_go_state "mps" "missing" "missing" "macos_version_unsupported" "missing"
+  write_state
+  exit 1
+fi
+
+if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" = "present" ]; then
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="ok"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="bundled_payload_complete"
+  log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
+  log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+  log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
+  log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"
+elif [ "${MAC_ARCH}" = "arm64" ] && [ -d "${BUNDLED_PAYLOAD_DIR}" ]; then
+  # _bundled aanwezig maar incompleet/corrupt: geen zinvolle offline-route → harde fail
+  # met herstelactie (de vroegere apple_silicon_requires_bundled_payload-semantiek blijft
+  # voor deze corruptie-klasse bestaan; een afwezige payload is dat niet).
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="bundled_payload_incomplete_or_corrupt"
+  log "Bundled payload is present but incomplete or corrupt; reinstall the bundled Apple Silicon installer, or remove ${BUNDLED_PAYLOAD_DIR} to use online Repair"
   log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
   log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
   log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
@@ -1279,11 +1438,11 @@ if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "presen
   write_ready_to_go_state "mps" "missing" "missing" "apple_silicon_requires_bundled_payload" "missing"
   write_state
   exit 1
-fi
-
-if [ "${MAC_ARCH}" = "arm64" ]; then
+elif [ "${MAC_ARCH}" = "arm64" ]; then
+  # 2.3.1.0: geen bundled payload → online Repair met managed wheelhouse-overlay.
   MACOS_PAYLOAD_PREFLIGHT_STATUS="ok"
-  MACOS_PAYLOAD_PREFLIGHT_REASON="bundled_payload_complete"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="online_fallback"
+  log "No bundled payload found; using online Repair (managed wheelhouse overlay: ${MANAGED_WHEELS_DIR:-none}, models via online catalog)"
   log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
   log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
   log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
@@ -1301,11 +1460,14 @@ if [ "${MODE}" = "repair" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
       log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
       log "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"
       log "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false"
+      set_status "ok" ""
+      write_state
+      exit 0
       ;;
     mismatch\|*)
       MACOS_RUNTIME_POLICY_STATUS="mismatch"
       MACOS_RUNTIME_POLICY_REASON="runtime_policy_mismatch_requires_rebuild"
-      log "Existing managed runtime is operational but does not match the bundled 2.3.0.6 dependency policy"
+      log "Existing managed runtime is operational but does not match the bundled 2.3.1.0 dependency policy"
       log "MACOS_RUNTIME_POLICY_STATUS=${MACOS_RUNTIME_POLICY_STATUS}"
       log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
       log "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"
@@ -1315,6 +1477,24 @@ if [ "${MODE}" = "repair" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
       exit 1
       ;;
     *)
+      case "${_runtime_policy_probe}" in
+        broken\|*samplerate:import_error:*"incompatible architecture"*)
+          MACOS_RUNTIME_POLICY_STATUS="arch_mismatch"
+          MACOS_RUNTIME_POLICY_REASON="macos_arch_mismatch"
+          MACOS_ARCH_GUARD_STATUS="mismatch"
+          MACOS_ARCH_GUARD_DETAIL="${_runtime_policy_probe}"
+          log "Existing managed runtime contains a wrong-architecture samplerate binary"
+          log "MACOS_RUNTIME_POLICY_STATUS=${MACOS_RUNTIME_POLICY_STATUS}"
+          log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
+          log "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"
+          log "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false"
+          log "MACOS_ARCH_GUARD_STATUS=${MACOS_ARCH_GUARD_STATUS}"
+          log "MACOS_ARCH_GUARD_DETAIL=${MACOS_ARCH_GUARD_DETAIL}"
+          set_status "deps_failed" "macos_arch_mismatch"
+          write_state
+          exit 1
+          ;;
+      esac
       MACOS_RUNTIME_POLICY_STATUS="broken"
       MACOS_RUNTIME_POLICY_REASON="runtime_broken_requires_rebuild"
       log "Existing managed runtime could not pass the installed dependency policy probe"
@@ -1341,8 +1521,135 @@ else
   log "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false"
 fi
 
+# Diepe preflight (2.3.1.0, D6): resolve het volledige beoogde installatieplan met de gekozen
+# wheelhouse-strategie ZONDER te muteren (pip --dry-run). Bij rood: bestaande venv ongemoeid
+# laten + duidelijke melding. Draait vóór MUTATION_STARTED=true en vóór rm -rf .venv.
+preflight_install_plan() {
+  _pf_py=""
+  for _pf_c in \
+    "${RUNTIME_BASE}/.venv/bin/python" \
+    "${RUNTIME_BASE}/python/bin/python3.12" \
+    "${BUNDLED_PAYLOAD_DIR}/python/bin/python3.12"
+  do
+    [ -x "${_pf_c}" ] && { _pf_py="${_pf_c}"; break; }
+  done
+  if [ -z "${_pf_py}" ]; then
+    log "preflight_install_plan: no python available for dry-run resolve; skipping contract check"
+    MACOS_PAYLOAD_PREFLIGHT_REASON="${MACOS_PAYLOAD_PREFLIGHT_REASON}+dry_run_skipped_no_python"
+    return 0
+  fi
+  _pf_plan="numpy==${PINNED_NUMPY_VERSION}
+torch==${PINNED_TORCH_VERSION}
+torchvision==${PINNED_TORCHVISION_VERSION}
+torchaudio==${PINNED_TORCHAUDIO_VERSION}
+llvmlite==${PINNED_LLVMLITE_VERSION}
+numba==${PINNED_NUMBA_VERSION}
+samplerate==${PINNED_SAMPLERATE_VERSION}
+audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}
+onnxruntime==${PINNED_ONNXRUNTIME_VERSION}"
+  _pf_req="$(mktemp "${TMPDIR:-/tmp}/stemwerk-macos-preflight-req.XXXXXX")" || return 1
+  printf "%s\n" ${_pf_plan} > "${_pf_req}"
+  if [ -n "${BUNDLED_WHEELS_DIR:-}" ] && [ -d "${BUNDLED_WHEELS_DIR}" ]; then
+    log "Preflight: offline contract check of bundled wheelhouse via ${_pf_py} (pip install --dry-run --no-index)"
+    "${_pf_py}" -m pip install --dry-run --no-index --find-links "${BUNDLED_WHEELS_DIR}" \
+      -c "${MACOS_CONSTRAINTS_FILE}" -r "${_pf_req}" >> "${LOG_FILE}" 2>&1
+    _pf_rc=$?
+    if [ "${_pf_rc}" -ne 0 ]; then
+      # Bundled wheelhouse kan het plan niet offline resolven → val terug op het online-pad
+      # (fail pas als óók online faalt; Linux-patroon: managed wheelhouse → payload → online).
+      log "Preflight: bundled wheelhouse cannot resolve the plan offline; retrying with managed wheelhouse overlay (online)"
+      BUNDLED_WHEELS_DIR=""
+      if [ -n "${MANAGED_WHEELS_DIR:-}" ] && [ -d "${MANAGED_WHEELS_DIR}" ]; then
+        "${_pf_py}" -m pip install --dry-run --find-links "${MANAGED_WHEELS_DIR}" \
+          -c "${MACOS_CONSTRAINTS_FILE}" -r "${_pf_req}" >> "${LOG_FILE}" 2>&1
+      else
+        "${_pf_py}" -m pip install --dry-run -c "${MACOS_CONSTRAINTS_FILE}" -r "${_pf_req}" >> "${LOG_FILE}" 2>&1
+      fi
+      _pf_rc=$?
+      if [ "${_pf_rc}" -eq 0 ]; then
+        MACOS_PAYLOAD_PREFLIGHT_REASON="bundled_wheelhouse_incomplete_online_fallback"
+        log "Preflight: continuing online (${MACOS_PAYLOAD_PREFLIGHT_REASON})"
+      fi
+    fi
+  elif [ -n "${MANAGED_WHEELS_DIR:-}" ] && [ -d "${MANAGED_WHEELS_DIR}" ]; then
+    log "Preflight: online contract check with managed wheelhouse overlay via ${_pf_py} (pip install --dry-run)"
+    "${_pf_py}" -m pip install --dry-run --find-links "${MANAGED_WHEELS_DIR}" \
+      -c "${MACOS_CONSTRAINTS_FILE}" -r "${_pf_req}" >> "${LOG_FILE}" 2>&1
+    _pf_rc=$?
+  else
+    log "Preflight: online contract check via ${_pf_py} (pip install --dry-run)"
+    "${_pf_py}" -m pip install --dry-run -c "${MACOS_CONSTRAINTS_FILE}" -r "${_pf_req}" >> "${LOG_FILE}" 2>&1
+    _pf_rc=$?
+  fi
+  rm -f "${_pf_req}" >/dev/null 2>&1 || true
+  return ${_pf_rc}
+}
+
+preflight_managed_python_available() {
+  # If a usable Python is already local, the wheel preflight can use it and no online
+  # managed-Python acquisition is needed before mutation.
+  for _mp_c in \
+    "${RUNTIME_BASE}/.venv/bin/python" \
+    "${RUNTIME_BASE}/python/bin/python3.12" \
+    "${BUNDLED_PAYLOAD_DIR}/python/bin/python3.12"
+  do
+    [ -x "${_mp_c}" ] && return 0
+  done
+  if [ -n "$(bundled_managed_python_dir || true)" ]; then
+    return 0
+  fi
+  if ! managed_python_detect_platform; then
+    log "Preflight: managed Python is not available for this platform"
+    return 1
+  fi
+  if [ "${STEMWERK_OFFLINE:-0}" = "1" ]; then
+    log "Preflight: online fallback requires managed Python, but offline mode has no local Python payload"
+    return 1
+  fi
+  _mp_url="${MANAGED_PYTHON_URL}"
+  [ -n "${_mp_url}" ] || return 1
+  if command -v curl >/dev/null 2>&1; then
+    log "Preflight: checking managed Python download availability"
+    curl -L --fail --silent --show-error --head --max-time 20 "${_mp_url}" >> "${LOG_FILE}" 2>&1
+    return $?
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    log "Preflight: checking managed Python download availability"
+    wget --spider -T 20 "${_mp_url}" >> "${LOG_FILE}" 2>&1
+    return $?
+  fi
+  log "Preflight: no downloader available for managed Python availability check"
+  return 1
+}
+
+if ! preflight_managed_python_available; then
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="online_fallback_failed"
+  log "Online Repair preflight failed before mutation: managed Python is not locally available and could not be reached online"
+  log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
+  log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+  log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"
+  set_status "deps_failed" "online_fallback_failed"
+  write_state
+  exit 1
+fi
+
+if ! preflight_install_plan; then
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="install_plan_unresolvable"
+  log "Preflight could not resolve the installation plan without mutating; leaving the existing runtime untouched"
+  log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
+  log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+  log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"
+  set_status "deps_failed" "install_plan_unresolvable"
+  write_ready_to_go_state "mps" "missing" "missing" "install_plan_unresolvable" "missing"
+  write_state
+  exit 1
+fi
+
 MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
 MACOS_RUNTIME_POLICY_MUTATION_STARTED="true"
+mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs"
 mkdir -p "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 
 if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
@@ -1554,17 +1861,20 @@ else
       set_status "deps_failed" "torch_pin_assert_failed"
     fi
 
-    if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
-      log "Installing ${ONNX_PACKAGE}"
-      if ! install_with_optional_bundled_wheels "${VENV_PY}" "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1; then
-        if [ -n "${ONNX_FALLBACK_PACKAGE}" ] && [ "${ONNX_FALLBACK_PACKAGE}" != "${ONNX_PACKAGE}" ]; then
-          log "WARN: ${ONNX_PACKAGE} install failed; falling back to ${ONNX_FALLBACK_PACKAGE}"
-          printf "WARN: %s install failed; falling back to %s\n" "${ONNX_PACKAGE}" "${ONNX_FALLBACK_PACKAGE}" >&2
-          install_with_optional_bundled_wheels "${VENV_PY}" "${ONNX_FALLBACK_PACKAGE}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "onnxruntime_install_failed"
-        else
-          set_status "deps_failed" "onnxruntime_install_failed"
-        fi
-      fi
+    _onnx_observed="$("${VENV_PY}" -c "import onnxruntime; print(onnxruntime.__version__)" 2>/dev/null || true)"
+    if [ "${_onnx_observed}" != "${PINNED_ONNXRUNTIME_VERSION}" ]; then
+      log "Installing onnxruntime==${PINNED_ONNXRUNTIME_VERSION} (observed: ${_onnx_observed:-missing})"
+      install_with_optional_bundled_wheels "${VENV_PY}" --upgrade \
+        "onnxruntime==${PINNED_ONNXRUNTIME_VERSION}" >> "${LOG_FILE}" 2>&1 || \
+        set_status "deps_failed" "onnxruntime_install_failed"
+    fi
+
+    # D7 arch-guard (2.3.1.0): verifieer ná de laatste pip-install dat geen enkel geinstalleerd
+    # wiel of binaire het verkeerde arch heeft (wiel-tags + file/lipo over .dylib/.so).
+    if ! verify_venv_arch; then
+      set_status "deps_failed" "macos_arch_mismatch"
+      write_state
+      exit 1
     fi
   fi
 fi
@@ -1639,14 +1949,21 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
     FINAL_RUNTIME_VERIFIED="no"
     set_status "deps_failed" "torch_pin_assert_failed"
   fi
-  if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then
-    case "${STATUS_REASON}" in
-      torch_install_failed|torch_pin_repair_failed|torch_pin_assert_failed)
+  if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS}" != "ok" ]; then
+    # This final block just re-verified numba, samplerate, audio-separator,
+    # onnxruntime, stemwerk-core, and the full pinned torch stack from
+    # scratch -- FINAL_RUNTIME_VERIFIED=yes is strictly stronger proof of
+    # current health than any earlier sticky STATUS this run recorded
+    # in the meantime (e.g. a transient onnxruntime-not-installed-yet
+    # assertion before its own remediation step ran). Clearing here keys
+    # on that already-computed truth directly, not on enumerating which
+    # specific STATUS_REASON string happened to be first -- an earlier,
+    # narrower whitelist here left non-torch first-run-only transients
+    # (audio_separator/numba/samplerate ordering, etc.) permanently
+    # stuck despite this same successful re-verification.
+    log "Cleared stale STATUS=${STATUS}/${STATUS_REASON} after final runtime verification succeeded"
     STATUS="ok"
     STATUS_REASON=""
-        log "Cleared stale STATUS from earlier pinned torch failure after final runtime verification success"
-        ;;
-    esac
   fi
 fi
 
