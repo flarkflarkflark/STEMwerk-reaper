@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "workflows": [
+    {
+      "workflow_id": "normal_stems",
+      "label": "Normal Stems",
+      "ordered_stages": [
+        {
+          "order": 1,
+          "stage_id": "separate_normal",
+          "capability_id": "normal_stems_4",
+          "input_kind": "source",
+          "input_artifact_kind": "audio"
+        }
+      ],
+      "deliverable_ids": ["vocals", "drums", "bass", "other"]
+    }
+  ]
+}

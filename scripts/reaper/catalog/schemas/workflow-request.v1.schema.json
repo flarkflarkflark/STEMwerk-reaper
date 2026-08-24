@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.invalid/schemas/workflow-request.v1.schema.json",
+  "title": "WorkflowRequest v1",
+  "type": "object",
+  "required": ["schema_version", "request_id", "workflow_id", "source_plan", "stages", "deliverable_ids", "requested_runtime"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "request_id": {"type": "string"},
+    "workflow_id": {"type": "string"},
+    "source_plan": {"type": "object"},
+    "stages": {"type": "array", "minItems": 1},
+    "deliverable_ids": {"type": "array", "minItems": 1, "uniqueItems": true},
+    "requested_runtime": {
+      "type": "object",
+      "required": ["model_id", "device", "processing_may_download"],
+      "properties": {
+        "model_id": {"type": "string"},
+        "device": {"type": "string"},
+        "processing_may_download": {"const": false}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

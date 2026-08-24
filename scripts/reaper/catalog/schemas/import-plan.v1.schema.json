@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.invalid/schemas/import-plan.v1.schema.json",
+  "title": "ImportPlan v1",
+  "type": "object",
+  "required": ["schema_version", "request_id", "workflow_id", "destination", "grouping", "create_folder", "source_after", "origin_project_policy", "imports"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "request_id": {"type": "string"},
+    "workflow_id": {"type": "string"},
+    "destination": {"enum": ["new_tracks", "in_place_takes"]},
+    "grouping": {"enum": ["per_item", "source_track"]},
+    "create_folder": {"type": "boolean"},
+    "source_after": {"enum": ["keep", "mute_item", "delete_item", "mute_track", "delete_track"]},
+    "origin_project_policy": {"const": "fail_closed"},
+    "imports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["order", "semantic_id", "artifact_id", "name_template"],
+        "properties": {
+          "order": {"type": "integer", "minimum": 1},
+          "semantic_id": {"type": "string"},
+          "artifact_id": {"type": "string"},
+          "name_template": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

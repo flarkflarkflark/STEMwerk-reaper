@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "models": [
+    {
+      "model_id": "htdemucs",
+      "label": "Fast",
+      "capability_id": "normal_stems_4",
+      "output_semantic_ids": ["vocals", "drums", "bass", "other"]
+    },
+    {
+      "model_id": "htdemucs_ft",
+      "label": "Quality",
+      "capability_id": "normal_stems_4",
+      "output_semantic_ids": ["vocals", "drums", "bass", "other"]
+    }
+  ]
+}

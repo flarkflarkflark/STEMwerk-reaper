@@ -1,0 +1,124 @@
+{
+  "fixture_version": "1.0.0",
+  "characterizes_version": "2.3.1.0",
+  "scenario_id": "one_selected_item_normal_stems_in_place_takes",
+  "fixture_kind": "normalized_static_characterization",
+  "legacy_intent": {
+    "selection": "one_selected_item",
+    "workflow": "normal_stems",
+    "model": "htdemucs",
+    "device": "auto"
+  },
+  "legacy_settings": {
+    "create_new_tracks": false,
+    "output_grouping": "per_item",
+    "create_folder": false,
+    "source_after": "keep",
+    "post_process_takes": "none",
+    "parallel_processing_requested": true
+  },
+  "output_behavior": {
+    "semantic_order": ["vocals", "drums", "bass", "other"],
+    "file_names": ["vocals.wav", "drums.wav", "bass.wav", "other.wav"],
+    "destination": "in_place_takes",
+    "take_name_template": "Take {index}/{count}: {source_item} - {stem_label}"
+  },
+  "worker_protocol": {
+    "positional_arguments": ["input_audio", "output_directory"],
+    "named_arguments": ["--model", "--device"],
+    "identity_environment": ["STEMWERK_RUN_ID", "STEMWERK_JOB_ID", "STEMWERK_RUN_DIR_NAME", "STEMWERK_RUN_STARTED_UTC"],
+    "download_environment": "STEMWERK_PROCESSING_MAY_DOWNLOAD=no",
+    "completion_evidence": ["stdout", "stderr", "exit_code.txt", "done.txt"]
+  },
+  "runtime_evidence_fields": {
+    "requested": ["model_id", "device"],
+    "actual": ["model_id", "actual_device", "fallback_applied"],
+    "actual_values_are_environment_dependent": true
+  },
+  "origin_project_policy": "fail_closed",
+  "serialized_project_pointer": false,
+  "manual_reaper_smoke": "NOT TESTED",
+  "contracts": {
+    "workflow_request": {
+      "schema_version": "1.0.0",
+      "request_id": "request_normal_stems_in_place_001",
+      "workflow_id": "normal_stems",
+      "source_plan": {
+        "schema_version": "1.0.0",
+        "source_plan_id": "source_plan_001",
+        "sources": [
+          {
+            "source_id": "source_001",
+            "order": 1,
+            "kind": "selected_item",
+            "project_identity": "origin_project_001",
+            "track_identity": "source_track_001",
+            "item_identity": "source_item_001"
+          }
+        ]
+      },
+      "stages": [
+        {
+          "schema_version": "1.0.0",
+          "stage_id": "separate_normal_001",
+          "order": 1,
+          "capability_id": "normal_stems_4",
+          "model_id": "htdemucs",
+          "input": {"kind": "source", "source_id": "source_001", "artifact_kind": "audio"},
+          "outputs": [
+            {"port_id": "vocals", "semantic_id": "vocals", "kind": "audio"},
+            {"port_id": "drums", "semantic_id": "drums", "kind": "audio"},
+            {"port_id": "bass", "semantic_id": "bass", "kind": "audio"},
+            {"port_id": "other", "semantic_id": "other", "kind": "audio"}
+          ]
+        }
+      ],
+      "deliverable_ids": ["vocals", "drums", "bass", "other"],
+      "requested_runtime": {
+        "model_id": "htdemucs",
+        "device": "auto",
+        "processing_may_download": false
+      }
+    },
+    "workflow_result": {
+      "schema_version": "1.0.0",
+      "request_id": "request_normal_stems_in_place_001",
+      "workflow_id": "normal_stems",
+      "state": "succeeded",
+      "actual_runtime": {
+        "model_id": "htdemucs",
+        "requested_device": "auto",
+        "actual_device": "environment_dependent",
+        "fallback_applied": false
+      },
+      "artifacts": [
+        {"schema_version": "1.0.0", "artifact_id": "artifact_vocals_001", "kind": "audio", "semantic_id": "vocals", "relative_path": "outputs/source_001/vocals.wav", "producer": {"kind": "stage_output", "stage_id": "separate_normal_001", "port_id": "vocals"}},
+        {"schema_version": "1.0.0", "artifact_id": "artifact_drums_001", "kind": "audio", "semantic_id": "drums", "relative_path": "outputs/source_001/drums.wav", "producer": {"kind": "stage_output", "stage_id": "separate_normal_001", "port_id": "drums"}},
+        {"schema_version": "1.0.0", "artifact_id": "artifact_bass_001", "kind": "audio", "semantic_id": "bass", "relative_path": "outputs/source_001/bass.wav", "producer": {"kind": "stage_output", "stage_id": "separate_normal_001", "port_id": "bass"}},
+        {"schema_version": "1.0.0", "artifact_id": "artifact_other_001", "kind": "audio", "semantic_id": "other", "relative_path": "outputs/source_001/other.wav", "producer": {"kind": "stage_output", "stage_id": "separate_normal_001", "port_id": "other"}}
+      ],
+      "deliverables": [
+        {"semantic_id": "vocals", "artifact_id": "artifact_vocals_001"},
+        {"semantic_id": "drums", "artifact_id": "artifact_drums_001"},
+        {"semantic_id": "bass", "artifact_id": "artifact_bass_001"},
+        {"semantic_id": "other", "artifact_id": "artifact_other_001"}
+      ]
+    },
+    "import_plan": {
+      "schema_version": "1.0.0",
+      "request_id": "request_normal_stems_in_place_001",
+      "workflow_id": "normal_stems",
+      "destination": "in_place_takes",
+      "grouping": "per_item",
+      "create_folder": false,
+      "source_after": "keep",
+      "origin_project_policy": "fail_closed",
+      "imports": [
+        {"order": 1, "semantic_id": "vocals", "artifact_id": "artifact_vocals_001", "name_template": "Take 1/4: {source_item} - Vocals"},
+        {"order": 2, "semantic_id": "drums", "artifact_id": "artifact_drums_001", "name_template": "Take 2/4: {source_item} - Drums"},
+        {"order": 3, "semantic_id": "bass", "artifact_id": "artifact_bass_001", "name_template": "Take 3/4: {source_item} - Bass"},
+        {"order": 4, "semantic_id": "other", "artifact_id": "artifact_other_001", "name_template": "Take 4/4: {source_item} - Other"}
+      ]
+    }
+  }
+}
