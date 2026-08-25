@@ -21,7 +21,7 @@
     "semantic_order": ["vocals", "drums", "bass", "other"],
     "file_names": ["vocals.wav", "drums.wav", "bass.wav", "other.wav"],
     "destination": "in_place_takes",
-    "take_name_template": "Take {index}/{count}: {source_item} - {stem_label}"
+    "take_name_template": "Take {index}/{count}: Item - {stem_label}"
   },
   "worker_protocol": {
     "positional_arguments": ["input_audio", "output_directory"],
@@ -114,10 +114,10 @@
       "source_after": "keep",
       "origin_project_policy": "fail_closed",
       "imports": [
-        {"order": 1, "semantic_id": "vocals", "artifact_id": "artifact_vocals_001", "name_template": "Take 1/4: {source_item} - Vocals"},
-        {"order": 2, "semantic_id": "drums", "artifact_id": "artifact_drums_001", "name_template": "Take 2/4: {source_item} - Drums"},
-        {"order": 3, "semantic_id": "bass", "artifact_id": "artifact_bass_001", "name_template": "Take 3/4: {source_item} - Bass"},
-        {"order": 4, "semantic_id": "other", "artifact_id": "artifact_other_001", "name_template": "Take 4/4: {source_item} - Other"}
+        {"order": 1, "semantic_id": "vocals", "artifact_id": "artifact_vocals_001", "name_template": "Take 1/4: Item - Vocals"},
+        {"order": 2, "semantic_id": "drums", "artifact_id": "artifact_drums_001", "name_template": "Take 2/4: Item - Drums"},
+        {"order": 3, "semantic_id": "bass", "artifact_id": "artifact_bass_001", "name_template": "Take 3/4: Item - Bass"},
+        {"order": 4, "semantic_id": "other", "artifact_id": "artifact_other_001", "name_template": "Take 4/4: Item - Other"}
       ]
     }
   }
