@@ -1,3 +1,16 @@
+# This file has always been consistently CRLF itself; declare it explicitly
+# (see the fetch_runtime_assets.ps1 rule below for why).
+.gitattributes text eol=crlf
+
 # Ensure bash scripts run on Linux/macOS runners
 installer/**/*.sh text eol=lf
+installer/linux/stemwerk-integrate-reaper text eol=lf
+installer/linux/arch/*.install text eol=lf
 .github/workflows/*.yml text eol=lf
+
+# This file has always been consistently CRLF; declare it explicitly so
+# git diff --check doesn't flag its native \r as trailing whitespace. Not
+# applied repo-wide to *.ps1 since other PowerShell files here have mixed
+# CRLF/LF endings and forcing eol=crlf on those would cause line-ending
+# churn on next checkout.
+installer/windows/fetch_runtime_assets.ps1 text eol=crlf

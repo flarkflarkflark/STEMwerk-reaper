@@ -84,7 +84,7 @@ prepare_wheelhouse() {
 	STEMWERK_WHEELHOUSE_SUBDIR="$wheel_subdir" \
 	STEMWERK_INCLUDE_CUDA_WHEELS="$include_cuda" \
 	STEMWERK_INCLUDE_DIRECTML_WHEELS="$include_directml" \
-	"$ROOT_DIR/fetch_runtime_assets.sh"
+	bash "$ROOT_DIR/fetch_runtime_assets.sh"
 }
 
 build_flavor() {

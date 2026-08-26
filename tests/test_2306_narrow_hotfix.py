@@ -239,11 +239,7 @@ def test_healthy_repair_policy_mismatch_preserves_existing_runtime(tmp_path):
     shutil.copy2(MACOS_BOOTSTRAP, bootstrap)
     _complete_payload_fixture(script_dir)
 
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    uname = fake_bin / "uname"
-    uname.write_text("#!/bin/sh\nprintf 'arm64\\n'\n", encoding="utf-8")
-    uname.chmod(0o755)
+    fake_bin = _arm64_fake_bin(tmp_path)
 
     runtime = tmp_path / "runtime"
     python = runtime / ".venv/bin/python"
@@ -395,7 +391,16 @@ def test_setup_does_not_normalize_runtime_policy_mismatch_back_to_ok():
     assert 'if authoritativeRuntimeVerified and not runtimePolicyBlocked then' in script
     assert 'local authoritativeRuntimeVerified = authoritativeBootstrapVerified' in script
     assert 'and not windowsTorchaudioVerificationFailed' in script
-    assert 'and readyHealthy and bootstrapComplete and not runtimePolicyRequiresRebuild(state)' in script
+    # The 2.3.1.0 "keep current failures authoritative" follow-up removed
+    # buildWindowsSetupOverview's separate staleRunning/staleGuardFailed/
+    # staleFailedState cached-state-to-ok normalization entirely (see
+    # tests/support/run_setup_final_rows_headless.lua's
+    # windows-deps-failed-cannot-be-overridden-by-old-success-log and
+    # windows-running-cannot-be-finalized-by-old-success-log fixtures for the
+    # real behavioral coverage) -- a current runtime-policy mismatch (or any
+    # other current failure) can no longer be silently normalized back to ok
+    # by that path, by construction, since the path no longer exists.
+    assert 'local staleFailedState' not in script
 
 
 def _managed_cache(tmp_path, alias_bytes=None):

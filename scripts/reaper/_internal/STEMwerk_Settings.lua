@@ -120,8 +120,26 @@ function SETTINGS_MOD.load()
             C.SETTINGS.workflowSource == C.DKS_WORKFLOW.SOURCE_DIRECT
             or C.DKS_WORKFLOW.isDirectPreset(C.SETTINGS.workflowSource)
         )
-    if C.activateWorkflowStemSet then
+    if SW_LOG and SW_LOG.logExecResult then
+        SW_LOG.logExecResult("dks_settings_load workflowMode=" .. tostring(C.SETTINGS.workflowMode)
+            .. " workflowSource=" .. tostring(C.SETTINGS.workflowSource)
+            .. " directWorkflow=" .. tostring(directWorkflow and true or false), nil, "")
+    end
+    -- Never re-derive the workflow stem set while a separation run is active:
+    -- a mid-run settings reload must not clobber the stem set that the active
+    -- workflow (notably dks_extract Kit Split) selected at run start, otherwise
+    -- the import handoff loses the validated output paths. Stem-set activation
+    -- outside a run is owned by restoreDialogWorkflowSelection().
+    local runContextActive = (type(isProcessingActive) == "boolean" and isProcessingActive)
+        or (type(progressState) == "table" and (
+            progressState.running == true
+            or tostring(progressState.workflowMode or "") ~= ""
+            or tostring(progressState.workflowSource or "") ~= ""
+        ))
+    if C.activateWorkflowStemSet and not runContextActive then
         C.activateWorkflowStemSet(directWorkflow and true or false)
+    elseif SW_LOG and SW_LOG.logExecResult then
+        SW_LOG.logExecResult("dks_settings_load_stemset_skipped reason=run_context_active", nil, "")
     end
 
     local model = C.reaper.GetExtState(C.EXT_SECTION, "model")

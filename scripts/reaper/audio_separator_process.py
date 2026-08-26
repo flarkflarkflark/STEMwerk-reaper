@@ -249,6 +249,43 @@ def _resolve_normal_workflow_backend(selected_device: Optional[str]) -> str:
     return "unknown"
 
 
+# Ordered so the primary runtime/backend classification is the first thing a
+# reader (and the support-bundle parser) sees for a normal-workflow run.
+_NORMAL_RUNTIME_EVIDENCE_KEYS = (
+    "runtime_selected",
+    "backend_runtime",
+    "selected_device",
+    "selected_device_name",
+    "directml_init_mode",
+    "accelerator_status_supersedes_library_log",
+    "separator_torch_device",
+    "separator_onnx_provider",
+)
+
+
+def _emit_normal_runtime_evidence(separator: object) -> None:
+    """Emit authoritative final runtime evidence for a normal-workflow run.
+
+    Sourced from the separator's own post-configuration state, so it reflects
+    the device STEMwerk actually bound rather than any intermediate
+    third-party initialisation message. Emits nothing when the runtime could
+    not be proven, so absent evidence is never turned into a false claim.
+    """
+    evidence = getattr(separator, "runtime_evidence", None)
+    if not isinstance(evidence, dict) or not evidence:
+        print("normal_workflow_runtime_evidence=not_proven", file=sys.stderr)
+        return
+    for key in _NORMAL_RUNTIME_EVIDENCE_KEYS:
+        value = str(evidence.get(key, "") or "").strip()
+        if value:
+            print(f"{key}={value}", file=sys.stderr)
+    # device_name is the key the support bundle already consumes for the
+    # friendly adapter label.
+    adapter = str(evidence.get("selected_device_name", "") or "").strip()
+    if adapter and adapter.lower() != "unknown":
+        print(f"device_name={adapter}", file=sys.stderr)
+
+
 def _read_benchmark_dks_stage2_cap_request() -> tuple[Optional[int], str]:
     raw = str(os.environ.get("STEMWERK_BENCH_DKS_STAGE2_CAP") or "").strip()
     if raw == "":
@@ -1765,6 +1802,35 @@ def _setup_reaper_io(output_dir: Optional[str]):
     # Writing done.txt here can race with exit_code emission and cause
     # diagnostics persistence to snapshot before exit_code.txt exists.
     return None
+
+
+def _write_worker_context(output_dir: Optional[str]) -> None:
+    """Persist the run/job identity this process was launched with, so
+    support-bundle diagnostics can read exact structured identity instead of
+    inferring it from directory names/timestamps. Purely additive evidence:
+    never read back by this process, never affects processing/output.
+    """
+    if not output_dir:
+        return
+    run_id = os.environ.get("STEMWERK_RUN_ID", "")
+    job_id = os.environ.get("STEMWERK_JOB_ID", "")
+    if not run_id and not job_id:
+        return
+    payload = {
+        "schema": 1,
+        "run_id": run_id,
+        "job_id": job_id,
+        "run_dir_name": os.environ.get("STEMWERK_RUN_DIR_NAME", ""),
+        "started_utc": os.environ.get("STEMWERK_RUN_STARTED_UTC", ""),
+    }
+    try:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "worker_context.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    except Exception:
+        pass
 
 
 def _read_simple_env_file(path: Path) -> Dict[str, str]:
@@ -4126,6 +4192,7 @@ def main():
         print(f"STEMWERK_DIAG runtime_base_prefix={getattr(sys, 'base_prefix', '')}", file=sys.stderr)
 
     write_done = _setup_reaper_io(args.output_dir if args.output_dir else None)
+    _write_worker_context(args.output_dir if args.output_dir else None)
     emit_phase("python_start")
     ffmpeg_path, ffmpeg_wrapper, ffmpeg_path_prefix = _configure_ffmpeg_runtime()
     model_cache_dir = _configure_model_cache_runtime()
@@ -4598,7 +4665,12 @@ def main():
 
         with _working_directory(output_root):
             emit_phase("separate_start")
-            result = sep.separate(args.input, str(output_root), stems=stems or None)
+            try:
+                result = sep.separate(args.input, str(output_root), stems=stems or None)
+            finally:
+                # Final runtime truth is known once the separator has been
+                # configured, so emit it even when separation itself fails.
+                _emit_normal_runtime_evidence(sep)
             emit_phase("separate_end")
 
         # audio-separator writes model outputs inside sep.separate(); this phase

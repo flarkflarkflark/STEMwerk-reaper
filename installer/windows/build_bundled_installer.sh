@@ -11,7 +11,7 @@ OUT_EXE="$ROOT_DIR/dist/STEMwerk-Setup-$VERSION_VALUE-bundled.exe"
 MAX_BYTES=$((500 * 1024 * 1024))
 
 STEMWERK_SKIP_WHEELHOUSE=1 \
-"$ROOT_DIR/fetch_runtime_assets.sh"
+bash "$ROOT_DIR/fetch_runtime_assets.sh"
 
 export STEMWERK_BUNDLE_RUNTIME=1
 export STEMWERK_OUTPUT_SUFFIX="-bundled"

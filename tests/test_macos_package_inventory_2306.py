@@ -43,6 +43,40 @@ def test_required_target_neutral_and_macos_files_are_allowlisted():
     assert {"vendor/stemwerk-core/src/stemwerk_core/models.py", "i18n/languages.lua"} <= destinations
 
 
+def test_manifest_satisfies_production_payload_contract():
+    from tools import release_gate
+
+    contract = release_gate.parse_production_payload_contract(release_gate.PRODUCTION_PAYLOAD_CONTRACT)
+    required = release_gate.required_files_for_platform(contract, "macos")
+
+    destinations = manifest_destinations()
+    missing = sorted(
+        req[len("scripts/reaper/"):]
+        for req in required
+        if req[len("scripts/reaper/"):] not in destinations
+    )
+    assert not missing, f"macOS payload manifest missing production payload contract entries: {missing}"
+
+
+def test_manifest_contains_all_statically_detected_internal_dependencies():
+    from tools import release_gate
+
+    deps: set[str] = set()
+    for lua_file in release_gate.iter_lua_files(ROOT):
+        text = release_gate.read_text(lua_file)
+        found, _ = release_gate.extract_internal_deps(ROOT, lua_file, text)
+        deps.update(found)
+    deps.update(release_gate.collect_dynamic_production_dependencies(ROOT))
+
+    destinations = manifest_destinations()
+    missing = sorted(
+        dep[len("scripts/reaper/"):]
+        for dep in deps
+        if dep[len("scripts/reaper/"):] not in destinations
+    )
+    assert not missing, f"macOS payload manifest missing statically detected or declared dynamic-dispatch runtime deps: {missing}"
+
+
 def test_manifest_destinations_are_unique():
     destinations = [
         line.split("\t", 1)[1]
@@ -69,7 +103,8 @@ def test_windows_launcher_injection_is_rejected(tmp_path):
 def test_appledouble_injection_is_rejected(tmp_path):
     (tmp_path / "._payload").write_bytes(b"bad")
     records, counts = load_auditor().inventory(tmp_path)
-    assert records[0]["classification"] == "unknown"
+    appledouble = next(record for record in records if record["path"] == "._payload")
+    assert appledouble["classification"] == "unknown"
     assert counts["appledouble"] == 1
 
 

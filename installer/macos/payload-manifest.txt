@@ -15,6 +15,7 @@ scripts/reaper/STEMwerk_Explode_Takes.lua	STEMwerk_Explode_Takes.lua
 scripts/reaper/STEMwerk_Karaoke.lua	STEMwerk_Karaoke.lua
 scripts/reaper/STEMwerk_REAPER_Native.lua	STEMwerk_REAPER_Native.lua
 scripts/reaper/STEMwerk_Save_Support_Bundle.lua	STEMwerk_Save_Support_Bundle.lua
+scripts/reaper/STEMwerk_Set_FFmpegPath.lua	STEMwerk_Set_FFmpegPath.lua
 scripts/reaper/STEMwerk_Setup_Toolbar.lua	STEMwerk_Setup_Toolbar.lua
 scripts/reaper/STEMwerk_Vocals_Only.lua	STEMwerk_Vocals_Only.lua
 scripts/reaper/audio_separator_process.py	audio_separator_process.py
@@ -28,7 +29,9 @@ scripts/reaper/i18n/stemwerk_language_wrapper.lua	i18n/stemwerk_language_wrapper
 installer/assets/stemwerk.svg	stemwerk.svg
 README.md	README.md
 LICENSE	LICENSE
+THIRD_PARTY_NOTICES.md	THIRD_PARTY_NOTICES.md
 scripts/reaper/_internal/STEMwerk_Devices.lua	_internal/STEMwerk_Devices.lua
+scripts/reaper/_internal/STEMwerk_DKS_Import.lua	_internal/STEMwerk_DKS_Import.lua
 scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua	_internal/STEMwerk_DrumKit_Workflow.lua
 scripts/reaper/_internal/STEMwerk_ExtState.lua	_internal/STEMwerk_ExtState.lua
 scripts/reaper/_internal/STEMwerk_Glue_Helpers.lua	_internal/STEMwerk_Glue_Helpers.lua
@@ -40,6 +43,7 @@ scripts/reaper/_internal/STEMwerk_Managed_Python.sh	_internal/STEMwerk_Managed_P
 scripts/reaper/_internal/STEMwerk_Messages.lua	_internal/STEMwerk_Messages.lua
 scripts/reaper/_internal/STEMwerk_Path_Helper.lua	_internal/STEMwerk_Path_Helper.lua
 scripts/reaper/_internal/STEMwerk_Platform.lua	_internal/STEMwerk_Platform.lua
+scripts/reaper/_internal/STEMwerk_Project_Context.lua	_internal/STEMwerk_Project_Context.lua
 scripts/reaper/_internal/STEMwerk_Progress_Render.lua	_internal/STEMwerk_Progress_Render.lua
 scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua	_internal/STEMwerk_Runtime_Setup.lua
 scripts/reaper/_internal/STEMwerk_Settings.lua	_internal/STEMwerk_Settings.lua
@@ -132,3 +136,9 @@ scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/devices.py	vendor/stemwerk
 scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/models.py	vendor/stemwerk-core/src/stemwerk_core/models.py
 scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/progress.py	vendor/stemwerk-core/src/stemwerk_core/progress.py
 scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/separator.py	vendor/stemwerk-core/src/stemwerk_core/separator.py
+scripts/reaper/vendor/wheels/darwin-arm64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_arm64.whl	vendor/wheels/darwin-arm64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_arm64.whl
+scripts/reaper/vendor/wheels/darwin-arm64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_arm64.whl	vendor/wheels/darwin-arm64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_arm64.whl
+scripts/reaper/vendor/wheels/darwin-arm64-cp312/stemwerk_core-0.1.1-py3-none-any.whl	vendor/wheels/darwin-arm64-cp312/stemwerk_core-0.1.1-py3-none-any.whl
+scripts/reaper/vendor/wheels/darwin-x86_64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_x86_64.whl	vendor/wheels/darwin-x86_64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_x86_64.whl
+scripts/reaper/vendor/wheels/darwin-x86_64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_x86_64.whl	vendor/wheels/darwin-x86_64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_x86_64.whl
+scripts/reaper/vendor/wheels/darwin-x86_64-cp312/stemwerk_core-0.1.1-py3-none-any.whl	vendor/wheels/darwin-x86_64-cp312/stemwerk_core-0.1.1-py3-none-any.whl

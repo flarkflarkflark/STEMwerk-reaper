@@ -51,6 +51,9 @@ if [[ -f "$TARGET/_bundled/macos/apple-silicon/manifest.json" ]] && \
   echo "  https://github.com/flarkflarkflark/STEMwerk-reaper/releases/latest"
   echo "or remove the bundled payload first if you want to switch to the online variant:"
   echo "  rm -rf \"$TARGET/_bundled\""
+  if [[ "$TEST_MODE" != "yes" ]] && command -v osascript >/dev/null 2>&1; then
+    sudo -u "$CONSOLE_USER" osascript -e 'display dialog "An existing full (bundled) STEMwerk installation was found. This online installer would remove its runtime payload, so the install has been stopped.\n\nInstall the full macOS Apple Silicon installer instead, or remove the existing _bundled folder first if you want to switch to the online variant." with title "STEMwerk Installer" buttons {"OK"}' >/dev/null 2>&1 || true
+  fi
   exit 1
 fi
 

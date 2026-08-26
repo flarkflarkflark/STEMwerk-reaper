@@ -1,0 +1,192 @@
+# STEMwerk 2.3.1.0 authoritative production payload contract.
+#
+# The set of repo-relative files required (or explicitly optional) for a
+# correctly installed production copy of STEMwerk, independent of any
+# single distribution route (ReaPack/index.xml, deb, rpm, Arch, macOS,
+# Windows).
+#
+# Format: one entry per line, <requirement><TAB><platform><TAB><repo-relative-path>.
+# requirement is one of: required, optional.
+# platform is one of: common, linux, macos, windows.
+# "common" entries apply on every platform; platform-tagged entries apply
+# only to that platform's native install AND to ReaPack (which serves all
+# platforms from one shared catalog, so it needs the union of everything).
+#
+# required: absence makes supported production functionality/Setup/Repair
+#   incorrect on an applicable platform. Hard release-gate failure.
+# optional: may be packaged and is a real, advertised, supported product
+#   surface, but its absence must not fail installation/runtime
+#   completeness (e.g. the single-size toolbar icons: not read by the
+#   automated toolbar-install action, but explicitly offered in that
+#   action's own UI text for manual/custom use). Reported, never a
+#   release-gate failure on its own.
+# Anything not listed here at all is a packaged extra (not tracked) --
+# used for things like README/LICENSE or dev/benchmark scripts that ship
+# in some native routes today but are neither required nor an advertised
+# optional feature.
+#
+# Path syntax is fail-closed: no absolute paths, no backslashes, no empty
+# segments, no "."/".." traversal, must already be in normalized form.
+# The same path may appear under two different specific platforms (e.g.
+# both macos and linux) to express a shared-but-not-universal requirement,
+# but not under both "common" and any specific platform for the same path
+# (redundant/contradictory), and not with two different requirement
+# classes for the same path (ambiguous). See
+# tools/release_gate.py:parse_production_payload_contract() for the exact
+# validation rules.
+#
+# This is release-engineering source-of-truth data, not generated from
+# and not copied from any single existing distribution manifest. It was
+# built from independent evidence: released entrypoints, Setup/Repair
+# code paths, actual runtime dofile/import/subprocess call sites, and
+# existing native build tooling -- see
+# tools/release_gate.py:check_production_payload_contract() for how
+# it is consumed, and the 2.3.1.0 release-prep evidence archive for
+# the full audit trail (including a corrective pass after independent
+# review found two under-included pyproject.toml build-metadata files,
+# one platform misclassification, two unused/stale wheels, 40
+# over-included files that are actually optional, and two dead _internal
+# Lua files that had been blanket-assumed required).
+#
+# Source-code reachability scanning (tools/release_gate.py's static
+# dofile/loadfile scan and its small dynamic-dispatch declaration)
+# remains useful as defense-in-depth and a drift signal, but this file
+# is the normative list every distribution route is checked against.
+#
+# Deliberately excluded (not production-required, not optional, no
+# contract entry at all): tests, benchmarks, dev-only debug-toggle/
+# manual-fallback scripts, CI/i18n-validation tooling, release/build
+# scripts themselves, docs not read at runtime, and packaging metadata
+# not imported by any runtime code (unless, like the two pyproject.toml
+# files above, it is itself required as build/install-time input by a
+# bootstrap script).
+#
+# Update this file, with evidence, whenever a new file becomes part of
+# a supported release flow, or a classification needs correcting.
+
+required	common	scripts/reaper/STEMwerk-SETUP.lua
+required	common	scripts/reaper/STEMwerk.lua
+required	common	scripts/reaper/STEMwerk_AI_Separate.lua
+required	common	scripts/reaper/STEMwerk_All_Stems.lua
+required	common	scripts/reaper/STEMwerk_Bass_Only.lua
+required	common	scripts/reaper/STEMwerk_Drum_Kit_Split.lua
+required	common	scripts/reaper/STEMwerk_Drums_Only.lua
+required	common	scripts/reaper/STEMwerk_Explode_Takes.lua
+required	common	scripts/reaper/STEMwerk_Karaoke.lua
+required	common	scripts/reaper/STEMwerk_Save_Support_Bundle.lua
+required	common	scripts/reaper/STEMwerk_Set_FFmpegPath.lua
+required	common	scripts/reaper/STEMwerk_Setup_Toolbar.lua
+required	common	scripts/reaper/STEMwerk_Vocals_Only.lua
+required	common	scripts/reaper/_internal/STEMwerk_DKS_Import.lua
+required	common	scripts/reaper/_internal/STEMwerk_Devices.lua
+required	common	scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua
+required	common	scripts/reaper/_internal/STEMwerk_ExtState.lua
+required	common	scripts/reaper/_internal/STEMwerk_Glue_Helpers.lua
+required	common	scripts/reaper/_internal/STEMwerk_Helpers.lua
+required	common	scripts/reaper/_internal/STEMwerk_I18N.lua
+required	common	scripts/reaper/_internal/STEMwerk_Log.lua
+required	common	scripts/reaper/_internal/STEMwerk_Messages.lua
+required	common	scripts/reaper/_internal/STEMwerk_Path_Helper.lua
+required	common	scripts/reaper/_internal/STEMwerk_Progress_Render.lua
+required	common	scripts/reaper/_internal/STEMwerk_Project_Context.lua
+required	common	scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua
+required	common	scripts/reaper/_internal/STEMwerk_Settings.lua
+required	common	scripts/reaper/_internal/STEMwerk_Setup_Internal.lua
+required	common	scripts/reaper/_internal/STEMwerk_System.lua
+required	common	scripts/reaper/_internal/STEMwerk_Timing.lua
+required	common	scripts/reaper/_internal/STEMwerk_UI.lua
+required	common	scripts/reaper/_internal/STEMwerk_UI_Backgrounds.lua
+required	common	scripts/reaper/_internal/STEMwerk_UI_Controls.lua
+required	common	scripts/reaper/_internal/STEMwerk_UI_Draw.lua
+required	common	scripts/reaper/_internal/STEMwerk_UI_HelpLayout.lua
+required	common	scripts/reaper/_internal/STEMwerk_UI_PathInput.lua
+required	common	scripts/reaper/_internal/STEMwerk_UI_Tokens.lua
+required	common	scripts/reaper/_internal/STEMwerk_UI_Window.lua
+required	common	scripts/reaper/_internal/STEMwerk_Window.lua
+required	common	scripts/reaper/_internal/STEMwerk_Workflow.lua
+required	common	scripts/reaper/_internal/stemwerk_drumsep_process.py
+required	common	scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_all_stems_180x60.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_bass_only_180x60.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_drums_only_180x60.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_explode_takes_180x60.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_karaoke_180x60.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_main_180x60.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_setup_180x60.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_vocals_only_180x60.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_all_stems_90x30.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_bass_only_90x30.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_drums_only_90x30.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_explode_takes_90x30.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_karaoke_90x30.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_main_90x30.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_setup_90x30.png
+required	common	scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_vocals_only_90x30.png
+required	common	scripts/reaper/audio_separator_process.py
+required	common	scripts/reaper/i18n/languages.lua
+required	common	scripts/reaper/i18n/stemwerk_language_wrapper.lua
+required	common	scripts/reaper/vendor/julius/src/julius.py
+required	common	scripts/reaper/vendor/stemwerk-core/pyproject.toml
+required	common	scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/__init__.py
+required	common	scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/devices.py
+required	common	scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/models.py
+required	common	scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/progress.py
+required	common	scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/separator.py
+required	linux	scripts/reaper/STEMwerk_Bootstrap_Linux.sh
+required	linux	scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh
+required	linux	scripts/reaper/_internal/STEMwerk_Linux_Setup_Guide.txt
+required	linux	scripts/reaper/_internal/STEMwerk_Managed_Python.sh
+required	linux	scripts/reaper/vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl
+required	macos	scripts/reaper/STEMwerk_Bootstrap_macOS.sh
+required	macos	scripts/reaper/_internal/STEMwerk_Managed_Python.sh
+required	macos	scripts/reaper/_internal/stemwerk_samplerate_guard.py
+required	macos	scripts/reaper/constraints/macos-intel.txt
+required	macos	scripts/reaper/constraints/macos.txt
+required	macos	scripts/reaper/vendor/wheels/darwin-arm64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_arm64.whl
+required	macos	scripts/reaper/vendor/wheels/darwin-arm64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_arm64.whl
+required	macos	scripts/reaper/vendor/wheels/darwin-x86_64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_x86_64.whl
+required	macos	scripts/reaper/vendor/wheels/darwin-x86_64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_x86_64.whl
+required	windows	scripts/reaper/STEMwerk_Bootstrap_Windows.ps1
+required	windows	scripts/reaper/constraints/base.txt
+required	windows	scripts/reaper/constraints/cuda.txt
+required	windows	scripts/reaper/constraints/directml.txt
+required	windows	scripts/reaper/vendor/julius/pyproject.toml
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_24.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_30.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_36.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_48.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_64.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_bass_only_24.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_bass_only_30.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_bass_only_36.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_bass_only_48.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_bass_only_64.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_drums_only_24.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_drums_only_30.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_drums_only_36.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_drums_only_48.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_drums_only_64.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_explode_takes_24.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_explode_takes_30.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_explode_takes_36.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_explode_takes_48.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_explode_takes_64.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_karaoke_24.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_karaoke_30.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_karaoke_36.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_karaoke_48.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_karaoke_64.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_main_24.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_main_30.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_main_36.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_main_48.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_main_64.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_setup_24.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_setup_30.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_setup_36.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_setup_48.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_setup_64.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_24.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_30.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_36.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_48.png
+optional	common	scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_64.png

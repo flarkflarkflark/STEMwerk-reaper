@@ -17,6 +17,7 @@ Source: "..\..\scripts\reaper\STEMwerk_Explode_Takes.lua"; DestDir: "{app}"; Fla
 Source: "..\..\scripts\reaper\STEMwerk_Karaoke.lua"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\STEMwerk_REAPER_Native.lua"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\STEMwerk_Save_Support_Bundle.lua"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\STEMwerk_Set_FFmpegPath.lua"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\STEMwerk_Setup_Toolbar.lua"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\STEMwerk_Vocals_Only.lua"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -26,6 +27,7 @@ Source: "..\..\scripts\reaper\audio_separator_process.py"; DestDir: "{app}"; Fla
 
 ; Shared REAPER internals used on Windows.
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Devices.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\_internal\STEMwerk_DKS_Import.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_DrumKit_Workflow.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_ExtState.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Glue_Helpers.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
@@ -36,6 +38,7 @@ Source: "..\..\scripts\reaper\_internal\STEMwerk_Managed_Python.lua"; DestDir: "
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Messages.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Path_Helper.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Platform.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\_internal\STEMwerk_Project_Context.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Progress_Render.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Runtime_Setup.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Settings.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
@@ -79,3 +82,62 @@ Source: "..\..\i18n\__init__.py"; DestDir: "{app}\i18n"; Flags: ignoreversion
 
 ; Shared toolbar resource descriptor used by setup.
 Source: "..\..\scripts\reaper\assets\toolbar_icons\README.txt"; DestDir: "{app}\assets\toolbar_icons"; Flags: ignoreversion
+
+; Toolbar icons: read as source1x/source2x by STEMwerk_Setup_Toolbar.lua
+; (the "Preferred helper" flow this installer's own help text points to).
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_all_stems_24.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_all_stems_30.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_all_stems_36.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_all_stems_48.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_all_stems_64.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_bass_only_24.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_bass_only_30.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_bass_only_36.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_bass_only_48.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_bass_only_64.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_drums_only_24.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_drums_only_30.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_drums_only_36.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_drums_only_48.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_drums_only_64.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_explode_takes_24.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_explode_takes_30.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_explode_takes_36.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_explode_takes_48.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_explode_takes_64.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_karaoke_24.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_karaoke_30.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_karaoke_36.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_karaoke_48.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_karaoke_64.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_main_24.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_main_30.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_main_36.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_main_48.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_main_64.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_setup_24.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_setup_30.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_setup_36.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_setup_48.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_setup_64.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_vocals_only_24.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_vocals_only_30.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_vocals_only_36.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_vocals_only_48.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\single\stemwerk_vocals_only_64.png"; DestDir: "{app}\assets\toolbar_icons\single"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_90x30\stemwerk_all_stems_90x30.png"; DestDir: "{app}\assets\toolbar_icons\strips_90x30"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_90x30\stemwerk_bass_only_90x30.png"; DestDir: "{app}\assets\toolbar_icons\strips_90x30"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_90x30\stemwerk_drums_only_90x30.png"; DestDir: "{app}\assets\toolbar_icons\strips_90x30"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_90x30\stemwerk_explode_takes_90x30.png"; DestDir: "{app}\assets\toolbar_icons\strips_90x30"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_90x30\stemwerk_karaoke_90x30.png"; DestDir: "{app}\assets\toolbar_icons\strips_90x30"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_90x30\stemwerk_main_90x30.png"; DestDir: "{app}\assets\toolbar_icons\strips_90x30"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_90x30\stemwerk_setup_90x30.png"; DestDir: "{app}\assets\toolbar_icons\strips_90x30"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_90x30\stemwerk_vocals_only_90x30.png"; DestDir: "{app}\assets\toolbar_icons\strips_90x30"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_180x60\stemwerk_all_stems_180x60.png"; DestDir: "{app}\assets\toolbar_icons\strips_180x60"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_180x60\stemwerk_bass_only_180x60.png"; DestDir: "{app}\assets\toolbar_icons\strips_180x60"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_180x60\stemwerk_drums_only_180x60.png"; DestDir: "{app}\assets\toolbar_icons\strips_180x60"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_180x60\stemwerk_explode_takes_180x60.png"; DestDir: "{app}\assets\toolbar_icons\strips_180x60"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_180x60\stemwerk_karaoke_180x60.png"; DestDir: "{app}\assets\toolbar_icons\strips_180x60"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_180x60\stemwerk_main_180x60.png"; DestDir: "{app}\assets\toolbar_icons\strips_180x60"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_180x60\stemwerk_setup_180x60.png"; DestDir: "{app}\assets\toolbar_icons\strips_180x60"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\assets\toolbar_icons\strips_180x60\stemwerk_vocals_only_180x60.png"; DestDir: "{app}\assets\toolbar_icons\strips_180x60"; Flags: ignoreversion

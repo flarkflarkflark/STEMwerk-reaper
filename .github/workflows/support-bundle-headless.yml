@@ -65,11 +65,14 @@ jobs:
           luac -p scripts/reaper/STEMwerk_Save_Support_Bundle.lua
           luac -p tests/support/run_support_bundle_headless.lua
 
-      - name: Validate support bundle Lua files on Windows
+      # REAPER uses Lua 5.3 syntax (including bitwise operators). The Chocolatey
+      # interpreter is Lua 5.1, so only validate the genuinely 5.1-compatible
+      # headless support-bundle files here; Setup_Internal is validated by Lua
+      # 5.4 in both Unix matrix jobs.
+      - name: Validate Lua 5.1-compatible support bundle files on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          & "C:\Program Files (x86)\Lua\5.1\luac.exe" -p scripts/reaper/_internal/STEMwerk_Setup_Internal.lua
           & "C:\Program Files (x86)\Lua\5.1\luac.exe" -p scripts/reaper/STEMwerk_Save_Support_Bundle.lua
           & "C:\Program Files (x86)\Lua\5.1\luac.exe" -p tests/support/run_support_bundle_headless.lua
 

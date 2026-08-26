@@ -1,0 +1,18 @@
+# STEMwerk 2.3.1.0 — definitive release checksums
+# Version: 2.3.1.0
+# Source tip: 656fb0b43270a1271939a64b99e8532f469a2d74 (release/2.3.1.0-final-prep)
+# Build date: 2026-08-22/2026-08-23 (all artifacts from the same tip; macOS pkgs built on Apple Silicon)
+# Unsigned packages — verify against this list.
+#
+# Verify with: sha256sum -c SHA256SUMS-2.3.1.0.txt
+#
+# size: 1889472 bytes
+84fbff967ea520b47e4c1022a1103f8e1368cee9d550f028b437f232e4971762  STEMwerk-2.3.1.0-x86_64.AppImage
+# size: 3533903 bytes
+d516ba3fafa840ea7a804d44e49ea6b115a4dbf4379078b032c0eea399972624  STEMwerk-Setup-2.3.1.0.exe
+# size: 141572628 bytes
+b1f8cc8d7195103765de948b6062a0fa34580afd30f344087f2068c969ff327f  STEMwerk-Setup-2.3.1.0-bundled.exe
+# size: 10130251 bytes
+41432da203949e5e6c676ab5a608d5ef26da5f16a1dd5e5e9e50df5a57abdfec  STEMwerk-2.3.1.0.pkg
+# size: 1081294120 bytes
+f511a340e08c13243532a1e447b457569f853bee83d6b3e0d251907568b813ac  STEMwerk-2.3.1.0-bundled-apple-silicon.pkg

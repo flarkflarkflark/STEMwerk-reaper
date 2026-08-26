@@ -1384,7 +1384,8 @@ def test_device_refresh_has_module_scope_friendly_name_sanitizer():
     assert 'if not name then return "" end' in script
     assert 'raw = tostring(name):gsub("%c", " ")' in script
     assert script.index("local function sanitizeFriendlyName(name)") < script.index("function DEVICE_RUNTIME.refreshRuntimeDevices(force)")
-    assert 'local short = sanitizeFriendlyName(d.fullName or d.name)' in script
+    assert "sanitizeFriendlyName(dev.fullName or dev.name or dev.id)" in script
+    assert "sanitizeFriendlyName(dev.name or dev.id)" in script
 
 
 def test_early_stem_resolver_uses_safe_drumkit_route_helper_before_progress_init():
@@ -1445,7 +1446,8 @@ def test_windows_setup_overview_ignores_stale_running_and_failed_bootstrap_state
     assert 'trim(readyState.MAIN_RUNTIME_STATUS or "") == "ok"' in setup_internal
     assert 'local staleRunning = (status == "running") and (not pid) and (not guardBusy) and readyHealthy' in setup_internal
     assert 'local staleGuardFailed = (trim(guard.STATUS or "") == "failed") and readyHealthy and bootstrapComplete and (not guardBusy)' in setup_internal
-    assert 'local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running") and readyHealthy and bootstrapComplete' in setup_internal
+    assert 'local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running")' in setup_internal
+    assert 'and readyHealthy and bootstrapComplete and not runtimePolicyRequiresRebuild(state)' in setup_internal
     assert 'if staleRunning or staleGuardFailed or staleFailedState then' in setup_internal
     assert 'status = "ok"' in setup_internal
     assert 'reason = ""' in setup_internal
@@ -1512,14 +1514,15 @@ def test_post_bootstrap_trusts_verified_bootstrap_log_over_stale_probe_failures(
     assert 'text:find("Pinned runtime assertion passed", 1, true)' in setup_internal
     assert "local authoritativeBootstrapVerified = (" in setup_internal
     assert "trim(state.STATUS or \"\") == \"ok\"" in setup_internal
-    assert "local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk or authoritativeBootstrapVerified" in setup_internal
+    assert "local effectiveBootstrapSuccess = (not runtimePolicyBlocked)" in setup_internal
+    assert "and (bootstrapSuccess or verifiedRuntimeOk or authoritativeRuntimeVerified)" in setup_internal
     assert "runtimeDriftDetected = \"no\"" in setup_internal
     assert "runtimeDriftReason = \"\"" in setup_internal
     assert "runtimeVerifyDetail = resolvedRuntimeVerifyDetail" in setup_internal
-    assert "status = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or (state.STATUS or \"\")" in setup_internal
-    assert "verification = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or verificationStatus" in setup_internal
-    assert "audioSeparator = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or audioStatus" in setup_internal
-    assert "stemwerkCore = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or coreStatus" in setup_internal
+    assert "status = (verificationSuccess or authoritativeRuntimeVerified) and \"ok\" or (state.STATUS or \"\")" in setup_internal
+    assert "verification = (verificationSuccess or authoritativeRuntimeVerified) and \"ok\" or verificationStatus" in setup_internal
+    assert "audioSeparator = (verificationSuccess or authoritativeRuntimeVerified) and \"ok\" or audioStatus" in setup_internal
+    assert "stemwerkCore = (verificationSuccess or authoritativeRuntimeVerified) and \"ok\" or coreStatus" in setup_internal
 
 
 def test_verify_only_accepts_intel_macos_cpu_fallback_when_imports_and_paths_are_ok():
@@ -1595,15 +1598,41 @@ def test_verify_only_uses_ready_to_go_health_to_avoid_stale_macos_runtime_failur
     assert 'trim(readyState.READY_TO_GO_STATUS or "") == "ok"' in setup_internal
     assert 'trim(readyState.MAIN_RUNTIME_STATUS or "") == "ok"' in setup_internal
     assert "local canAcceptMacReadyHealthyState = (" in setup_internal
-    assert 'result.runtimeVerifyDetail = "not_checked"' in setup_internal
+    # The 2.3.1.0 "keep current failures authoritative" follow-up removed the
+    # `elseif canAcceptMacReadyHealthyState then result.runtimeVerifyDetail =
+    # "not_checked"` branch: cached ready_to_go/capabilities health may never
+    # replace a CURRENT failure's exact reason with a vague "not_checked" --
+    # see tests/support/run_setup_macos_ready_state_fallback_headless.lua's
+    # mac-cached-fallback-discloses-its-use fixture for the real behavioral
+    # coverage (torch_runtime_probe_failed must remain visible verbatim).
+    assert 'result.runtimeVerifyDetail = "not_checked"' not in setup_internal
 
 
 def test_torch_probe_failures_are_not_labeled_unsupported_without_specific_version_drift():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
-    assert 'elseif result.driftReason == "torch_import_failed" or result.driftReason == "torch_runtime_probe_failed" then' in setup_internal
+    # 2.3.1.0 "distinguish incomplete checks from failures" follow-up: a
+    # genuinely completed-and-failed probe (torch_import_failed -- Python ran
+    # and `import torch` itself raised) must get its OWN error code, not be
+    # folded into the same bucket as an INCOMPLETE probe (torch_runtime_probe_failed,
+    # checkPinnedTorchRuntime's seeded default, only ever left in place when
+    # the subprocess timed out/crashed/produced unparseable output). See
+    # tests/support/run_setup_linux_not_proven_headless.lua for the real
+    # behavioral (non-mocked subprocess) proof that these two are now handled
+    # distinctly.
+    assert 'elseif result.driftReason == "torch_import_failed" then' in setup_internal
+    assert 'result.error = "torch_import_failed"' in setup_internal
+    assert 'elseif result.driftReason == "torch_runtime_probe_failed" then' in setup_internal
     assert 'result.error = "torch_runtime_probe_failed"' in setup_internal
-    assert 'if lower == "torch_runtime_probe_failed" then return "Torch runtime was not re-verified during this check; current ready-to-go state remains authoritative" end' in setup_internal
+    assert 'elseif result.driftReason == "torch_import_failed" or result.driftReason == "torch_runtime_probe_failed" then' not in setup_internal, (
+        "the two must no longer be folded into a single conflated branch"
+    )
+    # The stale wording ("...current ready-to-go state remains authoritative")
+    # described an authority fallback that no longer exists in the current
+    # accept-conditions -- replaced with truthful not-proven wording.
+    assert 'if lower == "torch_runtime_probe_failed" then return "Torch runtime was not re-verified during this Check; current runtime status is not proven by this invocation." end' in setup_internal
+    assert "ready-to-go state remains authoritative" not in setup_internal
+    assert 'if lower == "torch_import_failed" then return "Torch failed to import during this Check. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." end' in setup_internal
 
 
 def test_verify_only_intel_macos_cpu_fallback_does_not_hide_real_missing_torch_failures():
@@ -1949,6 +1978,9 @@ def test_rebuild_venv_safety_reports_canonical_failure_without_using_raw_output_
 
 
 def test_windows_path_helper_normalizes_local_drive_paths_without_breaking_unc_or_extended_prefixes():
+    lua = shutil.which("lua")
+    if not lua:
+        pytest.skip("Lua interpreter required for path-helper execution coverage")
     lua_script = r"""
 local helper = dofile("scripts/reaper/_internal/STEMwerk_Path_Helper.lua")
 print(helper.normalizeWindowsPath([[C:\Users\Ferro\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\_bundled\python\\python-3.11.8-amd64.exe]]))
@@ -1957,7 +1989,7 @@ print(helper.normalizeWindowsPath([[\\server\share\\STEMwerk\\models\\]]))
 print(helper.normalizeWindowsPath([[\\?\C:\Users\Ferro\\STEMwerk\\python\\python.exe]]))
 """
     proc = subprocess.run(
-        ["lua", "-"],
+        [lua, "-"],
         input=lua_script,
         text=True,
         capture_output=True,
@@ -3533,7 +3565,7 @@ def test_dks_multi_workers_preserve_workflow_args_and_import_drum_json_outputs()
     assert '"lua_dks_extract_stage2_queue_wait_end", "dks_extract_stage2_throttled",' in support_script
     assert 'for i = 1, math.min(8, #runDirs) do' in support_script
     assert 'for i = 1, math.min(8, #tempRuns) do' in support_script
-    assert 'local maxRunsToInclude = 8' in support_script
+    assert 'local maxRunsToInclude = 20' in support_script
     assert 'joinPath("stage2_drumsep", "drumsep_helper_stdout.txt")' in support_script
     assert 'joinPath("stage2_drumsep", "drumsep_helper_stderr.txt")' in support_script
     assert 'joinPath("stage2_drumsep", "drumsep_result.json")' in support_script
@@ -4805,11 +4837,9 @@ def test_windows_offline_drumsep_payload_builder_and_inno_wiring_present():
 
 def test_windows_installers_remove_stemwerk_owned_runtime_and_reaper_scripts_on_uninstall():
     iss = Path("installer/windows/STEMwerk.iss").read_text(encoding="utf-8")
-    patch_iss = Path("installer/windows/STEMwerk_Offline_Patch.iss").read_text(encoding="utf-8")
     bundled_shell = Path("installer/windows/build_bundled_installer.sh").read_text(encoding="utf-8")
     bundled_models_shell = Path("installer/windows/build_bundled_model_installers.sh").read_text(encoding="utf-8")
     online_ps1 = Path("installer/windows/build_online_installers.ps1").read_text(encoding="utf-8")
-    patch_shell = Path("installer/windows/build_offline_patch_installer.sh").read_text(encoding="utf-8")
 
     assert "[UninstallDelete]" in iss
     assert 'Type: filesandordirs; Name: "{localappdata}\\STEMwerk"' in iss
@@ -4824,27 +4854,513 @@ def test_windows_installers_remove_stemwerk_owned_runtime_and_reaper_scripts_on_
     assert 'STEMwerk.iss' in bundled_models_shell
     assert 'installer\\\\windows\\\\STEMwerk.iss' in online_ps1
 
-    assert 'Uninstallable=no' in patch_iss
-    assert 'STEMwerk_Offline_Patch.iss' in patch_shell
-    assert "#define ReleaseAssetVersion GetEnv('STEMWERK_RELEASE_ASSET_VERSION')" in patch_iss
-    assert '#define ReleaseAssetVersion MyAppVersion' in patch_iss
-    assert 'OutputBaseFilename=STEMwerk-{#ReleaseAssetVersion}-update-patch' in patch_iss
-    assert 'STEMWERK_RELEASE_ASSET_VERSION="${STEMWERK_RELEASE_ASSET_VERSION:-$STEMWERK_VERSION}"' in patch_shell
-    assert 'Source: "STEMwerk_Installer_Windows.ps1"; DestDir: "{app}"; Flags: ignoreversion' in patch_iss
-    assert '[Run]' in patch_iss
-    assert 'Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\\STEMwerk_Installer_Windows.ps1"""' in patch_iss
-    assert 'StatusMsg: "Refreshing STEMwerk runtime and Drum Kit assets..."' in patch_iss
-    assert 'Flags: runhidden waituntilterminated' in patch_iss
+
+
+def test_shipped_windows_docs_and_dialogs_do_not_advertise_stale_release_version():
+    setup_guide = Path("installer/windows/STEMwerk_Windows_Setup_Guide.md").read_text(encoding="utf-8")
+    setup_guide_de = Path("installer/windows/STEMwerk_Windows_Setup_Guide.de.md").read_text(encoding="utf-8")
+    setup_guide_nl = Path("installer/windows/STEMwerk_Windows_Setup_Guide.nl.md").read_text(encoding="utf-8")
+    license_agreement = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    macos_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+
+    assert "STEMwerk 2.3.0.6" not in setup_guide
+    assert "install `2.3.0.6` fresh" not in setup_guide
+    assert "latest Windows setup/runtime fixes from `2.3.0.4`" not in setup_guide
+    assert "This guide is for the Windows installer build of STEMwerk 2.3.1.0." in setup_guide
+
+    assert "STEMwerk 2.3.0.6" not in setup_guide_de
+    assert "STEMwerk 2.3.0.6" not in setup_guide_nl
+
+    assert "Version: 2.3.0.6" not in license_agreement
+    assert "Version: 2.3.1.0" in license_agreement
+
+    assert "in STEMwerk 2.3.0.6." not in main_script
+
+    assert "bundled 2.3.0.6 dependency policy" not in macos_bootstrap
+
+
+def test_rpm_and_arch_packages_declare_x86_64_not_noarch_or_any():
+    # Both packages bundle vendor/wheels/linux-x86_64-cp312/diffq-*.whl, a
+    # compiled extension wheel tagged for linux_x86_64 specifically (indexed
+    # as a real ReaPack <source> in index.xml, not an unused leftover), so
+    # neither package is actually architecture-independent.
+    spec = Path("installer/linux/rpm/stemwerk.spec").read_text(encoding="utf-8")
+    pkgbuild = Path("installer/linux/arch/PKGBUILD").read_text(encoding="utf-8")
+    index_xml = Path("index.xml").read_text(encoding="utf-8")
+
+    assert "vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl" in index_xml
+
+    assert "BuildArch:      noarch" not in spec
+    assert "BuildArch:      x86_64" in spec
+
+    assert "arch=('any')" not in pkgbuild
+    assert "arch=('x86_64')" in pkgbuild
+
+
+def test_bundled_installer_invokes_fetch_runtime_assets_via_bash_explicitly():
+    # fetch_runtime_assets.sh is committed as non-executable (100644); the
+    # scripts that invoke it must not rely on the executable bit, so a clean
+    # checkout builds correctly regardless of local chmod state or how the
+    # tree was checked out.
+    bundled_shell = Path("installer/windows/build_bundled_installer.sh").read_text(encoding="utf-8")
+    bundled_model_shell = Path("installer/windows/build_bundled_model_installers.sh").read_text(encoding="utf-8")
+
+    assert 'bash "$ROOT_DIR/fetch_runtime_assets.sh"' in bundled_shell
+    assert 'bash "$ROOT_DIR/fetch_runtime_assets.sh"' in bundled_model_shell
+
+
+def _readme_section(readme, heading_text):
+    """Slice readme from heading_text up to (not including) the next markdown
+    heading of any level, so assertions can be scoped to one section instead
+    of matching anywhere in the whole file."""
+    import re
+
+    start = readme.index(heading_text)
+    body_start = start + len(heading_text)
+    match = re.search(r"\n#{1,6} ", readme[body_start:])
+    end = body_start + match.start() if match else len(readme)
+    return readme[start:end]
+
+
+#: Words that mark a sentence as making a "what should I use/download/install
+#: right now" claim. Any sentence combining one of these with a non-target
+#: 2.3.x.y version token is presumed stale unless the sentence also contains
+#: an explicit historical/transitional exemption marker (see
+#: _README_HISTORICAL_EXEMPTION_MARKERS) -- except for explicit present-
+#: selection markers, which are never eligible for that exemption.
+_README_CURRENT_SEMANTIC_MARKERS = (
+    "current",
+    "latest",
+    "recommended",
+    "standard",
+    "target",
+    "install",
+    "installer",
+    "package",
+    "download",
+    "use",
+)
+
+#: Marker words that assert something IS presently the thing to use, rather
+#: than merely mentioning install/download/package mechanics. A historical
+#: qualifier elsewhere in the sentence ("previously published", "before
+#: `2.3.1.0`") cannot excuse pairing one of these with a stale version --
+#: "the previously published 2.3.0.6 installer remains the CURRENT installer"
+#: is still a false current-version claim despite the historical framing.
+_README_PRESENT_SELECTION_WORD_MARKERS = (
+    "current",
+    "latest",
+    "recommended",
+    "standard",
+    "target",
+    "remains",
+    "still",
+)
+_README_PRESENT_SELECTION_PHRASE_MARKERS = (
+    "should install",
+    "should use",
+    "installer to use",
+    "package to use",
+    "download to use",
+)
+
+#: Substrings that, if present in a flagged sentence, prove the sentence is
+#: deliberately scoping itself to a past/pending state rather than claiming
+#: an older version is current -- e.g. "previously published `2.3.0.6`",
+#: "GitHub Release (previous installer assets)", "before `2.3.1.0`",
+#: "has not yet been published", "once published". Only applies to the softer
+#: markers above; see _README_PRESENT_SELECTION_WORD_MARKERS.
+_README_HISTORICAL_EXEMPTION_MARKERS = (
+    "published",
+    "previous",
+)
+
+
+def _assert_no_stale_current_version_semantics(section_text, target_version, section_name):
+    """Sentence-scan a README section: reject any sentence that pairs a
+    current-guidance marker word with a 2.3.x.y version other than
+    target_version, unless the sentence is explicitly historically-scoped.
+
+    Scoped to individual sentences (split on ". "), not whole lines, so a
+    single bullet that legitimately discusses both the target version and an
+    older one in separate sentences -- e.g. "`2.3.1.0` is the current
+    release... the previously published `2.3.0.6` ... remain[s] the live
+    download source." -- isn't flagged just because both mentions share a
+    line. Marker words are matched on word boundaries so "currently" doesn't
+    count as "current". Present-selection words and phrases (for example
+    "latest", "remains", and "should install") make an unambiguous current-
+    version claim and are never excused by a historical marker, even within
+    the same sentence.
+    """
+    import re
+
+    version_token_re = re.compile(r"2\.3\.\d+\.\d+")
+    before_target_marker = f"before `{target_version}`"
+
+    def _has_word(word, lower_text):
+        return re.search(rf"\b{re.escape(word)}\b", lower_text) is not None
+
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        for sentence in re.split(r"(?<=\.)\s+", stripped):
+            lower = sentence.lower()
+            markers_present = [m for m in _README_CURRENT_SEMANTIC_MARKERS if _has_word(m, lower)]
+            if not markers_present:
+                continue
+            versions_on_sentence = set(version_token_re.findall(sentence))
+            stale_versions = versions_on_sentence - {target_version}
+            if not stale_versions:
+                continue
+            makes_present_selection_claim = any(
+                _has_word(marker, lower) for marker in _README_PRESENT_SELECTION_WORD_MARKERS
+            ) or any(phrase in lower for phrase in _README_PRESENT_SELECTION_PHRASE_MARKERS)
+            if makes_present_selection_claim:
+                raise AssertionError(
+                    f"{section_name}: sentence makes an unconditional present-selection "
+                    f"claim alongside non-current version(s) {sorted(stale_versions)} -- a "
+                    f"historical qualifier cannot excuse this: {sentence.strip()!r}"
+                )
+            if before_target_marker in lower:
+                continue
+            if any(_has_word(m, lower) for m in _README_HISTORICAL_EXEMPTION_MARKERS):
+                continue
+            raise AssertionError(
+                f"{section_name}: sentence pairs a current-guidance marker with non-current "
+                f"version(s) {sorted(stale_versions)} and no historical exemption: {sentence.strip()!r}"
+            )
+
+
+def _assert_readme_release_contract(readme, target_version):
+    release_status = _readme_section(readme, "## Release status")
+    assets_table = _readme_section(readme, f"### GitHub release assets for {target_version}")
+    windows_notes = _readme_section(readme, "## Windows Notes")
+
+    # --- release status section must identify target_version as current,
+    # not as something still forthcoming.
+    assert f"STEMwerk `{target_version}`, the current release" in release_status
+    for stale_future_phrase in ("upcoming", "forthcoming", "will ship", "will be installed"):
+        assert stale_future_phrase not in release_status.lower()
+    assert "has not yet been published as a tagged GitHub Release" in release_status
+
+    # --- Windows guidance must target the current version, not an older one.
+    assert f"The current stable Windows target is `{target_version}`" in windows_notes
+    assert f"install the full online or bundled `{target_version}` installer" in windows_notes
+
+    # --- generalized fail-closed guard: no current-guidance-marked line in
+    # any of these three sections may pair with a stale (non-target) 2.3.x.y
+    # version unless explicitly historically-scoped. This is what catches
+    # additive/contradictory stale wording, reworded stale claims, and
+    # anything semantically equivalent -- not just the specific phrasings
+    # spelled out above.
+    for section_text, section_name in (
+        (release_status, "release_status"),
+        (assets_table, "assets_table"),
+        (windows_notes, "windows_notes"),
+    ):
+        _assert_no_stale_current_version_semantics(section_text, target_version, section_name)
+
+    # --- artifact table must list exactly the five published installer assets
+    # plus the checksum manifest. The macOS bundled Apple Silicon pkg is named
+    # per installer/macos/build_pkg.sh's OUTPUT_PKG convention.
+    assert f"GitHub release assets for {target_version}" in readme
+    assert f"STEMwerk-Setup-{target_version}.exe" in assets_table
+    assert f"STEMwerk-Setup-{target_version}-bundled.exe" in assets_table
+    assert f"STEMwerk-{target_version}.pkg" in assets_table
+    assert f"STEMwerk-{target_version}-bundled-apple-silicon.pkg" in assets_table
+    assert f"STEMwerk-{target_version}-x86_64.AppImage" in assets_table
+    assert f"SHA256SUMS-{target_version}.txt" in assets_table
+
+    # --- the Linux native packages build successfully (installer/linux/build_deb.sh,
+    # build_rpm.sh, build_archpkg.sh) but are deliberately NOT published for this
+    # release. Build-tooling support must never be presented as a downloadable
+    # release asset.
+    assert f"stemwerk_{target_version}_amd64.deb" not in assets_table
+    assert f"stemwerk-{target_version}-1.x86_64.rpm" not in assets_table
+    assert f"stemwerk-{target_version}-1-x86_64.pkg.tar.zst" not in assets_table
+    assert "noarch" not in assets_table
+    assert "-any.pkg.tar.zst" not in assets_table
+
+    # --- the large offline/allmodels macOS pkg is a separate-channel product and
+    # is not a normal GitHub release asset for this line.
+    assert f"STEMwerk-{target_version}-offline-bundled" not in assets_table
+
+    # --- exact row count, so an added or dropped asset row fails closed instead
+    # of slipping past the substring checks above.
+    asset_rows = [line for line in assets_table.splitlines() if line.startswith("| `")]
+    assert len(asset_rows) == 6, asset_rows
+
+    # Genuinely historical references remain valid and must be preserved.
+    assert "`2.3.0.0` remains the original 2.3 full-release baseline" in readme
+    assert "large offline/full installers deliberately remain on the `2.3.0.0` line" in readme
+    assert "## What's new in 2.3.0.6 / 2.3.0.7" in readme
+
+
+def test_shipped_readme_identifies_current_public_2310_release_and_assets():
+    repository_version = Path("VERSION").read_text(encoding="utf-8").strip()
+    assert repository_version == "2.3.1.1"
+    target_version = "2.3.1.0"
+
+    readme = Path("README.md").read_text(encoding="utf-8")
+    _assert_readme_release_contract(readme, target_version)
+
+
+def test_shipped_readme_release_contract_rejects_stale_mutations():
+    """Prove the contract is fail-closed: apply representative stale-version
+    mutations to a copy of the real, currently-correct README and confirm
+    each one is rejected. Covers additive/contradictory wording, restated
+    "latest installers" claims, direct "install 2.3.0.6" guidance,
+    semantically-equivalent rewordings, a missing bundled-Apple-Silicon row,
+    deliberately-unpublished Linux native packages or the separate-channel
+    offline/allmodels pkg advertised as release assets, and dropped published
+    rows."""
+    assert Path("VERSION").read_text(encoding="utf-8").strip() == "2.3.1.1"
+    target_version = "2.3.1.0"
+    real_readme = Path("README.md").read_text(encoding="utf-8")
+
+    def mutate(anchor, inserted_line):
+        assert anchor in real_readme, anchor
+        return real_readme.replace(anchor, anchor + "\n" + inserted_line, 1)
+
+    mutations = {
+        # A: additive/contradictory old-current wording, valid line left in place.
+        "A": mutate(
+            "## Release status",
+            "Current release: 2.3.0.7.",
+        ),
+        # B: restated "latest installers" claim for an older version.
+        "B": mutate(
+            f"### GitHub release assets for {target_version}",
+            "The latest installers remain 2.3.0.6.",
+        ),
+        # C: additive/contradictory wording in the Windows-specific section.
+        "C": mutate(
+            "## Windows Notes",
+            "Windows users can also use 2.3.0.7.",
+        ),
+        # D: direct install instruction naming an older version.
+        "D": mutate(
+            "## Windows Notes",
+            "Windows users should install STEMwerk 2.3.0.6.",
+        ),
+        # E: bundled Apple Silicon row silently dropped from the table.
+        "E": real_readme.replace(
+            f"| `STEMwerk-{target_version}-bundled-apple-silicon.pkg` | macOS Apple Silicon bundled recovery installer |\n",
+            "",
+        ),
+        # F: a deliberately unpublished Linux native package advertised as a
+        # published 2.3.1.0 release asset.
+        "F": mutate(
+            f"| `STEMwerk-{target_version}-x86_64.AppImage` | Linux AppImage |",
+            f"| `stemwerk_{target_version}_amd64.deb` | Debian/Ubuntu package |",
+        ),
+        # G: same, for the RPM package.
+        "G": mutate(
+            f"| `STEMwerk-{target_version}-x86_64.AppImage` | Linux AppImage |",
+            f"| `stemwerk-{target_version}-1.x86_64.rpm` | RPM package |",
+        ),
+        # O: same, for the Arch package.
+        "O": mutate(
+            f"| `STEMwerk-{target_version}-x86_64.AppImage` | Linux AppImage |",
+            f"| `stemwerk-{target_version}-1-x86_64.pkg.tar.zst` | Arch package |",
+        ),
+        # P: the separate-channel offline/allmodels macOS pkg advertised as a
+        # normal GitHub release asset.
+        "P": mutate(
+            f"| `STEMwerk-{target_version}-x86_64.AppImage` | Linux AppImage |",
+            f"| `STEMwerk-{target_version}-offline-bundled-apple-silicon-mps-allmodels.pkg` | macOS allmodels |",
+        ),
+        # Q: the published Linux AppImage row silently dropped.
+        "Q": real_readme.replace(
+            f"| `STEMwerk-{target_version}-x86_64.AppImage` | Linux AppImage |\n",
+            "",
+        ),
+        # R: the checksum manifest row silently dropped.
+        "R": real_readme.replace(
+            f"| `SHA256SUMS-{target_version}.txt` | SHA256 manifest |\n",
+            "",
+        ),
+        # H: semantically equivalent stale wording, different phrasing entirely.
+        "H": mutate(
+            "## Windows Notes",
+            "For the recommended/current Windows package, use 2.3.0.6.",
+        ),
+        # I: target version described as still forthcoming, contradicting the
+        # "current release" claim (independent probe found this class was
+        # never actually committed as a regression fixture).
+        "I": mutate(
+            "## Release status",
+            f"`{target_version}` is upcoming and not yet ready for general use.",
+        ),
+        # J: historical-exemption abuse #1 -- "previously published" framing
+        # reused to smuggle in an unconditional "current" claim for a stale
+        # version, in the same sentence.
+        "J": mutate(
+            "## Windows Notes",
+            "The previously published 2.3.0.6 installer remains the current installer.",
+        ),
+        # K: historical-exemption abuse #2 -- "previous"/"published" framing
+        # paired with an unconditional "recommended" claim for a stale
+        # version, in the same sentence.
+        "K": mutate(
+            "## Windows Notes",
+            "The published 2.3.0.6 package is still the recommended download.",
+        ),
+        # L-N: historical wording must not exempt stale present-selection
+        # claims made with latest/standard or an alternate recommended form.
+        "L": mutate(
+            "## Windows Notes",
+            "The previously published 2.3.0.6 installer remains the latest installer.",
+        ),
+        "M": mutate(
+            "## Windows Notes",
+            "The previous 2.3.0.7 package is still the recommended package.",
+        ),
+        "N": mutate(
+            "## Windows Notes",
+            "The published 2.3.0.6 installer remains the standard installer.",
+        ),
+    }
+
+    for label, mutated_readme in mutations.items():
+        assert mutated_readme != real_readme, f"mutation {label} did not change the file"
+        try:
+            _assert_readme_release_contract(mutated_readme, target_version)
+        except AssertionError:
+            continue
+        raise AssertionError(f"mutation {label} was not rejected by the README release contract")
+
+    # The real, unmodified file must still pass.
+    _assert_readme_release_contract(real_readme, target_version)
+
+    # A factual present-publication statement is not current selection
+    # guidance for the stale version and must remain historically valid.
+    historical_present_fact = mutate(
+        "## Release status",
+        f"ReaPack currently serves 2.3.0.7; it will be updated to {target_version} once published.",
+    )
+    _assert_readme_release_contract(historical_present_fact, target_version)
+
+
+def _run_fetch_runtime_assets_helper(script, payload_dir):
+    helper = "installer/windows/fetch_runtime_assets.sh"
+    shell = (
+        f'STEMWERK_FETCH_RUNTIME_ASSETS_NO_MAIN=1 RootDirOverride="{payload_dir}"; '
+        f'. "{helper}" 2>/dev/null; '
+        f"{script}"
+    )
+    return subprocess.run(
+        ["bash", "-c", shell],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+
+
+def _make_fixture_file(tmp_path, name, content):
+    path = tmp_path / name
+    path.write_bytes(content)
+    return path
+
+
+def test_windows_fetch_runtime_assets_declares_pinned_checksums_and_immutable_ffmpeg_source():
+    script = Path("installer/windows/fetch_runtime_assets.sh").read_text(encoding="utf-8")
+    ps1 = Path("installer/windows/fetch_runtime_assets.ps1").read_text(encoding="utf-8")
+
+    assert 'PYTHON_SHA256="fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in script
+    assert 'FFMPEG_SHA256="fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9"' in script
+    assert "gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip\"" not in script
+    assert (
+        'FFMPEG_URL="https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"'
+        in script
+    )
+    assert "verify_sha256" in script
+
+    assert '$pythonSha256 = "fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in ps1
+    assert '$ffmpegSha256 = "fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9"' in ps1
+    assert (
+        '$ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"'
+        in ps1
+    )
+    assert "Verify-Sha256" in ps1
+
+
+def test_windows_fetch_runtime_assets_accepts_bytes_matching_expected_checksum(tmp_path):
+    good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
+    good_sha256 = subprocess.run(
+        ["sha256sum", str(good)], text=True, capture_output=True
+    ).stdout.split()[0]
+    out = tmp_path / "out.bin"
+
+    result = _run_fetch_runtime_assets_helper(
+        f'download_if_missing "file://{good}" "{out}" "{good_sha256}" && echo DOWNLOAD_OK',
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "DOWNLOAD_OK" in result.stdout
+    assert out.read_bytes() == b"correct bytes"
+
+
+def test_windows_fetch_runtime_assets_rejects_downloaded_bytes_with_wrong_checksum(tmp_path):
+    bad = _make_fixture_file(tmp_path, "bad.bin", b"tampered or corrupted bytes")
+    out = tmp_path / "out.bin"
+    wrong_expected = "0" * 64
+
+    result = _run_fetch_runtime_assets_helper(
+        f'download_if_missing "file://{bad}" "{out}" "{wrong_expected}" && echo DOWNLOAD_OK',
+        tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "DOWNLOAD_OK" not in result.stdout
+    assert "checksum verification" in (result.stdout + result.stderr)
+    assert not out.exists()
+
+
+def test_windows_fetch_runtime_assets_rejects_and_replaces_corrupted_cache(tmp_path):
+    good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
+    good_sha256 = subprocess.run(
+        ["sha256sum", str(good)], text=True, capture_output=True
+    ).stdout.split()[0]
+    out = _make_fixture_file(tmp_path, "out.bin", b"stale corrupted cache contents")
+
+    result = _run_fetch_runtime_assets_helper(
+        f'download_if_missing "file://{good}" "{out}" "{good_sha256}" && echo DOWNLOAD_OK',
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "failed checksum verification, re-downloading" in result.stderr
+    assert "DOWNLOAD_OK" in result.stdout
+    assert out.read_bytes() == b"correct bytes"
+
+
+def test_windows_fetch_runtime_assets_accepts_already_verified_cache_without_redownload(tmp_path):
+    good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
+    good_sha256 = subprocess.run(
+        ["sha256sum", str(good)], text=True, capture_output=True
+    ).stdout.split()[0]
+    out = _make_fixture_file(tmp_path, "out.bin", b"correct bytes")
+
+    result = _run_fetch_runtime_assets_helper(
+        # An unreachable/invalid URL proves this path never re-downloads:
+        # a cache hit must short-circuit before any network attempt.
+        f'download_if_missing "file:///nonexistent/unused.bin" "{out}" "{good_sha256}" && echo DOWNLOAD_OK',
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "Already present and verified" in result.stdout
+    assert "DOWNLOAD_OK" in result.stdout
 
 
 def test_release_docs_retire_windows_update_patch_for_2304():
-    readme = Path("README.md").read_text(encoding="utf-8")
     release_notes = Path("docs/RELEASE_2.3.0.4.md").read_text(encoding="utf-8")
     installer_readme = Path("installer/README.md").read_text(encoding="utf-8")
 
-    assert "Existing Windows users should uninstall the old STEMwerk version first" in readme
-    assert "A clean reinstall avoids stale runtime/backend state" in readme
-    assert "STEMwerk-2.3.0.4-update-patch.exe" not in readme
     assert "The Windows update-patch asset remains retired and is not published." in release_notes
     assert "supersedes the original `2.3.0.0` Windows full installers" in release_notes
     assert "publish only `STEMwerk-Setup-<version>.exe` and `STEMwerk-Setup-<version>-bundled.exe`" in installer_readme
@@ -4858,6 +5374,351 @@ def test_release_workflow_uploads_only_supported_windows_installers():
     assert "installer/windows/dist/STEMwerk-Setup-*.exe" in workflow
     assert "STEMwerk_Offline_Patch.iss" not in workflow
     assert 'files: installer/windows/dist/*.exe' not in workflow
+
+
+def _release_workflow_run_steps(workflow_text=None):
+    """Parse the actual release workflow YAML (or a caller-supplied mutated
+    text, for mutation testing) and return every (job_name, step_name,
+    run_text) tuple across ALL jobs -- not just the one named Windows step --
+    so a bypass introduced anywhere (a new step, a different job) is in
+    scope."""
+    import yaml
+
+    if workflow_text is None:
+        workflow_text = Path(".github/workflows/release-installers.yml").read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text)
+    steps = []
+    for job_name, job in workflow.get("jobs", {}).items():
+        for step in job.get("steps", []):
+            if "run" in step:
+                steps.append((job_name, step.get("name", ""), step["run"]))
+    return steps
+
+
+def _executable_lines(run_text):
+    """Drop blank and '#'-comment-only lines, and the body of any here-string
+    (@"..."@ / @'...'@), so a fetcher reference that only exists inside a
+    comment or a quoted text block doesn't count as a real invocation."""
+    lines = []
+    in_here_string = False
+    for line in run_text.splitlines():
+        stripped = line.strip()
+        if in_here_string:
+            if stripped == '"@' or stripped == "'@" or stripped.startswith('"@') or stripped.startswith("'@"):
+                in_here_string = False
+            continue
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.endswith('@"') or stripped.endswith("@'"):
+            in_here_string = True
+            continue
+        lines.append(line)
+    return lines
+
+
+def _invokes_fetcher(run_text):
+    """A real invocation of the hardened fetcher must use the PowerShell call
+    operator (`&`) directly against a path ending in fetch_runtime_assets.ps1
+    -- matching what the release workflow actually does:
+    `& ".\\installer\\windows\\fetch_runtime_assets.ps1"`. A bare substring
+    match on "fetch_runtime_assets.ps1" would also accept a comment, a
+    Write-Host message, a variable/string assignment, or a here-string that
+    merely mentions the filename without ever executing it."""
+    import re
+
+    invocation_re = re.compile(
+        r"^&\s*(?:"
+        r'"[^"\r\n]*fetch_runtime_assets\.ps1"'
+        r"|'[^'\r\n]*fetch_runtime_assets\.ps1'"
+        r"|[^\s'\"]*fetch_runtime_assets\.ps1"
+        r")(?:\s|$)",
+        re.IGNORECASE,
+    )
+    return any(invocation_re.match(line.strip()) for line in _executable_lines(run_text))
+
+
+_RELEASE_WORKFLOW_FORBIDDEN_DIRECT_FETCH = (
+    "Invoke-WebRequest",
+    "python.org/ftp/python",
+    "gyan.dev/ffmpeg",
+)
+_RELEASE_WORKFLOW_BUNDLED_STAGING_PATHS = (
+    "_bundled/python",
+    "_bundled\\python",
+    "_bundled/ffmpeg",
+    "_bundled\\ffmpeg",
+    "payload\\python",
+    "payload/python",
+    "payload\\ffmpeg",
+    "payload/ffmpeg",
+)
+
+#: A later Copy-Item/Move-Item into the bundled staging destinations bypasses
+#: checksum verification just as effectively as a raw network fetch does --
+#: the only thing that may populate those destinations is the hardened
+#: fetcher itself, so any workflow step performing one of these writes is
+#: forbidden regardless of whether that step also invokes the fetcher.
+_RELEASE_WORKFLOW_FORBIDDEN_WRITE_COMMANDS = (
+    "copy-item",
+    "move-item",
+    "cp ",
+    "mv ",
+)
+
+
+def _assert_release_workflow_windows_runtime_provenance(steps):
+    hardened_invocations = []
+    forbidden_hits = []
+
+    for job_name, step_name, run_text in steps:
+        executable_text = "\n".join(_executable_lines(run_text))
+        invokes_hardened = _invokes_fetcher(run_text)
+        if invokes_hardened:
+            hardened_invocations.append((job_name, step_name, executable_text))
+
+        for forbidden in _RELEASE_WORKFLOW_FORBIDDEN_DIRECT_FETCH:
+            if forbidden in executable_text:
+                forbidden_hits.append((job_name, step_name, forbidden))
+
+        # A staging-path mention alone is fine (e.g. just creating the
+        # directory); what's forbidden is a step that both references one of
+        # these paths AND performs its own fetch/write to it instead of
+        # going through the hardened fetcher.
+        if not invokes_hardened and (
+            "Invoke-WebRequest" in executable_text or "OutFile" in executable_text or "curl " in executable_text
+        ):
+            for staging_path in _RELEASE_WORKFLOW_BUNDLED_STAGING_PATHS:
+                if staging_path in executable_text:
+                    forbidden_hits.append((job_name, step_name, f"direct staging write to {staging_path}"))
+
+        # A local Copy-Item/Move-Item into the staging destinations is a
+        # bypass even without any network call, and even in a step that also
+        # invokes the hardened fetcher (a later overwrite in the same step).
+        lower_executable_text = executable_text.lower()
+        if any(cmd in lower_executable_text for cmd in _RELEASE_WORKFLOW_FORBIDDEN_WRITE_COMMANDS):
+            for staging_path in _RELEASE_WORKFLOW_BUNDLED_STAGING_PATHS:
+                if staging_path in lower_executable_text:
+                    forbidden_hits.append((job_name, step_name, f"unverified copy/move write to {staging_path}"))
+
+    assert not forbidden_hits, (
+        f"forbidden direct-fetch pattern(s) found outside the hardened fetcher: {forbidden_hits}"
+    )
+    assert hardened_invocations, (
+        "no step actually executes fetch_runtime_assets.ps1 -- a comment-only mention does not count"
+    )
+
+    for job_name, step_name, executable_text in hardened_invocations:
+        assert (
+            'STEMWERK_SKIP_WHEELHOUSE = "1"' in executable_text
+            or "STEMWERK_SKIP_WHEELHOUSE=1" in executable_text
+        ), f"{job_name}/{step_name}: invokes fetch_runtime_assets.ps1 without STEMWERK_SKIP_WHEELHOUSE=1"
+
+
+def test_release_workflow_bundled_windows_job_uses_hardened_fetcher_not_raw_downloads():
+    steps = _release_workflow_run_steps()
+    _assert_release_workflow_windows_runtime_provenance(steps)
+
+
+def test_release_workflow_windows_runtime_provenance_rejects_bypass_mutations():
+    """Prove the workflow-provenance contract is fail-closed against the
+    bypass classes independent review identified: comment/string-only fetcher
+    references, fake call-operator invocations, second raw Python/FFmpeg
+    fetches, the wrong STEMWERK_SKIP_WHEELHOUSE value, alternate-job staging,
+    later network overwrites, and case-insensitive Copy-Item/Move-Item
+    overwrites of verified Python/FFmpeg payloads. These are synthetic step
+    lists, not edits to the committed workflow file."""
+    real_steps = _release_workflow_run_steps()
+
+    def with_extra_step(job_name, step_name, run_text):
+        return real_steps + [(job_name, step_name, run_text)]
+
+    def with_replaced_windows_exe_step(step_name_to_replace, new_run_text):
+        result = []
+        for job_name, step_name, run_text in real_steps:
+            if job_name == "windows-exe" and step_name == step_name_to_replace:
+                result.append((job_name, step_name, new_run_text))
+            else:
+                result.append((job_name, step_name, run_text))
+        return result
+
+    mutations = {
+        # A: hardened fetcher only mentioned in a comment, never executed.
+        "A": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            "# should call fetch_runtime_assets.ps1 here\nWrite-Host 'noop'",
+        ),
+        # B: call operator invokes Write-Host, not the fetcher path.
+        "B": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
+            '& Write-Host "installer/windows/fetch_runtime_assets.ps1"',
+        ),
+        # C: fetcher path assigned to a variable but never executed.
+        "C": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
+            '$fetcher = "installer/windows/fetch_runtime_assets.ps1"',
+        ),
+        # D: a raw Python download added in a later, unrelated step.
+        "D": with_extra_step(
+            "windows-exe",
+            "Sneaky extra Python fetch",
+            'Invoke-WebRequest "https://www.python.org/ftp/python/3.11.8/python-3.11.8-amd64.exe" -OutFile x',
+        ),
+        # E: a raw rolling-FFmpeg download added in a different job.
+        "E": with_extra_step(
+            "linux-packages",
+            "Unexpected FFmpeg fetch",
+            'curl -L "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -o x',
+        ),
+        # F: STEMWERK_SKIP_WHEELHOUSE set to the wrong value.
+        "F": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "0"\n& ".\\installer\\windows\\fetch_runtime_assets.ps1"',
+        ),
+        # G: an alternate job stages _bundled/python directly, unverified.
+        "G": with_extra_step(
+            "macos-pkg",
+            "Alternate unverified staging",
+            'Invoke-WebRequest "https://example.invalid/python.exe" -OutFile installer/windows/payload/python/rogue.exe',
+        ),
+        # H: a later step overwrites the already-verified bundled FFmpeg file.
+        "H": with_extra_step(
+            "windows-exe",
+            "Late overwrite of bundled FFmpeg",
+            'Invoke-WebRequest "https://example.invalid/ffmpeg.zip" -OutFile installer\\windows\\payload\\ffmpeg\\ffmpeg-release-essentials.zip',
+        ),
+        # I: a later Copy-Item overwrites the verified bundled Python payload
+        # without any network call at all.
+        "I": with_extra_step(
+            "windows-exe",
+            "Late Copy-Item overwrite of bundled Python",
+            "Copy-Item unverified-python-embed.zip installer\\windows\\payload\\python\\python-embed.zip",
+        ),
+        # J: a later Copy-Item overwrites the verified bundled FFmpeg payload
+        # without any network call at all.
+        "J": with_extra_step(
+            "windows-exe",
+            "Late Copy-Item overwrite of bundled FFmpeg",
+            "Copy-Item unverified-ffmpeg.zip installer\\windows\\payload\\ffmpeg\\ffmpeg-release-essentials.zip",
+        ),
+        # K-N: PowerShell command names are case-insensitive, so lowercase and
+        # mixed-case copy/move variants must be rejected identically.
+        "K": with_extra_step(
+            "windows-exe",
+            "Lowercase Copy-Item overwrite of bundled Python",
+            "copy-item unverified-python.zip installer\\windows\\payload\\python\\python-embed.zip",
+        ),
+        "L": with_extra_step(
+            "windows-exe",
+            "Lowercase Copy-Item overwrite of bundled FFmpeg",
+            "copy-item unverified-ffmpeg.zip installer\\windows\\payload\\ffmpeg\\ffmpeg-release-essentials.zip",
+        ),
+        "M": with_extra_step(
+            "windows-exe",
+            "Mixed-case Copy-Item overwrite",
+            "CoPy-ItEm unverified-python.zip installer\\windows\\payload\\python\\python-embed.zip",
+        ),
+        "N": with_extra_step(
+            "windows-exe",
+            "Lowercase Move-Item overwrite",
+            "move-item unverified-ffmpeg.zip installer\\windows\\payload\\ffmpeg\\ffmpeg-release-essentials.zip",
+        ),
+        # O-Q: additional non-executing string forms must not satisfy the
+        # invocation requirement.
+        "O": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
+            '& echo "installer/windows/fetch_runtime_assets.ps1"',
+        ),
+        "P": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
+            'Write-Output "installer/windows/fetch_runtime_assets.ps1"',
+        ),
+        "Q": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
+            "$message = 'installer/windows/fetch_runtime_assets.ps1'",
+        ),
+    }
+
+    for label, mutated_steps in mutations.items():
+        assert mutated_steps != real_steps, f"mutation {label} did not change the step list"
+        try:
+            _assert_release_workflow_windows_runtime_provenance(mutated_steps)
+        except AssertionError:
+            continue
+        raise AssertionError(f"mutation {label} was not rejected by the workflow provenance contract")
+
+    # The real, unmodified workflow must still pass.
+    _assert_release_workflow_windows_runtime_provenance(real_steps)
+
+
+def test_fetch_runtime_assets_ps1_has_no_verification_disable_switch():
+    """D: prove there is no supported way to invoke the hardened fetcher with
+    checksum verification turned off."""
+    ps1 = Path("installer/windows/fetch_runtime_assets.ps1").read_text(encoding="utf-8")
+
+    assert "param(" in ps1
+    param_block = ps1.split("param(", 1)[1].split(")", 1)[0]
+    for disable_marker in ("SkipVerif", "NoVerify", "DisableChecksum", "SkipChecksum", "InsecureSkip"):
+        assert disable_marker not in param_block
+        assert disable_marker not in ps1
+
+    # Verify-Sha256 must be unconditionally called by Download-IfMissing, not
+    # gated behind any environment-variable-controlled skip.
+    download_if_missing_body = ps1.split("function Download-IfMissing", 1)[1].split("\nfunction ", 1)[0]
+    assert "Verify-Sha256" in download_if_missing_body
+
+
+def test_fetch_runtime_assets_ps1_is_canonical_under_declared_gitattributes_eol():
+    """fetch_runtime_assets.ps1 is declared `text eol=crlf` in .gitattributes.
+    Prove the currently tracked blob is already the canonical form that
+    declaration implies (LF-normalized in the index, CRLF only at checkout),
+    so no future `git add --renormalize` (accidental or automated) produces
+    a deferred, unreviewed ~148-line rewrite. Read-only: uses `git
+    hash-object --path` to compute what re-adding the working-tree file
+    right now would produce, and compares it to what's already tracked --
+    it never runs --renormalize or otherwise mutates the index."""
+    path = "installer/windows/fetch_runtime_assets.ps1"
+
+    attrs = subprocess.run(
+        ["git", "check-attr", "-a", "--", path],
+        text=True,
+        capture_output=True,
+    )
+    assert attrs.returncode == 0, attrs.stderr
+    assert f"{path}: text: set" in attrs.stdout
+    assert f"{path}: eol: crlf" in attrs.stdout
+
+    tracked = subprocess.run(
+        ["git", "rev-parse", f":{path}"],
+        text=True,
+        capture_output=True,
+    )
+    assert tracked.returncode == 0, tracked.stderr
+    tracked_oid = tracked.stdout.strip()
+
+    recomputed = subprocess.run(
+        ["git", "hash-object", "--path", path, "--", path],
+        text=True,
+        capture_output=True,
+    )
+    assert recomputed.returncode == 0, recomputed.stderr
+    recomputed_oid = recomputed.stdout.strip()
+
+    assert tracked_oid == recomputed_oid, (
+        "fetch_runtime_assets.ps1's tracked blob does not match what re-adding "
+        "the working-tree file would produce -- normalization is deferred, not complete"
+    )
+
+    # The working tree itself must actually be CRLF (checkout-time conversion
+    # applied), not accidentally LF -- otherwise the eol=crlf declaration
+    # would be lying about what a real checkout produces.
+    worktree_bytes = Path(path).read_bytes()
+    assert b"\r\n" in worktree_bytes
+    assert b"\n" not in worktree_bytes.replace(b"\r\n", b"")  # no bare/stray LF once CRLF pairs are removed
 
 
 def test_ci_fast_quick_script_smoke_installs_pyyaml():
@@ -4973,8 +5834,8 @@ def test_windows_bootstrap_offline_drumsep_mode_uses_local_payload_only():
     installer = Path("installer/windows/STEMwerk_Installer_Windows.ps1").read_text()
 
     assert '$offlineBundledAllmodelsMode = ($env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS -eq "1")' in script
-    assert '$bundledDrumsepWheelsDir = Join-Path $bundledRuntimeDir "drumsep-wheels"' in script
-    assert '$bundledDrumsepModelsDir = Join-Path $bundledRuntimeDir "drumsep-models"' in script
+    assert '$bundledDrumsepWheelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-wheels")' in script
+    assert '$bundledDrumsepModelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-models")' in script
     assert 'function HasBundledDrumsepWheels' in script
     assert 'function InstallWithPipOfflineSources' in script
     assert 'function InstallBundledDrumsepPackages' in script
@@ -5095,6 +5956,8 @@ def test_linux_rocm_main_wheelhouse_skips_bundled_torch_transitives():
 
 
 def test_linux_stage_payload_copies_runtime_python_files(tmp_path):
+    if not sys.platform.startswith("linux"):
+        pytest.skip("Linux payload staging requires Linux path and shell semantics")
     dest_dir = tmp_path / "payload"
     subprocess.run(
         [
@@ -5202,7 +6065,7 @@ def test_macos_online_variant_excludes_bundled_payload_and_other_variants_stage_
 def test_macos_build_script_excludes_appledouble_sidecars_and_repacks_clean_payload():
     script = Path("installer/macos/build_pkg.sh").read_text()
 
-    assert "--exclude='._*' \\" in script
+    assert "--exclude='._*'" in script
     assert "remove_appledouble_sidecars()" in script
     assert "find \"$1\" -name '._*' -delete" in script
     assert 'remove_appledouble_sidecars "$STAGE"' in script
@@ -5252,16 +6115,20 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert 'replace_samplerate_with_native_arm64(wheels_dir)' in script
 
 
-def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
+def test_macos_payload_builder_requires_official_ffmpeg_and_local_runtime_sources():
     script = Path("tools/build_macos_apple_silicon_payload.py").read_text()
 
-    assert 'default="/opt/homebrew/bin/ffmpeg"' in script
-    assert 'default="/opt/homebrew/bin/ffprobe"' in script
-    assert 'default=str(Path.home() / "Library" / "Application Support" / "STEMwerk" / "python")' in script
+    assert 'return build_official_arm64_ffmpeg(destination, source_artifact_dir=source_artifact_dir)' in script
+    assert 'Release mode refuses all FFmpeg/ffprobe overrides' in script
+    assert '--allow-development-ffmpeg-override' in script
+    assert '"release_eligible": False' in script
+    assert '"--managed-python-artifact"' in script
+    assert 'Release mode requires --managed-python-artifact' in script
+    assert 'Release mode refuses --managed-python development directory overrides' in script
     assert 'Library" / "Application Support" / "STEMwerk" / "models"' in script
     assert 'Missing required {label}' in script
-    assert '"ffmpeg binary"' in script
-    assert '"managed Python runtime payload"' in script
+    assert '"ffmpeg override"' in script
+    assert 'prepare_managed_python_payload(' in script
     assert '"core model payload file"' in script
     assert '"DrumSep payload file"' in script
     assert 'Incomplete wheelhouse: missing' in script
@@ -5269,7 +6136,7 @@ def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
     assert '"samplerate==0.1.0"' in script
     assert 'build_stemwerk_core_wheel(repo_root, wheels_dir, python_executable)' in script
     assert '"--no-build-isolation"' in script
-    assert 'copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")' in script
+    assert 'validate_official_managed_python_provenance(output_dir / "python", manifest)' in script
 
 
 def test_macos_bootstrap_uses_bundled_apple_silicon_payloads_when_present():
@@ -5311,9 +6178,9 @@ def test_macos_bootstrap_records_bundled_payload_status_markers():
 def test_macos_bootstrap_prefers_bundled_ffmpeg_and_offline_wheelhouse():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
-    assert '_bundled_ffmpeg="$(bundled_ffmpeg_path || true)"' in script
-    assert 'FFMPEG="${_bundled_ffmpeg}"' in script
-    assert 'MACOS_BUNDLED_FFMPEG_STATUS="ok"' in script
+    assert '"$(bundled_ffmpeg_path || true)" \\' in script
+    assert 'if validate_ffmpeg_pair "${p}"; then' in script
+    assert 'MACOS_BUNDLED_FFMPEG_STATUS="validated"' in script
     assert '"${_py}" -m pip install --no-index --find-links "${BUNDLED_WHEELS_DIR}" "$@"' in script
     assert 'bundled_managed_python_dir()' in script
     assert 'install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip' in script
@@ -5349,9 +6216,9 @@ def test_macos_bootstrap_seeds_bundled_models_and_drumsep_before_ready_checks():
 
 
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
-    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
-    langs = Path("scripts/reaper/i18n/languages.lua").read_text()
-    i18n_internal = Path("scripts/reaper/_internal/STEMwerk_i18n.lua").read_text()
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text(encoding="utf-8")
+    i18n_internal = Path("scripts/reaper/_internal/STEMwerk_i18n.lua").read_text(encoding="utf-8")
 
     assert 'trSafeValue("drumkit_complete_title", "Direct Kit completed successfully!")' in main_script
     assert 'trPlural(srcCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
@@ -5363,14 +6230,14 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_complete_title = "Direct Kit erfolgreich abgeschlossen!"' in langs
     assert 'drumsep_backend_limited_title = "Drum Kit backend not yet supported."' in langs
     assert 'drumsep_backend_limited_title = "Drum Kit-backend wordt nog niet ondersteund."' in langs
-    assert 'drumsep_backend_limited_title = "Drum-Kit-Backend wird noch nicht unterstuetzt."' in langs
+    assert 'drumsep_backend_limited_title = "Drum-Kit-Backend wird noch nicht unterstützt."' in langs
     assert 'drumsep_backend_limited_body = "This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split."' in langs
     assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split unavailable on Intel Mac"' in langs
     assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split is not enabled on Intel Mac in this release. Normal CPU stem separation is available. For Drum Kit Split, use Apple Silicon or a supported GPU/accelerated platform."' in langs
     assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split niet beschikbaar op Intel Mac"' in langs
     assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split is in deze release niet ingeschakeld op Intel Mac. Normale CPU-stems zijn beschikbaar. Gebruik voor Drum Kit Split Apple Silicon of een ondersteund GPU/versneld platform."' in langs
-    assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split auf Intel Mac nicht verfuegbar"' in langs
-    assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split ist in dieser Version auf Intel Macs nicht aktiviert. Normale CPU-Stems sind verfuegbar. Verwende fuer Drum Kit Split Apple Silicon oder eine unterstuetzte GPU-/beschleunigte Plattform."' in langs
+    assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split auf Intel Mac nicht verfügbar"' in langs
+    assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split ist in dieser Version auf Intel Macs nicht aktiviert. Normale CPU-Stems sind verfügbar. Verwende für Drum Kit Split Apple Silicon oder eine unterstützte GPU-/beschleunigte Plattform."' in langs
     assert 'drumkit_result_track_many = "drum tracks"' in langs
     assert 'drumkit_result_track_many = "drumtracks"' in langs
     assert 'drumkit_result_track_many = "Drum-Tracks"' in langs
@@ -5416,9 +6283,9 @@ def test_drumkit_split_wrapper_selects_integrated_extract_route():
 
 
 def test_main_ui_exposes_direct_and_extract_drumkit_presets():
-    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
-    langs = Path("scripts/reaper/i18n/languages.lua").read_text()
-    progress_render = Path("scripts/reaper/_internal/STEMwerk_Progress_Render.lua").read_text()
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text(encoding="utf-8")
+    progress_render = Path("scripts/reaper/_internal/STEMwerk_Progress_Render.lua").read_text(encoding="utf-8")
 
     assert 'local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Kit") .. " (Z)"' in main_script
     assert 'local presetLabelEdks    = trSafe("workflow_edks_short_label", "Kit Split") .. " (X)"' in main_script
@@ -5725,7 +6592,12 @@ def test_drumkit_workflow_state_persists_and_restores_on_reopen():
     assert 'local workflowSource = C.reaper.GetExtState(C.EXT_SECTION, "workflow_source")' in settings_script
     assert 'C.reaper.SetExtState(C.EXT_SECTION, "workflow_mode", tostring(C.SETTINGS.workflowMode or ""), true)' in settings_script
     assert 'C.reaper.SetExtState(C.EXT_SECTION, "workflow_source", tostring(C.SETTINGS.workflowSource or ""), true)' in settings_script
-    assert "if C.activateWorkflowStemSet then" in settings_script
+    assert 'local runContextActive = (type(isProcessingActive) == "boolean" and isProcessingActive)' in settings_script
+    assert "if C.activateWorkflowStemSet and not runContextActive then" in settings_script
+    assert "dks_settings_load_stemset_skipped reason=run_context_active" in settings_script
+    assert settings_script.index("local runContextActive =") < settings_script.index(
+        "if C.activateWorkflowStemSet and not runContextActive then"
+    )
 
 
 def test_drumkit_expanded_model_stays_route_scoped_and_does_not_force_normal_stems():
@@ -5886,9 +6758,12 @@ def test_multitrack_progress_uses_route_aware_monotonic_units():
 
 
 def test_multitrack_progress_mapping_sequences_execute_monotonically():
+    lua_executable = shutil.which("lua")
+    if not lua_executable:
+        pytest.skip("Lua interpreter required for progress-render execution coverage")
     lua = subprocess.run(
         [
-            "lua",
+            lua_executable,
             "-",
         ],
         input="""
@@ -6062,7 +6937,8 @@ def test_direct_kit_running_rows_strip_prefixed_stage2_copy_but_extract_keeps_it
     assert 'or flat == "splitting drum kit"' in progress_render
     assert 'return progressUiLabel("progress_stage_preparing_direct_drum_kit", "Creating drum parts…")' in progress_render
     assert 'return progressUiLabel("progress_stage_splitting_drum_kit", "Stage 2/2: Creating drum parts…")' in progress_render
-    assert 'if isExtractDrumKitWorkflowActive()\n                    and inferProgressStageIndex(job.stage) == 2' in main_script
+    extract_progress = main_script.split("if isExtractDrumKitWorkflowActive() then", 1)[1]
+    assert "inferProgressStageIndex(progressState.stage)" in extract_progress
     assert 'pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")' not in main_script
 
 
@@ -6100,7 +6976,7 @@ def test_selected_items_take_precedence_over_unrelated_time_selection_for_no_aud
     assert "local useTimeSel = hasTimeSelection() and selTrackCount == 0 and selItemCount == 0" in script
     assert "HELPERS.hasExplicitOverlapSelection(currentTimeStart, currentTimeEnd)" not in footer
 
-    run_workflow = script.split("function runSeparationWorkflow()", 1)[1].split("-- Check for quick preset mode", 1)[0]
+    run_workflow = script.split("function runSeparationWorkflow(originProjectContext)", 1)[1].split("-- Check for quick preset mode", 1)[0]
     assert "local useTimeSel = hasTimeSel and selTrackCount == 0 and selItemCount == 0" in run_workflow
     assert "HELPERS.hasExplicitOverlapSelection(ts0, ts1)" not in run_workflow
 
@@ -6151,7 +7027,7 @@ def test_backend_limited_drumsep_message_preempts_model_failure_and_generic_no_s
     assert 'lowerLog:find("error_reason=drumsep_backend_runtime_limited", 1, true)' in main_script
     assert 'lowerLog:find("output_validation_reason=audio_separator_mdxc_runtime_primary_secondary_only", 1, true)' in main_script
     assert 'trSafeValue("drumsep_backend_limited_body", "This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split.")' in main_script
-    assert main_script.index('trSafeValue("drumsep_backend_limited_title", "Drum Kit backend not yet supported.")') < main_script.index('local msg = "Model download/load failed.\\n"')
+    assert main_script.index('trSafeValue("drumsep_backend_limited_title", "Drum Kit backend not yet supported.")') < main_script.index('or "Model download/load failed.\\n"')
     assert 'SW_LOG.readFileSnippet(logPath, 12000)' in main_script
 
 
@@ -6397,22 +7273,30 @@ def test_macos_bootstrap_runs_samplerate_guard_before_final_dependency_verificat
 
 
 def test_macos_bootstrap_clears_stale_torch_pin_assert_failure_after_final_runtime_success():
+    """2.3.1.0 clean offline first-run bootstrap fix: stale-STATUS clearing
+    now keys on FINAL_RUNTIME_VERIFIED truth directly (any superseded
+    first-run-only transient failure, not just the three torch/onnxruntime
+    STATUS_REASON strings previously enumerated) -- see
+    tests/test_2310_macos_offline_first_run_bootstrap.py for the
+    behavioral (real-interpreter) proof of this."""
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     assert 'FINAL_RUNTIME_VERIFIED="yes"' in script
-    assert 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then' in script
-    assert 'torch_install_failed|torch_pin_repair_failed|torch_pin_assert_failed)' in script
+    assert 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] \\' in script
+    assert '&& [ "${FFMPEG_VALIDATED}" = "yes" ] \\' in script
+    assert '&& [ "${STATUS}" != "ok" ]; then' in script
     assert 'STATUS="ok"' in script
     assert 'STATUS_REASON=""' in script
-    assert 'Cleared stale STATUS from earlier pinned torch failure after final runtime verification success' in script
+    assert 'Cleared stale STATUS=${STATUS}/${STATUS_REASON} after final runtime verification succeeded' in script
 
 
 def test_macos_bootstrap_only_clears_stale_torch_pin_status_after_real_final_checks():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     line_no = lambda needle: next(i for i, line in enumerate(script.splitlines(), 1) if needle in line)
-    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then') > line_no('if [ "${_onnx_observed}" != "${PINNED_ONNXRUNTIME_VERSION}" ]; then')
-    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then') > line_no('if ! assert_pinned_torch_stack "${VENV_PY}"; then')
+    clear_line = 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] \\'
+    assert line_no(clear_line) > line_no('if [ "${_onnx_observed}" != "${PINNED_ONNXRUNTIME_VERSION}" ]; then')
+    assert line_no(clear_line) > line_no('if ! assert_pinned_torch_stack "${VENV_PY}"; then')
 
 
 def test_macos_bootstrap_skips_reinstall_when_pinned_torch_stack_already_ok():
@@ -6541,9 +7425,9 @@ def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps
     assert 'local cudaPython = resolveRuntimePython(cudaState, defaultRuntimePython(".venv-drumsep-cuda"))' in script
     assert 'local directmlPython = resolveRuntimePython(directmlState, defaultRuntimePython(".venv-drumsep-directml"))' in script
     assert 'local capabilityState = readEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {}' in script
-    assert 'local cudaReady = schedulerRuntimeHasCudaCapability(cudaState, cudaPython, capabilityState)' in script
+    assert 'local cudaReady = schedulerRuntimeHasCudaCapability(cudaStateForUi, cudaPythonForUi, capabilityState)' in script
     assert 'local directmlReady = schedulerRuntimeHasDirectmlCapability(directmlState, directmlPython, capabilityState)' in script
-    assert 'local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaState, capabilityState)' in script
+    assert 'local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaStateForUi, capabilityState)' in script
     assert 'local directmlDeviceNames = schedulerRuntimeDirectmlDeviceNames(directmlState, capabilityState)' in script
     assert 'rocmReady = rocmReady and rocmPython ~= ""' in script
     assert 'local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""' in script
@@ -7055,7 +7939,10 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' not in core_section
     assert 'core_model_prefetch_ffmpeg_path=${_prefetch_ffmpeg_path}' in macos_bootstrap
     assert 'core_model_prefetch_path_prefix=${_prefetch_ffmpeg_dir}' in macos_bootstrap
-    assert 'PATH="${_prefetch_path}" FFMPEG_PATH="${_prefetch_ffmpeg_path}" STEMWERK_FFMPEG_PATH="${_prefetch_ffmpeg_path}" IMAGEIO_FFMPEG_EXE="${_prefetch_ffmpeg_path}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' in macos_bootstrap
+    assert '_prefetch_log="$(mktemp "${TMPDIR:-/tmp}/stemwerk-core-model-prefetch.XXXXXX")" || return 1' in macos_bootstrap
+    assert 'PATH="${_prefetch_path}" FFMPEG_PATH="${_prefetch_ffmpeg_path}" STEMWERK_FFMPEG_PATH="${_prefetch_ffmpeg_path}" IMAGEIO_FFMPEG_EXE="${_prefetch_ffmpeg_path}" "${_py}" - <<PY > "${_prefetch_log}" 2>&1' in macos_bootstrap
+    assert 'cat "${_prefetch_log}" >> "${LOG_FILE}" 2>/dev/null || true' in macos_bootstrap
+    assert 'CORE_MODEL_PREFETCH_REASON="ffmpeg_constructor_failed"' in macos_bootstrap
     assert 'STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' in macos_bootstrap
     assert 'detail_path = os.environ.get("STEMWERK_DRUMSEP_DETAIL_FILE", "").strip()' in macos_bootstrap
     assert 'if detail_path:' in macos_bootstrap
@@ -7063,9 +7950,11 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'sep.load_model(resolve_audio_separator_model_id(model_name))' in macos_bootstrap
     assert 'READY_MAIN_RUNTIME_STATUS="missing"' in macos_bootstrap
     assert 'echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"' in macos_bootstrap
-    assert 'READY_DETAIL="core_model_download_failed"' in macos_bootstrap
-    assert 'log "core_model_prefetch_failed=core_model_download_failed"' in macos_bootstrap
-    assert 'set_status "deps_failed" "core_model_download_failed"' in macos_bootstrap
+    assert 'READY_DETAIL="${CORE_MODEL_PREFETCH_REASON:-ffmpeg_validation_failed}"' in macos_bootstrap
+    assert 'READY_DETAIL="${CORE_MODEL_PREFETCH_REASON:-core_model_download_failed}"' in macos_bootstrap
+    assert 'log "core_model_prefetch_failed=${READY_DETAIL}"' in macos_bootstrap
+    assert 'set_status "missing_ffmpeg" "${READY_DETAIL}"' in macos_bootstrap
+    assert 'set_status "deps_failed" "${READY_DETAIL}"' in macos_bootstrap
     assert 'set_status "deps_failed" "core_model_prefetch_failed"' not in macos_bootstrap
     assert 'DRUMSEP_PREFETCH_DETAIL="$(cat "${_detail_file}" 2>/dev/null || true)"' in macos_bootstrap
     assert 'log "drumsep_model_prefetch_detail=${DRUMSEP_PREFETCH_DETAIL:-unknown}"' in macos_bootstrap
@@ -7077,8 +7966,14 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'echo "NORMAL_STEMS_SUPPORTED=${_normal_stems_supported}"' in macos_bootstrap
 
     assert 'local readyFile = runtime.runtimeState .. PATH_SEP .. "ready_to_go.env"' in setup_internal
-    assert 'if trim(readyState.READY_TO_GO_STATUS or "") ~= "ok" then needsRepair = true end' in setup_internal
     assert 'readyToGoStatus = trim(readyState.READY_TO_GO_STATUS or "") ~= "" and trim(readyState.READY_TO_GO_STATUS or "") or "unknown"' in setup_internal
+    # 2.3.1.0 Setup readiness truthfulness fix: buildWindowsSetupOverview no
+    # longer lets a stale/cached ready_to_go.env alone force needsRepair --
+    # this overview does no live probe of its own, so ready_to_go.env is
+    # always cached/historical (never current) here; see classifyReadyState.
+    assert 'if trim(readyState.READY_TO_GO_STATUS or "") ~= "ok" then needsRepair = true end' not in setup_internal
+    assert "function classifyReadyState(readyState)" in setup_internal
+    assert "readyToGoCurrentness = classifyReadyState(readyState).currentness" in setup_internal
 
     assert 'local readyStatePath = joinPath(runtimeStateDir, "ready_to_go.env")' in support_script
     assert 'appendKey(lines, "ready_to_go_status"' in support_script
@@ -7142,7 +8037,7 @@ def test_windows_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_
     assert 'function ReadEnvMap' in windows_bootstrap
     assert '"MAIN_RUNTIME_STATUS=$mainRuntimeStatus"' in windows_bootstrap
     assert 'LogProgress ("ready_to_go_state_file=" + $readyStatePath)' in windows_bootstrap
-    assert 'LogProgress "ready_to_go_state_written=1"' in windows_bootstrap
+    assert 'LogProgress ("ready_to_go_state_written=" + $(if ($readyMarkerWritten) { "1" } else { "0" }))' in windows_bootstrap
     assert 'LogProgress ("ready_to_go_status=" + [string]$readyState["READY_TO_GO_STATUS"])' in windows_bootstrap
     assert '$normalizedReadyStatePath = [System.IO.Path]::GetFullPath($readyStatePath)' in windows_bootstrap
     assert '$normalizedStateFile = if ([string]::IsNullOrWhiteSpace($StateFile)) { "" } else { [System.IO.Path]::GetFullPath($StateFile) }' in windows_bootstrap
@@ -7250,7 +8145,7 @@ def test_windows_capabilities_write_failure_clears_stale_state_and_fails_bootstr
 def test_windows_installer_license_text_matches_23_release():
     text = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
 
-    assert "Version: 2.3.0.6" in text
+    assert "Version: 2.3.1.0" in text
     assert "Version: 2.2.2" not in text
 
 
@@ -7297,35 +8192,8 @@ def test_windows_installer_uses_five_step_progress_and_drumkit_finish_copy():
 
 
 def test_windows_update_patch_forces_current_runtime_repair_after_script_update():
-    patch_iss = Path("installer/windows/STEMwerk_Offline_Patch.iss").read_text(encoding="utf-8")
     installer = Path("installer/windows/STEMwerk_Installer_Windows.ps1").read_text(encoding="utf-8")
     bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
-    patch_build_ps1 = Path("installer/windows/build_offline_patch_installer.ps1").read_text(encoding="utf-8")
-
-    assert "WizardForm.Caption := 'Setup - STEMwerk {#ReleaseAssetVersion} Update Patch';" in patch_iss
-    assert "WizardForm.WelcomeLabel1.Caption := 'STEMwerk {#ReleaseAssetVersion} Update Patch';" in patch_iss
-    assert "'Updating STEMwerk {#ReleaseAssetVersion} installation to script/runtime v{#MyAppVersion}." in patch_iss
-    assert "'STEMwerk has been updated. Installed script/runtime version: v{#MyAppVersion}.'" in patch_iss
-    assert "'- Release/update asset: v{#ReleaseAssetVersion}'" in patch_iss
-    assert "ShowReleaseNotesCheckbox.Caption := 'Show what changed in installed payload v{#MyAppVersion}';" in patch_iss
-    assert 'Source: "STEMwerk_Installer_Windows.ps1"; DestDir: "{app}"; Flags: ignoreversion' in patch_iss
-    assert "#define ReleaseAssetVersion GetEnv('STEMWERK_RELEASE_ASSET_VERSION')" in patch_iss
-    assert 'OutputBaseFilename=STEMwerk-{#ReleaseAssetVersion}-update-patch' in patch_iss
-    assert 'Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\\STEMwerk_Installer_Windows.ps1"""' in patch_iss
-    assert 'StatusMsg: "Refreshing STEMwerk runtime and Drum Kit assets..."' in patch_iss
-    assert 'runhidden waituntilterminated' in patch_iss
-    assert 'runtime state, Drum Kit runtime, and offline model readiness' in patch_iss
-    assert "StepLabelS.Caption := '1. Runtime';" in patch_iss
-    assert "StepLabelT.Caption := '2. Python + venv';" in patch_iss
-    assert "StepLabelE.Caption := '3. FFmpeg';" in patch_iss
-    assert "StepLabelM.Caption := '4. Core packages';" in patch_iss
-    assert "StepLabelW.Caption := '5. Drum Kit';" in patch_iss
-    assert "LogMemo := TNewMemo.Create(WizardForm);" in patch_iss
-    assert "LogTimerId := SetTimer(0, 0, 500, LogTimerProc);" in patch_iss
-    assert "StatusDetailLabel.Caption := 'Current task:'" in patch_iss
-    assert "'Do not close this window.'" in patch_iss
-    assert '$env:STEMWERK_VERSION = $version' in patch_build_ps1
-    assert '$env:STEMWERK_RELEASE_ASSET_VERSION = $version' in patch_build_ps1
     assert '$bootstrap = Join-NormalizedWindowsPath $scriptRoot @("STEMwerk_Bootstrap_Windows.ps1")' in installer
     assert '$env:STEMWERK_INSTALLER = "1"' in installer
     assert 'if (Test-Path $stateFile) { Remove-Item $stateFile -Force -ErrorAction SilentlyContinue }' in installer

@@ -1,6 +1,6 @@
 -- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.1.0
+-- @version 2.3.1.1
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -390,7 +390,7 @@ if env.get('directml_possible'):
 ]]
 
     local prefix = linuxEnvPrefix()
-    local cmd = prefix .. quoteArg(pythonPath) .. " -c " .. quoteArg(py)
+    local cmd = prefix .. quoteArg(pythonPath) .. " -B -c " .. quoteArg(py)
     local rc, out = execCapture(cmd, 30000)
     out = out or ""
     if out ~= "" then
@@ -540,13 +540,27 @@ local function runtimeLooksPresent(runtime)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
     local modelDir = getModelCacheDir()
-    return fileExists(runtime.venvPython)
+    if fileExists(runtime.venvPython)
         or pathExists(runtime.venvDir)
         or fileExists(stateFile)
         or fileExists(capFile)
-        or pathExists(modelDir)
-        or getExt("pythonPath") ~= ""
-        or getExt("ffmpegPath") ~= ""
+        or pathExists(modelDir) then
+        return true
+    end
+    -- Cached ExtState is supporting evidence only, never authoritative on
+    -- its own: a stale pythonPath surviving a real uninstall must not
+    -- masquerade as an existing runtime, so it counts only when the
+    -- cached file still actually exists. ffmpegPath is excluded from
+    -- runtime-presence evidence entirely (existing or not): it is
+    -- frequently just a system-wide FFmpeg location found by
+    -- resolveUnixFfmpegFallback(), not a STEMwerk-specific artifact, so
+    -- even a valid cached ffmpegPath proves nothing about whether
+    -- STEMwerk's own runtime was ever installed.
+    local cachedPythonPath = getExt("pythonPath")
+    if cachedPythonPath ~= "" and fileExists(cachedPythonPath) then
+        return true
+    end
+    return false
 end
 
 local function parseStateFile(path)
@@ -694,6 +708,26 @@ local function prettySetupReason(reason)
             part = "ffprobe executable validation failed"
         elseif lower == "ffmpeg_not_found" then
             part = "STEMwerk could not find FFmpeg"
+        elseif lower == "ffmpeg_not_executable" then
+            part = "FFmpeg was found but is not executable"
+        elseif lower == "ffmpeg_dependency_failed" then
+            part = "FFmpeg could not start because a required macOS library is unavailable"
+        elseif lower == "ffmpeg_identity_mismatch" then
+            part = "The selected FFmpeg executable did not identify itself as FFmpeg"
+        elseif lower == "ffprobe_not_found" then
+            part = "FFprobe is missing next to FFmpeg"
+        elseif lower == "ffprobe_not_executable" then
+            part = "FFprobe was found but is not executable"
+        elseif lower == "ffprobe_dependency_failed" then
+            part = "FFprobe could not start because a required macOS library is unavailable"
+        elseif lower == "ffprobe_identity_mismatch" then
+            part = "The selected FFprobe executable did not identify itself as FFprobe"
+        elseif lower == "ffmpeg_constructor_failed" then
+            part = "FFmpeg failed while the core model downloader was being initialized"
+        elseif lower == "core_model_cache_incomplete_after_prefetch" then
+            part = "Core model download finished, but the model cache is incomplete"
+        elseif lower == "bundled_payload_incomplete_or_corrupt" then
+            part = "The bundled macOS recovery payload is incomplete or corrupt"
         elseif lower == "ffmpeg_shim_path" then
             part = "Windows shim FFmpeg path detected (install a real ffmpeg.exe)"
         elseif lower == "stemwerk_core_bundle_incomplete" then
@@ -794,6 +828,34 @@ local function prettySetupReason(reason)
     return table.concat(parts, "; ")
 end
 
+local function prettyFfmpegCheckDetail(ffmpegOk, ffmpegPath, ffmpegReason)
+    if ffmpegOk then
+        local path = trim(ffmpegPath)
+        return path ~= "" and path or "FFmpeg and FFprobe validated"
+    end
+    local rawReason = trim(ffmpegReason)
+    local friendlyReason = prettySetupReason(rawReason)
+    if friendlyReason ~= "" and friendlyReason:lower() ~= rawReason:lower() then
+        return friendlyReason
+    end
+    return "FFmpeg and FFprobe could not be validated"
+end
+
+-- Pure production row-builder exposed for the existing headless Setup tests.
+-- The Check-only UI and its test seam therefore execute the same mapping.
+function buildFfmpegCheckRow(verification, ffmpegPath)
+    verification = verification or {}
+    return {
+        label = "FFmpeg + ffprobe",
+        ok = verification.ffmpegOk == true,
+        detail = prettyFfmpegCheckDetail(
+            verification.ffmpegOk == true,
+            ffmpegPath,
+            verification.ffmpegReason
+        ),
+    }
+end
+
 local function prettyCheckError(err)
     local lower = trim(err):lower()
     if lower == "" then return "" end
@@ -805,7 +867,8 @@ local function prettyCheckError(err)
     if lower == "runtime_incomplete" then return "Runtime is incomplete (Python path intentionally withheld until verification passes)" end
     if lower == "audio_separator_missing" then return "audio-separator runtime is missing" end
     if lower == "stemwerk_core_missing" then return "stemwerk-core package is missing" end
-    if lower == "torch_runtime_probe_failed" then return "Torch runtime was not re-verified during this check; current ready-to-go state remains authoritative" end
+    if lower == "torch_runtime_probe_failed" then return "Torch runtime was not re-verified during this Check; current runtime status is not proven by this invocation." end
+    if lower == "torch_import_failed" then return "Torch failed to import during this Check. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." end
     if lower == "torch_too_new_for_demucs" or lower == "torch_runtime_unsupported" then
         return "Unsupported Torch runtime detected. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
     end
@@ -835,6 +898,22 @@ local function formatCheckErrors(errors)
         return "none"
     end
     return table.concat(out, ", ")
+end
+
+-- A Check-only verdict is "not proven" (rather than a genuine current
+-- failure) only when the SOLE unresolved condition is that the Torch
+-- runtime probe itself could not complete this invocation
+-- (torch_runtime_probe_failed as checkPinnedTorchRuntime's seeded DEFAULT,
+-- never overwritten by a parsed RUNTIME_DRIFT_REASON= line -- see there).
+-- Any other adjusted error present alongside it means a real current
+-- failure exists, so the whole verdict must still read (and recommend
+-- Repair) as a genuine failure.
+local function isNotProvenOnlyErrorSet(errors)
+    if not errors or #errors == 0 then return false end
+    for _, e in ipairs(errors) do
+        if e ~= "torch_runtime_probe_failed" then return false end
+    end
+    return true
 end
 
 local function extractLastLogLine(logLines)
@@ -990,7 +1069,9 @@ end
 
 linuxEnvPrefix = function()
     if OS ~= "Linux" then return "" end
-    return "env -u HIP_VISIBLE_DEVICES -u HSA_OVERRIDE_GFX_VERSION -u ROCR_VISIBLE_DEVICES -u CUDA_VISIBLE_DEVICES "
+    -- PYTHONDONTWRITEBYTECODE keeps these check-only probes from writing
+    -- __pycache__ into the shipped source tree.
+    return "env -u HIP_VISIBLE_DEVICES -u HSA_OVERRIDE_GFX_VERSION -u ROCR_VISIBLE_DEVICES -u CUDA_VISIBLE_DEVICES PYTHONDONTWRITEBYTECODE=1 "
 end
 
 local function runCommandWithProbe(path, suffix, expectPattern, timeoutMs)
@@ -1038,7 +1119,7 @@ local function canRunPython(path)
         return false
     end
     if OS == "Linux" or OS == "macOS" then
-        local cmd = quoteArg(path) .. " -c " .. quoteArg("import sys; print('{}.{}.{}'.format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))")
+        local cmd = quoteArg(path) .. " -B -c " .. quoteArg("import sys; print('{}.{}.{}'.format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))")
         local rc, out = execProcess(cmd, 12000)
         local major, minor = tostring(out or ""):match("(%d+)%.(%d+)")
         if tonumber(rc) ~= 0 or not major or not minor then
@@ -1075,13 +1156,19 @@ end
 local function pythonVersionText(path)
     path = resolvePath(path)
     if path == "" or not fileExists(path) then return "" end
-    local cmd = quoteArg(path) .. " -c " .. quoteArg("import platform; print(platform.python_version())")
+    local cmd = quoteArg(path) .. " -B -c " .. quoteArg("import platform; print(platform.python_version())")
     local rc, out = execProcess(cmd, 12000)
     if tonumber(rc) ~= 0 then return "" end
     return trim((out or ""):match("([0-9]+%.[0-9]+%.[0-9]+)") or (out or ""):match("([0-9]+%.[0-9]+)") or "")
 end
 
-local function checkPinnedTorchRuntime(path)
+-- Declared as a plain global function (not `local function`), matching
+-- buildCheckOnlyVerdict/buildLinuxFinalRows/buildCheckOnlyFinalMessage
+-- elsewhere in this file: this makes it reachable by the headless
+-- behavioral test harness (tests/support/run_setup_linux_not_proven_headless.lua),
+-- which dofile()s this script and can only see globals afterward. No
+-- functional change.
+function checkPinnedTorchRuntime(path)
     path = resolvePath(path)
     local result = {
         ok = false,
@@ -1184,7 +1271,7 @@ print("RUNTIME_DRIFT_DETECTED=" + ("yes" if reason else "no"))
 print("RUNTIME_DRIFT_REASON=" + reason)
 sys.exit(0 if not reason else 1)
 ]=]
-    local cmd = quoteArg(path) .. " -c " .. quoteArg(script)
+    local cmd = quoteArg(path) .. " -B -c " .. quoteArg(script)
     local rc, out = execProcess(cmd, 15000)
     local text = tostring(out or "")
     for line in text:gmatch("[^\r\n]+") do
@@ -1206,7 +1293,18 @@ sys.exit(0 if not reason else 1)
         result.error = "torch_too_new_for_demucs"
     elseif result.driftReason == "numpy_numba_runtime_probe_failed" then
         result.error = "numpy_numba_runtime_probe_failed"
-    elseif result.driftReason == "torch_import_failed" or result.driftReason == "torch_runtime_probe_failed" then
+    elseif result.driftReason == "torch_import_failed" then
+        -- The probe DID complete here -- Python ran and `import torch`
+        -- explicitly raised, which is a genuine current negative result, not
+        -- an incomplete probe. Must not be folded into the
+        -- torch_runtime_probe_failed (not-proven) bucket below.
+        result.error = "torch_import_failed"
+    elseif result.driftReason == "torch_runtime_probe_failed" then
+        -- driftReason is still the seeded DEFAULT from above: the subprocess
+        -- timed out, crashed, or produced output with no parseable
+        -- RUNTIME_DRIFT_REASON= line, so the loop above never overwrote it.
+        -- The probe did not complete -- this is "not proven", not a genuine
+        -- detected failure.
         result.error = "torch_runtime_probe_failed"
     elseif result.ok then
         result.error = nil
@@ -1237,13 +1335,13 @@ local function canImportAudioSeparator(path)
     path = resolvePath(path)
     if not path or path == "" then return false end
     if not fileExists(path) then return false end
-    local fullCmd = quoteArg(path) .. " -c " .. quoteArg("import audio_separator; import onnxruntime; from audio_separator.separator import Separator")
+    local fullCmd = quoteArg(path) .. " -B -c " .. quoteArg("import audio_separator; import onnxruntime; from audio_separator.separator import Separator")
     if OS == "macOS" then
         local rc = select(1, exec(fullCmd, 15000))
         if rc == 0 then
             return true
         end
-        local lightCmd = quoteArg(path) .. " -c " .. quoteArg("import audio_separator; import onnxruntime")
+        local lightCmd = quoteArg(path) .. " -B -c " .. quoteArg("import audio_separator; import onnxruntime")
         local rc2 = select(1, exec(lightCmd, 15000))
         return rc2 == 0
     end
@@ -1253,50 +1351,29 @@ local function canImportAudioSeparator(path)
     end
     local h = io.popen(fullCmd .. " 2>&1")
     if not h then return false end
-    local output = h:read("*a") or ""
+    h:read("*a")
     local ok, _, code = h:close()
-    if ok == true or code == 0 then
-        return true
-    end
-    return (output ~= "")
+    -- Success requires subprocess exit code 0. Stray stderr/stdout text on a
+    -- non-zero exit (e.g. a partial traceback) must NOT be treated as success.
+    return ok == true or code == 0
 end
 
 local function canImportStemwerkCore(path)
     path = resolvePath(path)
     if not path or path == "" then return false end
     if not fileExists(path) then return false end
-    local cmd = quoteArg(path) .. " -c " .. quoteArg("import stemwerk_core")
+    local cmd = quoteArg(path) .. " -B -c " .. quoteArg("import stemwerk_core")
     if OS ~= "Linux" then
         local rc = select(1, exec(cmd, 15000))
         return rc == 0
     end
     local h = io.popen(cmd .. " 2>&1")
     if not h then return false end
-    local output = h:read("*a") or ""
+    h:read("*a")
     local ok, _, code = h:close()
-    if ok == true or code == 0 then
-        return true
-    end
-    return (output ~= "")
-end
-
-local function canImportStemwerkCore(path)
-    path = resolvePath(path)
-    if not path or path == "" then return false end
-    if not fileExists(path) then return false end
-    local cmd = quoteArg(path) .. " -c " .. quoteArg("import stemwerk_core")
-    if OS ~= "Linux" then
-        local rc = select(1, exec(cmd, 15000))
-        return rc == 0
-    end
-    local h = io.popen(cmd .. " 2>&1")
-    if not h then return false end
-    local output = h:read("*a") or ""
-    local ok, _, code = h:close()
-    if ok == true or code == 0 then
-        return true
-    end
-    return (output ~= "")
+    -- Success requires subprocess exit code 0. Stray stderr/stdout text on a
+    -- non-zero exit must NOT be treated as success.
+    return ok == true or code == 0
 end
 
 local function readTail(path, maxLines)
@@ -1424,13 +1501,13 @@ local function probeRuntimeDevices(pythonPath, separatorScript)
     end
 
     local prefix = linuxEnvPrefix()
-    local cmd1 = prefix .. quoteArg(pythonPath) .. " -u " .. quoteArg(separatorScript) .. " --list-devices-machine"
+    local cmd1 = prefix .. quoteArg(pythonPath) .. " -B -u " .. quoteArg(separatorScript) .. " --list-devices-machine"
     local rc1, out1 = execCapture(cmd1, 30000)
     if probeOutputHasUsefulDevices(out1) then
         return out1, rc1, nil
     end
 
-    local cmd2 = prefix .. quoteArg(pythonPath) .. " -u " .. quoteArg(separatorScript) .. " --list-devices"
+    local cmd2 = prefix .. quoteArg(pythonPath) .. " -B -u " .. quoteArg(separatorScript) .. " --list-devices"
     local rc2, out2 = execCapture(cmd2, 30000)
     if probeOutputHasUsefulDevices(out2) then
         return out2, rc2, nil
@@ -1591,6 +1668,48 @@ local function profileForBackend(backend)
     return "linux-" .. backend
 end
 
+-- os.rename() maps to the C runtime rename(), which on Windows (unlike
+-- POSIX) fails whenever the destination already exists -- so a plain
+-- os.rename(tmpPath, path) only ever succeeds on the very first write and
+-- fails silently-but-truthfully-reported on every write after that, once a
+-- destination file exists (e.g. capabilities.env, which is often already
+-- present because an earlier PowerShell/Setup run created it). This helper
+-- makes replacing an existing destination safe on Windows without ever
+-- deleting the last known-good file before the new one is proven in place:
+-- it moves any existing destination aside first, then moves the new file
+-- into place, and restores the original destination if that final move
+-- fails instead of leaving neither file present.
+local function replaceFileWindowsSafe(tmpPath, destPath)
+    local backupPath = destPath .. ".bak"
+    local destExists = fileExists(destPath)
+
+    if destExists then
+        pcall(os.remove, backupPath)
+        local backedUp, backupErr = os.rename(destPath, backupPath)
+        if not backedUp then
+            pcall(os.remove, tmpPath)
+            return false, "backup_failed:" .. tostring(backupErr)
+        end
+    end
+
+    local moved, moveErr = os.rename(tmpPath, destPath)
+    if moved then
+        if destExists then
+            pcall(os.remove, backupPath)
+        end
+        return true
+    end
+
+    pcall(os.remove, tmpPath)
+    if destExists then
+        local restored = os.rename(backupPath, destPath)
+        if not restored then
+            return false, "replace_failed_and_restore_failed:" .. tostring(moveErr)
+        end
+    end
+    return false, "replace_failed:" .. tostring(moveErr)
+end
+
 local function writeCapabilities(path, data, deviceOut)
     local tmpPath = tostring(path) .. ".tmp"
     local f = io.open(tmpPath, "w")
@@ -1680,14 +1799,13 @@ local function writeCapabilities(path, data, deviceOut)
         end
         f:write("DEVICES_OUTPUT_END\n")
     end
-    f:flush()
-    f:close()
-    local ok, renameErr = os.rename(tmpPath, path)
-    if not ok then
+    local flushOk, flushErr = f:flush()
+    local closeOk, closeErr = f:close()
+    if not flushOk or not closeOk then
         pcall(os.remove, tmpPath)
-        return false, renameErr
+        return false, "write_failed:" .. tostring(flushErr or closeErr)
     end
-    return true
+    return replaceFileWindowsSafe(tmpPath, path)
 end
 
 function readReadyState(runtime)
@@ -1695,6 +1813,61 @@ function readReadyState(runtime)
         return {}
     end
     return parseStateFile(runtime.runtimeState .. PATH_SEP .. "ready_to_go.env")
+end
+
+-- Ready-state currentness classifier ----------------------------------------
+-- ready_to_go.env is written by the platform bootstrap scripts (not by this
+-- reader) as a snapshot of whatever readiness/preflight run happened to run
+-- last. READY_TO_GO_LAST_CHECK_UTC records WHEN that snapshot was produced,
+-- but nothing in the file today proves it was produced BY the Setup
+-- invocation currently reading it -- there is no invocation/generation id.
+-- Age is therefore not identity: a five-second-old ready_to_go.env is
+-- exactly as unlinked to "this Check" as a five-month-old one. Every ordinary
+-- Setup/Check/Repair read of ready_to_go.env must go through this single
+-- classifier so there is exactly one freshness/currentness policy, and it
+-- must never report "current_for_this_invocation" -- that value is reserved
+-- for a future round that adds real invocation-linkage to the bootstrap
+-- writers (out of scope here; writers are not touched by this fix). The
+-- possible currentness values are the plain strings "cached", "historical",
+-- "invalid" and (reserved, never produced here) "current_for_this_invocation"
+-- -- not named locals, to stay within this file's top-level local budget.
+function classifyReadyState(readyState)
+    readyState = readyState or {}
+    local status = trim(readyState.READY_TO_GO_STATUS or "")
+    local detail = trim(readyState.READY_TO_GO_DETAIL or "")
+    local lastCheckUtc = trim(readyState.READY_TO_GO_LAST_CHECK_UTC or "")
+    if status == "" then
+        return {
+            currentness = "invalid",
+            status = "",
+            detail = detail,
+            lastCheckUtc = lastCheckUtc,
+        }
+    end
+    return {
+        -- A timestamp is provenance/display information only (see module
+        -- comment above) -- its presence upgrades "historical" (status with
+        -- no dating at all) to "cached" (status we can at least date), never
+        -- to "current_for_this_invocation".
+        currentness = (lastCheckUtc ~= "") and "cached" or "historical",
+        status = status,
+        detail = detail,
+        lastCheckUtc = lastCheckUtc,
+    }
+end
+
+-- Formats a classifyReadyState() result as a single human-readable line for
+-- Copy Summary / support-bundle text, always labelled as cached/historical
+-- provenance -- never phrased as a current fact.
+function formatCachedReadyStateLine(classified)
+    classified = classified or {}
+    if classified.currentness == "invalid" then
+        return "Previous readiness check: none recorded"
+    end
+    local label = (classified.currentness == "cached") and "cached" or "historical, no timestamp"
+    local when = (classified.lastCheckUtc ~= "") and (" at " .. classified.lastCheckUtc) or ""
+    local detail = (classified.detail ~= "") and (" (" .. classified.detail .. ")") or ""
+    return "Previous readiness check (" .. label .. when .. "): " .. classified.status .. detail
 end
 
 local function copyStateTable(input)
@@ -2610,6 +2783,7 @@ local function verifyRuntimePaths(state, publishExtState)
     local errors = {}
     local pythonOk = false
     local ffmpegOk = false
+    local ffmpegReason = ""
     local ffprobePath = ""
     local audioOk = false
     local torchRuntime = {
@@ -2664,7 +2838,8 @@ local function verifyRuntimePaths(state, publishExtState)
             ffprobePath = resolvedFfprobe
             if publishExtState then setExt("ffmpegPath", resolved.ffmpegPath) end
         else
-            errors[#errors + 1] = pairReason ~= "" and pairReason or "ffmpeg_unusable"
+            ffmpegReason = pairReason ~= "" and pairReason or "ffmpeg_unusable"
+            errors[#errors + 1] = ffmpegReason
         end
     end
 
@@ -2691,6 +2866,7 @@ local function verifyRuntimePaths(state, publishExtState)
         ffprobePath = ffprobePath,
         pythonOk = pythonOk,
         ffmpegOk = ffmpegOk,
+        ffmpegReason = ffmpegReason,
         audioOk = audioOk,
         detectedPythonVersion = detectedPythonVersion,
         supportedPythonFound = supportedPythonFound,
@@ -2705,7 +2881,8 @@ local function verifyRuntimePaths(state, publishExtState)
     }
 end
 
-local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
+local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript, publish)
+    if publish == nil then publish = true end
     local state = {}
     if type(bootstrapState) == "table" then
         for k, v in pairs(bootstrapState) do
@@ -2731,7 +2908,12 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         local venvPython = resolvePath(state.VENV_PYTHON or "")
         if venvPython ~= "" and fileExists(venvPython) and canRunPython(venvPython) then
             state.PYTHON_PATH = venvPython
-            updateBootstrapEnv(stateFile, { PYTHON_PATH = venvPython })
+            -- Check-only (publish=false) verifies current truth without
+            -- persisting it: keep the in-memory resolution for verification
+            -- but never write it back to bootstrap.env.
+            if publish then
+                updateBootstrapEnv(stateFile, { PYTHON_PATH = venvPython })
+            end
         end
     end
     if not state.FFMPEG_PATH or state.FFMPEG_PATH == "" then
@@ -2747,16 +2929,22 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
     end
 
-    if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
-        setExt("pythonPath", state.PYTHON_PATH)
-    elseif state.VENV_PYTHON and state.VENV_PYTHON ~= "" then
-        setExt("pythonPath", state.VENV_PYTHON)
-    end
-    if state.FFMPEG_PATH and state.FFMPEG_PATH ~= "" then
-        setExt("ffmpegPath", state.FFMPEG_PATH)
+    -- Check-only (publish=false) must not create, replace, normalize or clear
+    -- runtime-path ExtState. These writes are Setup/install publication only;
+    -- verifyRuntimePaths() below is likewise told not to publish so the
+    -- verify path stays fully non-mutating (see also verifyExistingSetup).
+    if publish then
+        if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
+            setExt("pythonPath", state.PYTHON_PATH)
+        elseif state.VENV_PYTHON and state.VENV_PYTHON ~= "" then
+            setExt("pythonPath", state.VENV_PYTHON)
+        end
+        if state.FFMPEG_PATH and state.FFMPEG_PATH ~= "" then
+            setExt("ffmpegPath", state.FFMPEG_PATH)
+        end
     end
 
-    local verification = verifyRuntimePaths(state)
+    local verification = verifyRuntimePaths(state, publish)
     local errors = verification.errors
     local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #errors == 0
     local function hasBootstrapRuntimeVerificationPass()
@@ -2802,12 +2990,18 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         and (bootstrapSuccess or verifiedRuntimeOk or authoritativeRuntimeVerified)
 
     if verifiedRuntimeOk and not runtimePolicyBlocked then
+        -- Only the publishing (Setup/install) path actually normalizes stored
+        -- bootstrap state. Check-only resolves the same status in memory for
+        -- this report and writes nothing back, so it must not claim otherwise.
+        local normalizationNote = publish
+            and "INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok"
+            or "INFO: post-bootstrap verification succeeded; reporting runtime as ok (check-only, stored state left unchanged)"
         if appendLogLine then
-            appendLogLine(logFile, "INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok")
+            appendLogLine(logFile, normalizationNote)
         else
             local lf = io.open(logFile, "a")
             if lf then
-                lf:write("INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok\n")
+                lf:write(normalizationNote .. "\n")
                 lf:close()
             end
         end
@@ -3052,9 +3246,12 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local readyState = readReadyState(runtime)
     local drumsepStatus, dksSupported, normalStemsSupported = resolveDrumsepPolicyState(readyState, profile, backend)
 
-    ensureDir(runtime.runtimeState)
     local capPath = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
-    local wroteCaps = writeCapabilities(capPath, {
+    if publish then
+    -- Creating the state directory is publication, not verification: a
+    -- Check-only run must not mkdir it on an otherwise clean machine.
+    ensureDir(runtime.runtimeState)
+    local wroteCaps, capsErr = writeCapabilities(capPath, {
         profile = profile,
         backend = backend,
         backendReason = backendReason,
@@ -3131,7 +3328,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     if not wroteCaps then
         local lf = io.open(logFile, "a")
         if lf then
-            lf:write("WARN: failed to write capabilities file: " .. tostring(capPath) .. "\n")
+            lf:write("WARN: failed to write capabilities file: " .. tostring(capPath) .. " reason=" .. tostring(capsErr) .. "\n")
             lf:close()
         end
     end
@@ -3155,6 +3352,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
             lf:close()
         end
     end
+    end -- publish
 
     if ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeRuntimeVerified))
         or (OS == "macOS"
@@ -3281,8 +3479,8 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     return { success = false, finalMessage = finalMessage }
 end
 
-safePerformPostBootstrap = function(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
-    local ok, result = pcall(performPostBootstrap, runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
+safePerformPostBootstrap = function(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript, publish)
+    local ok, result = pcall(performPostBootstrap, runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript, publish)
     if ok and type(result) == "table" then
         return result
     end
@@ -3333,9 +3531,13 @@ end
 local function isWindowsFfmpegShimPath(path)
     if not path or path == "" then return false end
     local p = tostring(path):lower()
-    return p:find("\\microsoft\\winget\\links\\ffmpeg.exe", 1, true)
-        or p:find("\\windowsapps\\ffmpeg", 1, true)
-        or p:find("/microsoft/winget/links/ffmpeg.exe", 1, true)
+    -- WindowsApps App Execution Alias stubs are non-functional without a
+    -- Store install and can prompt the Store when invoked directly, so they
+    -- stay rejected by path alone. WinGet's per-executable "Links" shims are
+    -- ordinary, directly runnable files -- whether one actually works is
+    -- decided by the real `-version` probe in canRunFfmpegPair, not by where
+    -- it lives on disk.
+    return p:find("\\windowsapps\\ffmpeg", 1, true)
         or p:find("/windowsapps/ffmpeg", 1, true)
 end
 
@@ -3541,27 +3743,28 @@ local function windowsVerifyTick()
             ffmpegPath = ""
         end
 
-        -- 2) bootstrap.env FFMPEG_PATH
-        local statePath = resolvePath(state.FFMPEG_PATH or "")
-        if statePath ~= "" and isWindowsFfmpegShimPath(statePath) then
-            shimFound = statePath
-            statePath = ""
-            state.FFMPEG_PATH = ""
-            updateBootstrapEnv(stateFile, { FFMPEG_PATH = "" })
-        end
-        if ffmpegPath == "" and isValidFfmpegPath(statePath) then
-            ffmpegPath = statePath
-        end
-
-        -- 3) manual override (ExtState)
+        -- 2) explicit/current user override (ExtState) -- a deliberate user
+        -- choice outranks stale persisted bootstrap state. Check only
+        -- verifies current truth; it never writes ExtState/bootstrap.env.
         local extPath = resolvePath(getExt("ffmpegPath"))
         if extPath ~= "" and isWindowsFfmpegShimPath(extPath) then
-            if shimFound == "" then shimFound = extPath end
+            shimFound = extPath
             extPath = ""
-            setExt("ffmpegPath", "")
         end
         if ffmpegPath == "" and isValidFfmpegPath(extPath) then
             ffmpegPath = extPath
+        end
+
+        -- 3) persisted/bootstrap.env FFMPEG_PATH -- candidate/evidence only,
+        -- still re-validated live above via isValidFfmpegPath.
+        local statePath = resolvePath(state.FFMPEG_PATH or "")
+        if statePath ~= "" and isWindowsFfmpegShimPath(statePath) then
+            if shimFound == "" then shimFound = statePath end
+            statePath = ""
+            state.FFMPEG_PATH = ""
+        end
+        if ffmpegPath == "" and isValidFfmpegPath(statePath) then
+            ffmpegPath = statePath
         end
 
         -- 4) PATH fallback (non-shim only)
@@ -3579,11 +3782,6 @@ local function windowsVerifyTick()
         if ffmpegPath == "" and shimFound ~= "" then
             state.STATUS = "missing_ffmpeg"
             state.STATUS_REASON = "ffmpeg_shim_path"
-            updateBootstrapEnv(stateFile, {
-                STATUS = "missing_ffmpeg",
-                STATUS_REASON = "ffmpeg_shim_path",
-                FFMPEG_PATH = "",
-            })
         end
 
         WINDOWS_VERIFY.ffmpegPath = ffmpegPath
@@ -3648,14 +3846,8 @@ local function windowsVerifyTick()
             state.PYTHON_PATH = WINDOWS_VERIFY.pythonPath
             state.FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath
             state.FFPROBE_PATH = WINDOWS_VERIFY.ffprobePath
-            updateBootstrapEnv(stateFile, {
-                STATUS = "ok",
-                STATUS_REASON = "",
-                PYTHON_PATH = WINDOWS_VERIFY.pythonPath,
-                FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath,
-                FFPROBE_PATH = WINDOWS_VERIFY.ffprobePath,
-            })
-            local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, WINDOWS_VERIFY.separatorScript)
+            -- Check only verifies current truth; it never persists it.
+            local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, WINDOWS_VERIFY.separatorScript, false)
             if not metadataComplete then
                 result.finalMessage[#result.finalMessage + 1] = ""
                 result.finalMessage[#result.finalMessage + 1] = "Note: Installer metadata was incomplete, but runtime checks passed."
@@ -3677,12 +3869,6 @@ local function windowsVerifyTick()
         if not WINDOWS_VERIFY.ffmpegOk and WINDOWS_VERIFY.ffmpegReason and WINDOWS_VERIFY.ffmpegReason ~= "" then
             state.STATUS = "missing_ffmpeg"
             state.STATUS_REASON = state.STATUS_REASON ~= "" and state.STATUS_REASON or WINDOWS_VERIFY.ffmpegReason
-            updateBootstrapEnv(stateFile, {
-                STATUS = "missing_ffmpeg",
-                STATUS_REASON = state.STATUS_REASON,
-                FFMPEG_PATH = "",
-                FFPROBE_PATH = "",
-            })
         end
         lines[#lines + 1] = ""
         if not WINDOWS_VERIFY.pythonOk then
@@ -3970,13 +4156,15 @@ local function setupResolveWindowsPython(runtime, state, capState)
     return extPython ~= "" and extPython or statePython, "unresolved"
 end
 
-local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion)
+-- Declared as a plain global function (not `local function`), matching
+-- buildCheckOnlyVerdict/buildLinuxFinalRows/buildCheckOnlyFinalMessage
+-- above: this makes it reachable by the headless behavioral test harness
+-- (tests/support/run_setup_final_rows_headless.lua), which dofile()s this
+-- script and can only see globals afterward. No functional change.
+function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
     local readyFile = runtime.runtimeState .. PATH_SEP .. "ready_to_go.env"
-    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
-    local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
-    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
     local state = fileExists(stateFile) and parseStateFile(stateFile) or {}
     local capState = fileExists(capFile) and parseStateFile(capFile) or {}
     local readyState = fileExists(readyFile) and parseStateFile(readyFile) or {}
@@ -4004,29 +4192,15 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
         and trim(capState.AUDIO_SEPARATOR or "") == "ok"
         and trim(capState.STEMWERK_CORE or "") == "ok"
     )
-    local bootstrapComplete = false
-    if fileExists(logFile) then
-        local f = io.open(logFile, "r")
-        if f then
-            local text = f:read("*a") or ""
-            f:close()
-            bootstrapComplete = text:find("Bootstrap complete", 1, true) ~= nil
-        end
-    end
-    local guard = (guardPath and guardPath ~= "" and fileExists(guardPath)) and readBootstrapGuard(guardPath) or {}
-    local guardBusy = false
-    if guardPath and guardPath ~= "" then
-        guardBusy = select(1, isBootstrapBusy(guardPath, pidFile))
-    end
-    local pid = readBootstrapPid(pidFile)
-    local staleRunning = (status == "running") and (not pid) and (not guardBusy) and readyHealthy
-    local staleGuardFailed = (trim(guard.STATUS or "") == "failed") and readyHealthy and bootstrapComplete and (not guardBusy)
-    local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running")
-        and readyHealthy and bootstrapComplete and not runtimePolicyRequiresRebuild(state)
-    if staleRunning or staleGuardFailed or staleFailedState then
-        status = "ok"
-        reason = ""
-    end
+    -- Without same-run identity linking bootstrap.env/ready_to_go.env/
+    -- bootstrap.log to this specific run, neither a cached readyHealthy
+    -- snapshot nor an append-only bootstrap.log's historical "Bootstrap
+    -- complete" line may rewrite the CURRENT bootstrap.env STATUS (running,
+    -- deps_failed, guard_failed, etc) to ok -- that was exactly the
+    -- release-blocking false positive this closes. status/reason above
+    -- (read directly from the current bootstrap.env) are authoritative and
+    -- are no longer overridden here; a running state stays running, a
+    -- failed state stays failed with its exact current reason.
     if verification == "" and readyHealthy then
         verification = "ok"
     end
@@ -4036,7 +4210,12 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
     if verification ~= "" and verification ~= "ok" then needsRepair = true end
     if trim(capState.AUDIO_SEPARATOR or "") == "missing" then needsRepair = true end
     if trim(capState.STEMWERK_CORE or "") == "missing" then needsRepair = true end
-    if trim(readyState.READY_TO_GO_STATUS or "") ~= "ok" then needsRepair = true end
+    -- ready_to_go.env is always a CACHED snapshot here (this overview does no
+    -- live probe of its own -- see classifyReadyState). A stale/old
+    -- READY_TO_GO_STATUS of anything other than "ok" (e.g. a broken reading
+    -- from months ago) must not, by itself, force needsRepair when every
+    -- other current-ish signal above (status/verification/deps/paths) is
+    -- healthy -- that was exactly the false-positive "needs Repair" bug.
     if python == "" or (not isAbsolutePath(python)) or (not fileExists(python)) then needsRepair = true end
     if ffmpeg == "" or (not fileExists(ffmpeg)) then needsRepair = true end
 
@@ -4064,6 +4243,13 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
         verification = verification ~= "" and verification or "not checked",
         readyToGoStatus = trim(readyState.READY_TO_GO_STATUS or "") ~= "" and trim(readyState.READY_TO_GO_STATUS or "") or "unknown",
         readyToGoDetail = trim(readyState.READY_TO_GO_DETAIL or ""),
+        -- Explicit provenance for readyToGoStatus/readyToGoDetail above: this
+        -- overview never performs a live readiness probe, so ready_to_go.env
+        -- can only ever be "cached"/"historical"/"invalid" here, never
+        -- current. Callers must use readyToGoCurrentness to decide whether
+        -- readyToGoStatus may be shown as a current fact (it may not).
+        readyToGoCurrentness = classifyReadyState(readyState).currentness,
+        readyToGoCachedAt = trim(readyState.READY_TO_GO_LAST_CHECK_UTC or ""),
         deps = deps,
         updateDetected = lastSetupVersion ~= "" and setupVersion ~= "" and lastSetupVersion ~= setupVersion,
         needsRepair = needsRepair,
@@ -4295,15 +4481,168 @@ local function buildLinuxStatusRows(state, pidAlive, pid, lastLogLine)
     return rows
 end
 
-local function buildLinuxFinalRows(state, capState, runtime, logFile, finalSuccess)
+-- Resolved Check-only verdict, built ONCE after all live probes and
+-- reconciliation (reconcileCheckVerification) are complete. This is the
+-- ONLY source buildLinuxFinalRows (and the verify-only Copy Summary text)
+-- may use for Python/backend/device display and verifiedRuntimeOk once a
+-- Check-only run has produced one: it must never be rebuilt independently
+-- from stale bootstrap.env/capabilities.env state, which can disagree with
+-- the live result (a previous run's python_missing/backend=cpu, etc).
+-- Lower-authority stale evidence is preserved as provenance text only --
+-- it never feeds verifiedRuntimeOk or the displayed values.
+function buildCheckOnlyVerdict(verification, checkProbe, backend, backendReasonLabel, backendNoteLabel, deviceNames, capState, state)
+    verification = verification or {}
+    checkProbe = checkProbe or {}
+    capState = capState or {}
+    state = state or {}
+    local verdict = {
+        isCheckOnly = true,
+        verifiedRuntimeOk = checkProbe.verifiedRuntimeOk == true,
+        pythonPath = trim(verification.pythonPath or ""),
+        pythonOk = verification.pythonOk == true,
+        ffmpegPath = trim(verification.ffmpegPath or ""),
+        ffmpegOk = verification.ffmpegOk == true,
+        backend = trim(backend or ""),
+        backendReason = trim(backendReasonLabel or ""),
+        backendNote = trim(backendNoteLabel or ""),
+        deviceNames = trim(deviceNames or ""),
+        adjustedErrors = checkProbe.adjustedErrors or {},
+        staleProvenance = {},
+    }
+    -- notProvenOnly: true only when the current verdict is not verified ok
+    -- AND the sole reason is that the Torch runtime probe itself could not
+    -- complete this invocation (never a genuine detected drift/failure). See
+    -- isNotProvenOnlyErrorSet above. Consumers (buildLinuxFinalRows,
+    -- buildCheckOnlyFinalMessage) use this to avoid presenting an incomplete
+    -- verification as if it were a genuine current failure.
+    verdict.notProvenOnly = (not verdict.verifiedRuntimeOk) and isNotProvenOnlyErrorSet(verdict.adjustedErrors)
+    -- Record (never apply) conflicts between stale recorded state and the
+    -- resolved current verdict, only when the current verdict is healthy --
+    -- a stale failure sitting alongside a genuinely current failure isn't a
+    -- "conflict", it's just more of the same current problem.
+    if verdict.verifiedRuntimeOk then
+        local staleReason = trim(state.STATUS_REASON or "")
+        if staleReason ~= "" and stalePythonBackendReason(staleReason) then
+            verdict.staleProvenance[#verdict.staleProvenance + 1] =
+                "stale bootstrap state reported " .. staleReason .. ", ignored because the current Python probe succeeded"
+        end
+        local staleBackend = trim(capState.BACKEND or state.BACKEND or "")
+        if staleBackend ~= "" and staleBackend:lower() ~= verdict.backend:lower() then
+            verdict.staleProvenance[#verdict.staleProvenance + 1] =
+                "stale capabilities reported backend=" .. staleBackend .. ", ignored because the current probe reported backend=" .. verdict.backend
+        end
+        if checkProbe.usedCachedReadyStateFallback then
+            verdict.staleProvenance[#verdict.staleProvenance + 1] =
+                "macOS cached ready_to_go/capabilities state also reported healthy; noted for context only, it was not used to decide the current Runtime result above"
+        end
+    end
+    return verdict
+end
+
+-- Small, pure, headlessly-testable three-state presentation mapping. This is
+-- the ONLY place that decides ok/failed/not_proven for a Linux Setup final
+-- result -- both the drawn window (buildLinuxFinalRows/linuxDrawFinal) and
+-- Copy Summary (buildCheckOnlyFinalMessage) render from its output rather
+-- than each re-deriving their own true/false split, so they cannot disagree.
+--
+-- `runtimeState` reflects the Torch runtime probe alone (ok/not_proven/failed
+-- from `verdict`) and is NEVER widened by an unrelated basic-check failure --
+-- a not-proven runtime stays not_proven even when, say, FFmpeg is missing
+-- (see the MIXED-state tests). `overallState`/`state`/`headline` fold in
+-- `allBasicChecksOk` too: a not-proven-only *overall* result additionally
+-- requires every basic file/dir check to have passed, because a genuine
+-- unrelated failure must never be hidden behind "verification was
+-- incomplete". `allBasicChecksOk` may be omitted (nil) by callers that only
+-- care about `runtimeState` and have no basic-checks list of their own --
+-- nil is treated as "no unrelated failure known", never as a false one.
+function deriveLinuxFinalPresentation(finalSuccess, allBasicChecksOk, verdict)
+    verdict = verdict or {}
+    local isCheckOnly = verdict.isCheckOnly == true
+
+    local runtimeState
+    if isCheckOnly then
+        if verdict.verifiedRuntimeOk then
+            runtimeState = "ok"
+        elseif verdict.notProvenOnly == true then
+            runtimeState = "not_proven"
+        else
+            runtimeState = "failed"
+        end
+    else
+        runtimeState = finalSuccess and "ok" or "failed"
+    end
+
+    -- runtimeKind mirrors runtimeState into the linuxValueColor "kind" vocabulary
+    -- (status_ok/note/status_fail) already used by buildLinuxFinalRows's Backend/
+    -- Reason rows, so any other Runtime-specific rendering (e.g. the step legend's
+    -- "1. Runtime" segment) can share the exact same not_proven-safe color mapping
+    -- instead of re-deriving its own.
+    local runtimeKind
+    if runtimeState == "ok" then
+        runtimeKind = "status_ok"
+    elseif runtimeState == "not_proven" then
+        runtimeKind = "note"
+    else
+        runtimeKind = "status_fail"
+    end
+
+    if finalSuccess then
+        return { state = "ok", headline = "Setup complete.", runtimeState = runtimeState, runtimeKind = runtimeKind, overallState = "ok" }
+    end
+
+    local notProvenOnly = allBasicChecksOk ~= false and verdict.notProvenOnly == true
+    if notProvenOnly then
+        return { state = "not_proven", headline = "Setup verification was incomplete.", runtimeState = runtimeState, runtimeKind = runtimeKind, overallState = "not_proven" }
+    end
+
+    return { state = "failed", headline = "Setup was not completely successful.", runtimeState = runtimeState, runtimeKind = runtimeKind, overallState = "failed" }
+end
+
+-- `verdict`, when supplied (the resolved Check-only verdict above), is the
+-- ONLY source for Python/backend/device rows -- capState/state are only
+-- consulted as a fallback for callers (Repair/bootstrap) that have not
+-- produced a resolved verdict of their own.
+function buildLinuxFinalRows(state, capState, runtime, logFile, finalSuccess, verdict)
     local rows = {}
-    local pythonPath = trim(capState.PYTHON_PATH or state.PYTHON_PATH or resolveLinuxPythonPath(state))
-    local ffmpegPath = trim(capState.FFMPEG_PATH or state.FFMPEG_PATH or resolveLinuxFfmpegPath(state))
-    local profile = trim(capState.PROFILE or state.PROFILE or "")
-    local backend = trim(capState.BACKEND or state.BACKEND or "")
-    local backendReason = prettyBackendReason(capState.BACKEND_REASON or state.BACKEND_REASON or "")
-    local backendNote = prettyBackendNote(capState.BACKEND_NOTE or state.BACKEND_NOTE or "")
-    local deviceNames = trim(capState.DEVICE_NAMES or "")
+    local pythonPath, ffmpegPath, profile, backend, backendReason, backendNote, deviceNames, verifiedRuntimeOk
+
+    if verdict and verdict.isCheckOnly then
+        pythonPath = verdict.pythonPath
+        ffmpegPath = verdict.ffmpegPath
+        profile = trim(capState.PROFILE or state.PROFILE or "")
+        backend = verdict.backend
+        backendReason = prettyBackendReason(verdict.backendReason)
+        backendNote = prettyBackendNote(verdict.backendNote)
+        deviceNames = verdict.deviceNames
+        verifiedRuntimeOk = verdict.verifiedRuntimeOk
+    else
+        pythonPath = trim(capState.PYTHON_PATH or state.PYTHON_PATH or resolveLinuxPythonPath(state))
+        ffmpegPath = trim(capState.FFMPEG_PATH or state.FFMPEG_PATH or resolveLinuxFfmpegPath(state))
+        profile = trim(capState.PROFILE or state.PROFILE or "")
+        backend = trim(capState.BACKEND or state.BACKEND or "")
+        backendReason = prettyBackendReason(capState.BACKEND_REASON or state.BACKEND_REASON or "")
+        backendNote = prettyBackendNote(capState.BACKEND_NOTE or state.BACKEND_NOTE or "")
+        deviceNames = trim(capState.DEVICE_NAMES or "")
+        verifiedRuntimeOk = finalSuccess
+    end
+
+    -- Backend/Reason rows below are Runtime-specific: their color must track
+    -- the Torch runtime's OWN state (deriveLinuxFinalPresentation's
+    -- runtimeState), not the overall finalSuccess flag -- otherwise a
+    -- not-proven-only Check (nothing found broken, verification just
+    -- incomplete) would render with the same red kind as a genuine current
+    -- failure. allBasicChecksOk is intentionally omitted (nil) here: an
+    -- unrelated basic-check failure must not repaint the Runtime rows
+    -- themselves, only the overall headline (see MIXED-state tests).
+    local presentation = deriveLinuxFinalPresentation(finalSuccess, nil, verdict)
+    local runtimeKind
+    if presentation.runtimeState == "ok" then
+        runtimeKind = "status_ok"
+    elseif presentation.runtimeState == "not_proven" then
+        runtimeKind = "note"
+    else
+        runtimeKind = "status_fail"
+    end
 
     rows[#rows + 1] = { label = "Python", value = pythonPath, kind = "python_path" }
     rows[#rows + 1] = { label = "FFmpeg", value = ffmpegPath, kind = "ffmpeg_path" }
@@ -4311,10 +4650,26 @@ local function buildLinuxFinalRows(state, capState, runtime, logFile, finalSucce
         rows[#rows + 1] = { label = "Profile", value = profile, kind = "muted" }
     end
     if backend ~= "" then
-        rows[#rows + 1] = { label = "Backend", value = backend, kind = finalSuccess and "status_ok" or "status_fail" }
+        rows[#rows + 1] = { label = "Backend", value = backend, kind = runtimeKind }
     end
-    if trim(state.STATUS_REASON or "") ~= "" then
+    if not (verdict and verdict.isCheckOnly) and trim(state.STATUS_REASON or "") ~= "" then
         rows[#rows + 1] = { label = "Reason", value = prettySetupReason(state.STATUS_REASON), kind = "muted", maxLines = 2 }
+    end
+    -- A Check-only current failure must be visible here too, not only in
+    -- Copy Summary (buildCheckOnlyFinalMessage) -- otherwise the visible
+    -- window can show all-[not colored red]-looking rows while the concrete
+    -- current reason only exists in the copyable text.
+    if verdict and verdict.isCheckOnly and not verifiedRuntimeOk then
+        local reasonText = formatCheckErrors(verdict.adjustedErrors)
+        if reasonText ~= "" and reasonText ~= "none" then
+            -- A not-proven-only reason (the Torch probe itself could not
+            -- complete, nothing was actually found broken) must not render
+            -- with the same red "status_fail" kind as a genuine current
+            -- failure -- that would visually claim a failure that was never
+            -- established. Same runtimeKind as the Backend row above, so the
+            -- two never disagree.
+            rows[#rows + 1] = { label = "Reason", value = reasonText, kind = runtimeKind, maxLines = 3 }
+        end
     end
     if backendReason ~= "" then
         rows[#rows + 1] = { label = "Backend reason", value = backendReason, kind = "muted", maxLines = 2 }
@@ -4327,6 +4682,9 @@ local function buildLinuxFinalRows(state, capState, runtime, logFile, finalSucce
     end
     rows[#rows + 1] = { label = "Capabilities", value = tostring((runtime and runtime.runtimeState or "") .. PATH_SEP .. "capabilities.env"), kind = "cap_path", maxLines = 1 }
     rows[#rows + 1] = { label = "Log", value = tostring(logFile or ""), kind = "log_path", maxLines = 1 }
+    if verdict and verdict.isCheckOnly and verdict.staleProvenance and #verdict.staleProvenance > 0 then
+        rows[#rows + 1] = { label = "Historical", value = table.concat(verdict.staleProvenance, " | "), kind = "muted", maxLines = 3 }
+    end
     return rows
 end
 
@@ -4664,7 +5022,7 @@ function refreshSetupMenuChoiceLabels(menu)
     end
 end
 
-local function drawLinuxStepLegend(x, y, w, state, logLines)
+local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
     local labels = {
         "1. Runtime",
         "2. Python + venv",
@@ -4679,6 +5037,16 @@ local function drawLinuxStepLegend(x, y, w, state, logLines)
         { 100, 255, 100 },
         { 255, 196, 80 },
     }
+    -- Step 1 ("Runtime") is the only step with a resolved pass/fail/not_proven
+    -- state once a Check-only final result exists (deriveLinuxFinalPresentation).
+    -- Unlike steps 2-5 (pure setup progress), it must never render the fixed
+    -- palette's failure red for a not_proven runtime. runtimeColor (0-1 floats,
+    -- e.g. from linuxValueColor(presentation.runtimeKind)) is only passed by the
+    -- FINAL window; the in-progress view (linuxDrawStatus) omits it and keeps the
+    -- pure progress palette, since ok/failed/not_proven isn't resolved yet there.
+    if runtimeColor then
+        colors[1] = { runtimeColor[1] * 255, runtimeColor[2] * 255, runtimeColor[3] * 255 }
+    end
     local total = tonumber(trim(state.STEP_TOTAL or ""))
     if not total or total < 1 then
         total = 5
@@ -4828,7 +5196,13 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     local minActionH = linuxLineHeight(84)
     local minLogH = math.max(96, linuxLineHeight(92))
     local capState = parseStateFile((LINUX_SETUP and LINUX_SETUP.capFile) or "")
-    local infoRows = buildLinuxFinalRows(state or {}, capState, LINUX_SETUP and LINUX_SETUP.runtime, LINUX_SETUP and LINUX_SETUP.logFile, finalSuccess)
+    local checkVerdict = LINUX_SETUP and LINUX_SETUP.checkVerdict
+    -- Single source of truth for how this window presents ok/failed/
+    -- not_proven -- see deriveLinuxFinalPresentation. linuxDrawFinal (gfx-only,
+    -- not headlessly testable) must only ever RENDER this mapping's fields,
+    -- never recompute its own binary success/failure logic.
+    local presentation = deriveLinuxFinalPresentation(finalSuccess, checkVerdict and checkVerdict.allBasicChecksOk, checkVerdict)
+    local infoRows = buildLinuxFinalRows(state or {}, capState, LINUX_SETUP and LINUX_SETUP.runtime, LINUX_SETUP and LINUX_SETUP.logFile, finalSuccess, checkVerdict)
     local leftRows, rightRows = splitLinuxInfoRows(infoRows, {
         "Python", "FFmpeg", "Profile", "Backend"
     })
@@ -4873,17 +5247,18 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     gfx.drawstr(setupUiLabel() .. " live setup UI active")
     y = y + linuxLineHeight(26)
     gfx.setfont(1, "Arial Bold", linuxFontSize(20))
-    if finalSuccess then
+    if presentation.overallState == "ok" then
         gfx.set(0.20, 0.92, 0.28, 1)
-        gfx.x = infoX + 14
-        gfx.y = y
-        gfx.drawstr("Setup complete.")
+    elseif presentation.overallState == "not_proven" then
+        -- Existing semantic "note"/warning color (see linuxValueColor's
+        -- "note" kind) -- not a genuine failure claim, but not success either.
+        gfx.set(0.96, 0.76, 0.45, 1)
     else
         gfx.set(1.0, 0.42, 0.12, 1)
-        gfx.x = infoX + 14
-        gfx.y = y
-        gfx.drawstr("Setup was not completely successful.")
     end
+    gfx.x = infoX + 14
+    gfx.y = y
+    gfx.drawstr(presentation.headline)
     y = y + linuxLineHeight(30)
     local rowTopY = y
     drawLinuxInfoRows(infoX + 14, rowTopY, infoColW, leftRows, leftWrap, infoRowGap, finalSuccess)
@@ -4898,7 +5273,10 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
         finalState.STEP_INDEX = trim(finalState.STEP_TOTAL or "") ~= "" and tostring(finalState.STEP_TOTAL) or "5"
     end
 
-    drawLinuxStepLegend(infoX + 14, legendY, infoW - 28, finalState, logLines or {})
+    -- Runtime step segment must reflect the same runtimeKind used for the
+    -- Backend/Reason rows above (linuxValueColor's status_ok/note/status_fail),
+    -- not the step legend's fixed progress palette -- see drawLinuxStepLegend.
+    drawLinuxStepLegend(infoX + 14, legendY, infoW - 28, finalState, logLines or {}, linuxValueColor(presentation.runtimeKind))
 
     local progressX = infoX + 14
     local progressW = infoW - 28
@@ -4913,13 +5291,17 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
 
     drawLinuxLogPanel(logX, logY, logW, logH, logLines or {}, "")
 
+    -- Repair/Rebuild venv/Set FFmpeg Path are a genuine-failure-only
+    -- recommendation: a not_proven result (nothing found broken, verification
+    -- just incomplete) must not imply anything needs fixing (see "no Repair
+    -- implication" requirement).
     local actionButtons = {}
-    if finalSuccess then
-        actionButtons[#actionButtons + 1] = { label = "Open STEMwerk", action = "open_stemwerk", style = "primary" }
-    else
+    if presentation.state == "failed" then
         actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair", style = "primary" }
         actionButtons[#actionButtons + 1] = { label = "Rebuild venv", action = "rebuild_venv" }
         actionButtons[#actionButtons + 1] = { label = "Set FFmpeg Path...", action = "set_ffmpeg_path" }
+    else
+        actionButtons[#actionButtons + 1] = { label = "Open STEMwerk", action = "open_stemwerk", style = "primary" }
     end
     actionButtons[#actionButtons + 1] = { label = "Open Log", action = "open_log" }
     actionButtons[#actionButtons + 1] = { label = "Open Capabilities", action = "open_cap" }
@@ -4993,6 +5375,30 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     gfx.drawstr(footerText)
 end
 
+-- bootstrap.log is append-only and never truncated/rewritten (see
+-- STEMwerk_Bootstrap_Linux.sh) -- for an ordinary Check (verifyExistingSetup)
+-- no bootstrap process runs at all, so the tail read by linuxSetupTick below
+-- can still be entirely leftover content from a genuinely old repair/rebuild
+-- run (e.g. "Mode: repair", "Successfully installed pip-...") with nothing
+-- distinguishing it from live current-invocation output. isCheckOnly is true
+-- only for the Check-only final window (LINUX_SETUP.checkVerdict is only
+-- ever set by verifyExistingSetup's showDeferredFinalWindow call), where
+-- every line in the tail is therefore historical by construction. This never
+-- deletes/truncates/rewrites the log file itself -- only the in-memory lines
+-- handed to the console renderer gain a leading provenance marker. Declared
+-- as a plain global function for the same headless-testability reason as
+-- buildCheckOnlyVerdict/buildLinuxFinalRows/buildCheckOnlyFinalMessage above.
+function labelHistoricalCheckOnlyLogLines(logLines, isCheckOnly)
+    if not isCheckOnly or not logLines or #logLines == 0 then
+        return logLines or {}
+    end
+    local out = { "--- Previous bootstrap/repair log (historical; not from this Check) ---" }
+    for _, line in ipairs(logLines) do
+        out[#out + 1] = line
+    end
+    return out
+end
+
 function linuxSetupTick()
     if not LINUX_SETUP then return end
     if not gfx then return end
@@ -5009,7 +5415,7 @@ function linuxSetupTick()
     enforceSetupWindowMinimum(LINUX_SETUP)
 
     local state = parseStateFile(LINUX_SETUP.stateFile)
-    local logLines = readTail(LINUX_SETUP.logFile, 400)
+    local logLines = labelHistoricalCheckOnlyLogLines(readTail(LINUX_SETUP.logFile, 400), LINUX_SETUP.checkVerdict ~= nil)
     local pidAlive, pid = linuxPidAlive(LINUX_SETUP.pidFile)
     if pidAlive then
         LINUX_SETUP.pidSeen = true
@@ -5752,10 +6158,25 @@ local function clearTransientSetupState(runtime)
     end
 end
 
+-- Pure decision, headlessly testable for the same reason as
+-- deriveLinuxFinalPresentation: should the final window's log panel open
+-- showing the TOP of the buffer (oldest lines first) instead of the bottom
+-- (most recent, the panel's normal default)? True only for a Check-only final
+-- window (checkVerdict ~= nil), the same condition linuxSetupTick uses to
+-- gate labelHistoricalCheckOnlyLogLines -- that function always prepends its
+-- historical-provenance marker as the very first line, and a panel that opens
+-- at the bottom scrolls that marker out of view (the live AMD retest showed
+-- the historical bootstrap.log tail with no visible marker, looking like
+-- unlabeled current output). A live run's log panel is unaffected and keeps
+-- opening at the bottom.
+function linuxLogPanelDefaultScrollToTop(checkVerdict)
+    return checkVerdict ~= nil
+end
+
 -- Verify-only path: fast file-existence checks only, no subprocess, no package import,
 -- no io.popen. Opens the existing LINUX_SETUP window in pre-finalized mode so REAPER
 -- never blocks. Heavy imports (torch, audio_separator) are intentionally skipped.
-showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript, reuseWindow)
+showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript, reuseWindow, checkVerdict)
     if not gfx then
         msgBox("STEMwerk Setup", table.concat(finalMessage or {}, "\n"), finalSuccess and 0 or 16)
         return
@@ -5783,12 +6204,16 @@ showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, fi
         finalMessage    = finalMessage,
         finalSuccess    = finalSuccess == true,
         summaryText     = table.concat(finalMessage or {}, "\n"),
+        checkVerdict    = checkVerdict,
         pidSeen         = false,
         startedAt       = os.time(),
         lastMouseCap    = 0,
         lastMouseWheel  = gfx.mouse_wheel or 0,
         fontScale       = getLinuxSetupFontScale(),
-        logScroll       = 0,
+        -- math.huge clamps down to the max scroll offset (top of the buffer)
+        -- on the panel's first draw via syncLinuxLogScroll -- see
+        -- linuxLogPanelDefaultScrollToTop above.
+        logScroll       = linuxLogPanelDefaultScrollToTop(checkVerdict) and math.huge or 0,
         stepFillByIndex = {},
         lastStepIndex   = 4,
         lastProgressPct = 100,
@@ -5913,22 +6338,24 @@ function reconcileCheckVerification(state, capState, readyState, verification, e
             removeError("torchaudio_missing_for_demucs")
         end
     end
-    if canAcceptMacReadyHealthyState then
-        removeError("torch_runtime_unsupported")
-        removeError("torch_runtime_probe_failed")
-        if torchVersionPinnedCompatible(torchVersion) then
-            removeError("torch_too_new_for_demucs")
-        end
-        if torchaudioVersion ~= "" and torchaudioVersion ~= "missing" then
-            removeError("torchaudio_missing_for_demucs")
-        end
-    end
+    -- canAcceptMacReadyHealthyState is NOT applied to adjustedErrors: without
+    -- same-invocation identity between the cached ready_to_go/capabilities
+    -- snapshot and this current probe, cached "healthy" evidence may never
+    -- remove, suppress, or downgrade a current negative probe result (e.g.
+    -- torch_runtime_probe_failed). It is retained only below as disclosure
+    -- provenance via usedCachedReadyStateFallback.
     local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #adjustedErrors == 0
     local result = {
         adjustedErrors = adjustedErrors,
         verifiedRuntimeOk = verifiedRuntimeOk,
         runtimeDriftDetected = verifiedRuntimeOk and "no" or verification.runtimeDriftDetected,
         runtimeDriftReason = verifiedRuntimeOk and "" or verification.runtimeDriftReason,
+        -- Disclosure only -- cached ready_to_go/capabilities looking healthy
+        -- is surfaced as historical/cached provenance here, but (per the
+        -- comment above) it never removes a current negative probe result,
+        -- so this can never silently fold into an ordinary "current probe
+        -- succeeded" verdict.
+        usedCachedReadyStateFallback = canAcceptMacReadyHealthyState == true,
     }
     result.torchVersion = firstNonEmpty(torchVersion, envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
     result.torchaudioVersion = firstNonEmpty(torchaudioVersion, envJsonValue(envJson, "torchaudio_version"))
@@ -5954,12 +6381,85 @@ function reconcileCheckVerification(state, capState, readyState, verification, e
     result.runtimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
     if verifiedRuntimeOk then
         result.runtimeVerifyDetail = "ok"
-    elseif canAcceptMacReadyHealthyState then
-        result.runtimeVerifyDetail = "not_checked"
     elseif result.runtimeVerifyDetail == "" then
+        -- A current failure's exact reason must survive here too -- cached
+        -- ready-state health (canAcceptMacReadyHealthyState) must never
+        -- replace it with a vague "not_checked".
         result.runtimeVerifyDetail = table.concat(adjustedErrors, ";")
     end
     return result
+end
+
+-- Builds the verify-only final message (the same text used for both the
+-- final-window display and Copy Summary -- there is only one text, so they
+-- can never disagree). When the run is not fully OK, every reason
+-- contributing to that -- including adjusted/current-evidence failures that
+-- the 5 basic file/dir checks below don't capture on their own (e.g. an
+-- unsupported Torch runtime with every file/path check still [OK]) -- must
+-- be visible here. A bare "one or more checks failed" with only [OK] rows
+-- underneath it is exactly the bug this closes.
+function buildCheckOnlyFinalMessage(checks, allOk, verdict, backend, drumsepStatus, dksSupported, normalStemsSupported, readyClassification)
+    verdict = verdict or {}
+    local finalMessage = {}
+    local allBasicChecksOk = true
+    for _, c in ipairs(checks or {}) do
+        if not c.ok then allBasicChecksOk = false end
+    end
+    -- A Check-only run where every basic file/dir check passed and the ONLY
+    -- unresolved condition is that the Torch runtime probe itself could not
+    -- complete (verdict.notProvenOnly) is truthfully different from a
+    -- genuine current failure: nothing was actually found broken,
+    -- verification was simply incomplete. Claiming "one or more checks
+    -- failed" / recommending Repair for that case is exactly the
+    -- false-failure-claim this closes -- see isNotProvenOnlyErrorSet.
+    -- deriveLinuxFinalPresentation is the same shared mapping the visible
+    -- final window (buildLinuxFinalRows/linuxDrawFinal) renders from, so
+    -- this text and the drawn UI can never disagree.
+    local presentation = deriveLinuxFinalPresentation(allOk, allBasicChecksOk, verdict)
+    if presentation.state == "ok" then
+        finalMessage[#finalMessage + 1] = "Verify only: runtime checks passed."
+        finalMessage[#finalMessage + 1] = "No files or settings were changed."
+    elseif presentation.state == "not_proven" then
+        finalMessage[#finalMessage + 1] = "Verify only: setup verification was incomplete."
+        finalMessage[#finalMessage + 1] = "Torch runtime could not be re-verified during this Check."
+    else
+        finalMessage[#finalMessage + 1] = "Verify only: one or more checks failed."
+        finalMessage[#finalMessage + 1] = "Run Repair / rerun setup to fix the installation."
+    end
+    finalMessage[#finalMessage + 1] = ""
+    for _, c in ipairs(checks or {}) do
+        finalMessage[#finalMessage + 1] = (c.ok and "[OK]  " or "[--]  ") .. c.label .. ": " .. tostring(c.detail)
+    end
+    if not allOk then
+        local reasonText = formatCheckErrors(verdict.adjustedErrors)
+        if reasonText ~= "none" then
+            finalMessage[#finalMessage + 1] = "[--]  Runtime checks: " .. reasonText
+        end
+    end
+    finalMessage[#finalMessage + 1] = ""
+    finalMessage[#finalMessage + 1] = "Detected backend: " .. tostring(backend)
+    -- drumsepStatus/dksSupported/normalStemsSupported come from
+    -- resolveDrumsepPolicyState, which (in this Check-only flow) has no live
+    -- DrumSep/model probe of its own and falls back to the cached
+    -- ready_to_go.env snapshot. The gating VALUES are unchanged (Repair/menu
+    -- behavior is out of scope for this fix); only the label below is new,
+    -- so a Check never reads as if it just re-verified DrumSep/models.
+    finalMessage[#finalMessage + 1] = "DrumSep: " .. tostring(drumsepStatus) .. " (from cached readiness state, not re-verified by this Check)"
+    finalMessage[#finalMessage + 1] = "DKS supported: " .. tostring(dksSupported)
+    finalMessage[#finalMessage + 1] = "Normal Stems supported: " .. tostring(normalStemsSupported)
+    if verdict.isCheckOnly and verdict.staleProvenance and #verdict.staleProvenance > 0 then
+        finalMessage[#finalMessage + 1] = ""
+        finalMessage[#finalMessage + 1] = "Historical/stale (not used for the result above):"
+        for _, note in ipairs(verdict.staleProvenance) do
+            finalMessage[#finalMessage + 1] = "  - " .. tostring(note)
+        end
+    end
+    if readyClassification and readyClassification.currentness ~= "invalid" then
+        finalMessage[#finalMessage + 1] = ""
+        finalMessage[#finalMessage + 1] = formatCachedReadyStateLine(readyClassification)
+        finalMessage[#finalMessage + 1] = "(cached/historical readiness above is not current -- it is not used to decide the Runtime result above)"
+    end
+    return finalMessage
 end
 
 verifyExistingSetup = function(runtime, separatorScript)
@@ -6000,38 +6500,37 @@ verifyExistingSetup = function(runtime, separatorScript)
           detail = fileExists(capFile) and capFile or "Not found" },
         { label = "Python path",         ok = pythonPath ~= "" and fileExists(pythonPath),
           detail = pythonPath ~= "" and pythonPath or "Not set in bootstrap.env" },
-        { label = "FFmpeg path",         ok = ffmpegPath ~= "" and fileExists(ffmpegPath),
-          detail = ffmpegPath ~= "" and ffmpegPath or "Not set in bootstrap.env/capabilities.env" },
+        buildFfmpegCheckRow(verification, ffmpegPath),
         { label = "Virtual environment", ok = pathExists(runtime.venvDir),
           detail = pathExists(runtime.venvDir) and runtime.venvDir or ("Not found: " .. tostring(runtime.venvDir)) },
     }
-    local allOk = true
+    local allBasicChecksOk = true
     for _, c in ipairs(checks) do
-        if not c.ok then allOk = false end
+        if not c.ok then allBasicChecksOk = false end
     end
 
     local drumsepStatus, dksSupported, normalStemsSupported = resolveDrumsepPolicyState(readyState, profile, backend)
-    allOk = allOk and verifiedRuntimeOk
+    local allOk = allBasicChecksOk and verifiedRuntimeOk
 
-    local finalMessage = {}
-    if allOk then
-        finalMessage[#finalMessage + 1] = "Verify only: runtime checks passed."
-        finalMessage[#finalMessage + 1] = "No files or settings were changed."
-    else
-        finalMessage[#finalMessage + 1] = "Verify only: one or more checks failed."
-        finalMessage[#finalMessage + 1] = "Run Repair / rerun setup to fix the installation."
-    end
-    finalMessage[#finalMessage + 1] = ""
-    for _, c in ipairs(checks) do
-        finalMessage[#finalMessage + 1] = (c.ok and "[OK]  " or "[--]  ") .. c.label .. ": " .. tostring(c.detail)
-    end
-    finalMessage[#finalMessage + 1] = ""
-    finalMessage[#finalMessage + 1] = "Detected backend: " .. tostring(backend)
-    finalMessage[#finalMessage + 1] = "DrumSep: " .. tostring(drumsepStatus)
-    finalMessage[#finalMessage + 1] = "DKS supported: " .. tostring(dksSupported)
-    finalMessage[#finalMessage + 1] = "Normal Stems supported: " .. tostring(normalStemsSupported)
+    -- Resolved Check-only verdict: built once, after every live probe and
+    -- reconciliation above is complete. Both the final-window rows
+    -- (buildLinuxFinalRows, via LINUX_SETUP.checkVerdict) and the Copy
+    -- Summary text (buildCheckOnlyFinalMessage, right below) are driven from
+    -- this SAME object, so they cannot disagree with each other or with the
+    -- live result.
+    local checkVerdict = buildCheckOnlyVerdict(verification, checkProbe, backend, backendReason, nil, deviceNames, capState, state)
+    -- Stashed so linuxDrawFinal (which only has LINUX_SETUP.checkVerdict, not
+    -- the local `checks` list above) can still gate the not-proven-only
+    -- OVERALL presentation on it via deriveLinuxFinalPresentation -- an
+    -- unrelated basic-check failure (e.g. missing FFmpeg) must still force
+    -- the overall headline/Repair guidance to failed even when the Torch
+    -- probe itself was merely not proven (see the MIXED-state tests).
+    checkVerdict.allBasicChecksOk = allBasicChecksOk
 
-    showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, allOk, separatorScript)
+    local readyClassification = classifyReadyState(readyState)
+    local finalMessage = buildCheckOnlyFinalMessage(checks, allOk, checkVerdict, backend, drumsepStatus, dksSupported, normalStemsSupported, readyClassification)
+
+    showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, allOk, separatorScript, nil, checkVerdict)
 end
 
 -- (showExistingRuntimeSetupMenu removed: replaced by non-blocking startExistingRuntimeSetupMenu below)
@@ -6460,69 +6959,108 @@ function existingRuntimeSetupMenuTick()
     gfx.drawstr(ellipsizeToWidth(setupText("setup_existing_runtime_found", "Existing runtime found. Choose what to do:"), leftColW, "Arial Bold", linuxFontSize(14), 0))
     y = y + linuxLineHeight(26)
 
+    -- Environment details card: Runtime/Models/Setup script/Recorded setup
+    -- version are grouped into one bordered info block so they read as a
+    -- single related unit instead of three separate floating pieces. Same
+    -- data sources, same wrap/ellipsis helpers, same row order as before --
+    -- only the container and shared left inset are new.
     if not tiny then
-        local runtimeChars = math.max(18, math.floor((leftColW - 28) / math.max(6, linuxFontSize(12) * 0.58)))
-        local runtimeLines = cappedWrap(tostring(m.runtime.base), runtimeChars, compact and 1 or 3)
-        local pathBoxH = linuxLineHeight(18) + (#runtimeLines * linuxLineHeight(15)) + 14
-        if y + pathBoxH <= infoBottom then
-            drawLinuxPanel(bodyX, y, leftColW, pathBoxH, { themeCardBg[1], themeCardBg[2], themeCardBg[3], 1 }, { themeBorder[1], themeBorder[2], themeBorder[3], 1 })
-            gfx.setfont(1, "Arial", linuxFontSize(12))
-            gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
-            gfx.x = bodyX + 14
-            gfx.y = y + 6
-            gfx.drawstr(setupText("setup_runtime_label", "Runtime:"))
-            gfx.setfont(1, "Courier New", linuxFontSize(12))
-            gfx.set(themeText[1], themeText[2], themeText[3], 1)
-            local pathY = y + 6 + linuxLineHeight(16)
-            for _, line in ipairs(runtimeLines) do
-                gfx.x = bodyX + 14
-                gfx.y = pathY
-                gfx.drawstr(line)
-                pathY = pathY + linuxLineHeight(15)
-            end
-            y = y + pathBoxH + 10
-        end
-    end
+        local groupPad = 10
+        local rowGap = 8
+        local groupInnerW = leftColW - (groupPad * 2)
+        local rowH = linuxLineHeight(16)
 
-    if not tiny then
         gfx.setfont(1, "Arial", linuxFontSize(12))
+        local runtimeLabel = setupText("setup_runtime_label", "Runtime:")
         local modelLabel = setupText("setup_models_label", "Models: ")
-        local modelLabelW = gfx.measurestr(modelLabel)
-        local modelChars = math.max(16, math.floor((leftColW - modelLabelW) / math.max(6, linuxFontSize(12) * 0.58)))
-        local modelLines = cappedWrap(tostring(m.modelDir), modelChars, compact and 1 or 2)
-        local modelH = math.max(1, #modelLines) * linuxLineHeight(16)
-        if y + modelH <= infoBottom then
-            gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
-            gfx.x = bodyX
-            gfx.y = y
-            gfx.drawstr(modelLabel)
-            gfx.set(themeText[1], themeText[2], themeText[3], 1)
-            for i, line in ipairs(modelLines) do
-                gfx.x = bodyX + modelLabelW
-                gfx.y = y + ((i - 1) * linuxLineHeight(16))
-                gfx.drawstr(line)
-            end
-            y = y + modelH + linuxLineHeight(4)
-        end
-    end
 
-    -- Version info block
-    if not tiny and y + linuxLineHeight(16) <= infoBottom then
-        gfx.setfont(1, "Arial", linuxFontSize(12))
+        -- Version info block
         local cv = m.currentVersion or ""
         local lv = m.lastSetupVersion or ""
-        if cv ~= "" or lv ~= "" then
-            local verLabel = setupText("setup_script_label", "Setup script") .. ": v" .. (cv ~= "" and cv or "?")
+        local showVersionRows = (cv ~= "" or lv ~= "")
+        local scriptLabel = setupText("setup_script_label", "Setup script") .. ":"
+        local recordedLabel = setupText("setup_last_run_label", "Recorded setup version") .. ":"
+
+        -- All four rows share one value column so the block reads as an
+        -- aligned table rather than four independently-indented lines.
+        local labelW = math.max(gfx.measurestr(runtimeLabel), gfx.measurestr(modelLabel))
+        if showVersionRows then
+            labelW = math.max(labelW, gfx.measurestr(scriptLabel), gfx.measurestr(recordedLabel))
+        end
+        local valueX = labelW + 8
+        local valueW = math.max(20, groupInnerW - valueX)
+
+        local runtimeValue = ellipsizeToWidth(tostring(m.runtime.base), valueW, "Courier New", linuxFontSize(12), 0)
+        local modelValue = ellipsizeToWidth(tostring(m.modelDir), valueW, "Arial", linuxFontSize(12), 0)
+
+        local scriptValue, recordedValue
+        if showVersionRows then
+            scriptValue = "v" .. (cv ~= "" and cv or "?")
             if lv ~= "" then
-                verLabel = verLabel .. "   " .. setupText("setup_last_run_label", "Last run") .. ": v" .. lv
+                recordedValue = "v" .. lv
             else
-                verLabel = verLabel .. "   " .. setupText("setup_last_run_label", "Last run") .. ": " .. setupText("setup_unknown", "(unknown)")
+                recordedValue = setupText("setup_unknown", "(unknown)")
             end
+        end
+
+        local rowCount = showVersionRows and 4 or 2
+        local groupContentH = (rowH * rowCount) + (rowGap * (rowCount - 1))
+        local groupH = groupContentH + (groupPad * 2)
+
+        if y + groupH <= infoBottom then
+            drawLinuxPanel(bodyX, y, leftColW, groupH, { themeCardBg[1], themeCardBg[2], themeCardBg[3], 1 }, { themeBorder[1], themeBorder[2], themeBorder[3], 1 })
+
+            local rowX = bodyX + groupPad
+            local rowY = y + groupPad
+
+            gfx.setfont(1, "Arial", linuxFontSize(12))
             gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
-            gfx.x = bodyX
-            gfx.y = y
-            gfx.drawstr(verLabel)
-            y = y + linuxLineHeight(16)
+            gfx.x = rowX
+            gfx.y = rowY
+            gfx.drawstr(runtimeLabel)
+            gfx.setfont(1, "Courier New", linuxFontSize(12))
+            gfx.set(themeText[1], themeText[2], themeText[3], 1)
+            gfx.x = rowX + valueX
+            gfx.y = rowY
+            gfx.drawstr(runtimeValue)
+            rowY = rowY + rowH + rowGap
+
+            gfx.setfont(1, "Arial", linuxFontSize(12))
+            gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
+            gfx.x = rowX
+            gfx.y = rowY
+            gfx.drawstr(modelLabel)
+            gfx.set(themeText[1], themeText[2], themeText[3], 1)
+            gfx.x = rowX + valueX
+            gfx.y = rowY
+            gfx.drawstr(modelValue)
+            rowY = rowY + rowH
+
+            if showVersionRows then
+                rowY = rowY + rowGap
+                gfx.setfont(1, "Arial", linuxFontSize(12))
+                gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
+                gfx.x = rowX
+                gfx.y = rowY
+                gfx.drawstr(scriptLabel)
+                gfx.set(themeText[1], themeText[2], themeText[3], 1)
+                gfx.x = rowX + valueX
+                gfx.y = rowY
+                gfx.drawstr(scriptValue)
+                rowY = rowY + rowH + rowGap
+
+                gfx.setfont(1, "Arial", linuxFontSize(12))
+                gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
+                gfx.x = rowX
+                gfx.y = rowY
+                gfx.drawstr(recordedLabel)
+                gfx.set(themeText[1], themeText[2], themeText[3], 1)
+                gfx.x = rowX + valueX
+                gfx.y = rowY
+                gfx.drawstr(recordedValue)
+            end
+
+            y = y + groupH + 10
         end
     end
 
@@ -6552,7 +7090,7 @@ function existingRuntimeSetupMenuTick()
         end
         local rowChars = math.max(18, math.floor((leftColW - 20) / math.max(6, linuxFontSize(11) * 0.56)))
         gfx.setfont(1, "Arial", linuxFontSize(11))
-        gfx.set(0.78, 0.80, 0.84, 1)
+        gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
         for _, line in ipairs(rows) do
             local wrapped = cappedWrap(line, rowChars, 2)
             for _, wl in ipairs(wrapped) do
@@ -7028,7 +7566,9 @@ do
         end
         if OS ~= "Windows" then
             choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }
-            choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
+            if OS == "Linux" then
+                choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
+            end
             choices[#choices + 1] = { id = "delete-models", accent = { 0.88, 0.28, 0.28 } }
             choices[#choices + 1] = { id = "delete-runtime", accent = { 0.82, 0.22, 0.22 } }
         end
@@ -7093,6 +7633,16 @@ do
         else
             showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
         end
+    end
+
+    -- Test seam: when a headless test harness dofile()s this script to
+    -- reach the pure/global helper functions defined above (e.g. to test
+    -- buildCheckOnlyVerdict/buildLinuxFinalRows directly), it sets this
+    -- global first to skip the real auto-invoking setup flow below. This
+    -- flag is never set during real REAPER usage, so normal behavior is
+    -- unchanged.
+    if STEMWERK_SETUP_HEADLESS_TEST then
+        return
     end
 
     local runtime = getRuntimePaths()

@@ -80,7 +80,7 @@ bundled_payload_available() {
     && [ -f "${BUNDLED_PAYLOAD_DIR}/manifest.json" ] \
     && [ -d "${BUNDLED_PAYLOAD_DIR}/wheels" ] \
     && [ -d "${BUNDLED_PAYLOAD_DIR}/python" ] \
-    && { [ -x "${BUNDLED_PAYLOAD_DIR}/ffmpeg/ffmpeg" ] || [ -x "${BUNDLED_PAYLOAD_DIR}/ffmpeg/bin/ffmpeg" ]; }
+    && bundled_ffmpeg_pair_works
 }
 
 bundled_ffmpeg_path() {
@@ -88,12 +88,82 @@ bundled_ffmpeg_path() {
     "${BUNDLED_PAYLOAD_DIR}/ffmpeg/ffmpeg" \
     "${BUNDLED_PAYLOAD_DIR}/ffmpeg/bin/ffmpeg"
   do
-    if [ -x "${_p}" ]; then
+    if [ -e "${_p}" ]; then
       printf "%s\n" "${_p}"
       return 0
     fi
   done
   return 1
+}
+
+ffprobe_path_for_ffmpeg() {
+  _ffmpeg_candidate="${1:-}"
+  [ -n "${_ffmpeg_candidate}" ] || return 1
+  _ffprobe_candidate="$(dirname "${_ffmpeg_candidate}")/ffprobe"
+  [ -x "${_ffprobe_candidate}" ] || return 1
+  printf "%s\n" "${_ffprobe_candidate}"
+}
+
+validate_ffmpeg_pair() {
+  _ffmpeg_candidate="${1:-}"
+  FFMPEG_VALIDATED="no"
+  FFMPEG_VALIDATION_REASON=""
+  FFPROBE=""
+  if [ -z "${_ffmpeg_candidate}" ] || [ ! -e "${_ffmpeg_candidate}" ]; then
+    FFMPEG_VALIDATION_REASON="ffmpeg_not_found"
+    return 1
+  fi
+  if [ ! -x "${_ffmpeg_candidate}" ]; then
+    FFMPEG_VALIDATION_REASON="ffmpeg_not_executable"
+    return 1
+  fi
+  _ffprobe_candidate="$(dirname "${_ffmpeg_candidate}")/ffprobe"
+  if [ ! -e "${_ffprobe_candidate}" ]; then
+    FFMPEG_VALIDATION_REASON="ffprobe_not_found"
+    return 1
+  fi
+  if [ ! -x "${_ffprobe_candidate}" ]; then
+    FFMPEG_VALIDATION_REASON="ffprobe_not_executable"
+    return 1
+  fi
+  _ffmpeg_output="$("${_ffmpeg_candidate}" -version 2>&1)"
+  _ffmpeg_rc=$?
+  if [ "${_ffmpeg_rc}" -ne 0 ]; then
+    case "${_ffmpeg_output}" in
+      *dyld*|*"Library not loaded"*) FFMPEG_VALIDATION_REASON="ffmpeg_dependency_failed" ;;
+      *) FFMPEG_VALIDATION_REASON="ffmpeg_validation_failed" ;;
+    esac
+    return 1
+  fi
+  _ffmpeg_first_line="$(printf "%s\n" "${_ffmpeg_output}" | sed -n '1p')"
+  case "${_ffmpeg_first_line}" in
+    ffmpeg\ version\ *) ;;
+    *) FFMPEG_VALIDATION_REASON="ffmpeg_identity_mismatch"; return 1 ;;
+  esac
+  _ffprobe_output="$("${_ffprobe_candidate}" -version 2>&1)"
+  _ffprobe_rc=$?
+  if [ "${_ffprobe_rc}" -ne 0 ]; then
+    case "${_ffprobe_output}" in
+      *dyld*|*"Library not loaded"*) FFMPEG_VALIDATION_REASON="ffprobe_dependency_failed" ;;
+      *) FFMPEG_VALIDATION_REASON="ffprobe_validation_failed" ;;
+    esac
+    return 1
+  fi
+  _ffprobe_first_line="$(printf "%s\n" "${_ffprobe_output}" | sed -n '1p')"
+  case "${_ffprobe_first_line}" in
+    ffprobe\ version\ *) ;;
+    *) FFMPEG_VALIDATION_REASON="ffprobe_identity_mismatch"; return 1 ;;
+  esac
+  FFMPEG="${_ffmpeg_candidate}"
+  FFPROBE="${_ffprobe_candidate}"
+  FFMPEG_VALIDATED="yes"
+  FFMPEG_VALIDATION_REASON="ffmpeg_pair_valid"
+  return 0
+}
+
+bundled_ffmpeg_pair_works() {
+  _bundled_candidate="$(bundled_ffmpeg_path || true)"
+  validate_ffmpeg_pair "${_bundled_candidate}"
 }
 
 bundled_wheels_dir() {
@@ -201,6 +271,11 @@ ensure_core_model_cache() {
       return 0
       ;;
   esac
+  if ! validate_ffmpeg_pair "${FFMPEG:-}"; then
+    CORE_MODEL_PREFETCH_REASON="${FFMPEG_VALIDATION_REASON:-ffmpeg_validation_failed}"
+    log "core_model_prefetch_blocked=${CORE_MODEL_PREFETCH_REASON}"
+    return 2
+  fi
   _prefetch_path="${PATH:-}"
   _prefetch_ffmpeg_path="${FFMPEG:-}"
   if [ -n "${_prefetch_ffmpeg_path}" ] && [ -x "${_prefetch_ffmpeg_path}" ]; then
@@ -213,7 +288,8 @@ ensure_core_model_cache() {
     log "core_model_prefetch_ffmpeg_path=missing"
     log "core_model_prefetch_path_prefix=none"
   fi
-  PATH="${_prefetch_path}" FFMPEG_PATH="${_prefetch_ffmpeg_path}" STEMWERK_FFMPEG_PATH="${_prefetch_ffmpeg_path}" IMAGEIO_FFMPEG_EXE="${_prefetch_ffmpeg_path}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
+  _prefetch_log="$(mktemp "${TMPDIR:-/tmp}/stemwerk-core-model-prefetch.XXXXXX")" || return 1
+  PATH="${_prefetch_path}" FFMPEG_PATH="${_prefetch_ffmpeg_path}" STEMWERK_FFMPEG_PATH="${_prefetch_ffmpeg_path}" IMAGEIO_FFMPEG_EXE="${_prefetch_ffmpeg_path}" "${_py}" - <<PY > "${_prefetch_log}" 2>&1
 from audio_separator.separator import Separator
 from stemwerk_core.models import resolve_audio_separator_model_id
 
@@ -223,11 +299,24 @@ for model_name in ("htdemucs", "htdemucs_ft", "htdemucs_6s"):
     sep.load_model(resolve_audio_separator_model_id(model_name))
 print("STEMWERK_CORE_MODEL_PREFETCH ok")
 PY
-  [ $? -eq 0 ] || return 1
+  _prefetch_rc=$?
+  cat "${_prefetch_log}" >> "${LOG_FILE}" 2>/dev/null || true
+  if [ "${_prefetch_rc}" -ne 0 ]; then
+    if grep -Eiq "FFmpeg is not installed|check_ffmpeg_installed|No such file or directory.*ffmpeg|dyld.*ffmpeg" "${_prefetch_log}"; then
+      CORE_MODEL_PREFETCH_REASON="ffmpeg_constructor_failed"
+      rm -f "${_prefetch_log}" >/dev/null 2>&1 || true
+      return 2
+    fi
+    CORE_MODEL_PREFETCH_REASON="core_model_download_failed"
+    rm -f "${_prefetch_log}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  rm -f "${_prefetch_log}" >/dev/null 2>&1 || true
   _status="$(verify_core_model_cache "${_model_dir}")"
   case "${_status}" in
     *$'\nfast=ok'$'\n'*$'quality=ok'$'\n'*$'sixstem=ok'*|*fast=ok*quality=ok*sixstem=ok*) return 0 ;;
   esac
+  CORE_MODEL_PREFETCH_REASON="core_model_cache_incomplete_after_prefetch"
   return 1
 }
 
@@ -278,10 +367,25 @@ write_ready_to_go_state() {
   _fast="$(printf "%s\n" "${_core}" | awk -F= '/^fast=/{print $2; exit}')"
   _quality="$(printf "%s\n" "${_core}" | awk -F= '/^quality=/{print $2; exit}')"
   _sixstem="$(printf "%s\n" "${_core}" | awk -F= '/^sixstem=/{print $2; exit}')"
+  _ffmpeg_status="missing"
+  _prior_ffmpeg_reason="${FFMPEG_VALIDATION_REASON:-not_checked}"
+  _ffmpeg_reason="${_prior_ffmpeg_reason}"
+  if validate_ffmpeg_pair "${FFMPEG:-}"; then
+    _ffmpeg_status="ok"
+    _ffmpeg_reason="ffmpeg_pair_valid"
+  else
+    case "${_prior_ffmpeg_reason}" in
+      ""|not_checked|ffmpeg_pair_valid) _ffmpeg_reason="${FFMPEG_VALIDATION_REASON:-ffmpeg_validation_failed}" ;;
+      *)
+        FFMPEG_VALIDATION_REASON="${_prior_ffmpeg_reason}"
+        _ffmpeg_reason="${_prior_ffmpeg_reason}"
+        ;;
+    esac
+  fi
   _drumsep_status="ready"
   _dks_supported="true"
   _normal_stems_supported="false"
-  if [ "${_main_runtime_status}" = "ok" ] && [ "${_fast}" = "ok" ] && [ "${_quality}" = "ok" ] && [ "${_sixstem}" = "ok" ]; then
+  if [ "${_ffmpeg_status}" = "ok" ] && [ "${_main_runtime_status}" = "ok" ] && [ "${_fast}" = "ok" ] && [ "${_quality}" = "ok" ] && [ "${_sixstem}" = "ok" ]; then
     _normal_stems_supported="true"
   fi
   if [ "${MAC_ARCH}" = "x86_64" ] && [ "${_detail}" = "unsupported_mac_intel" ]; then
@@ -307,15 +411,18 @@ write_ready_to_go_state() {
   if [ "${_main_runtime_status}" != "ok" ]; then
     _ready="missing"
   fi
+  if [ "${_ffmpeg_status}" != "ok" ]; then
+    _ready="missing"
+  fi
   _normal_model_ready="no"
   _quality_ready="no"
   _six_stem_ready="no"
   _direct_kit_ready="no"
   _kit_split_ready="no"
-  [ "${_main_runtime_status}" = "ok" ] && [ "${_fast}" = "ok" ] && _normal_model_ready="yes"
-  [ "${_main_runtime_status}" = "ok" ] && [ "${_quality}" = "ok" ] && _quality_ready="yes"
-  [ "${_main_runtime_status}" = "ok" ] && [ "${_sixstem}" = "ok" ] && _six_stem_ready="yes"
-  if [ "${_runtime_status}" = "ok" ] && [ "${_drumsep_model_status}" = "ok" ]; then
+  [ "${_ffmpeg_status}" = "ok" ] && [ "${_main_runtime_status}" = "ok" ] && [ "${_fast}" = "ok" ] && _normal_model_ready="yes"
+  [ "${_ffmpeg_status}" = "ok" ] && [ "${_main_runtime_status}" = "ok" ] && [ "${_quality}" = "ok" ] && _quality_ready="yes"
+  [ "${_ffmpeg_status}" = "ok" ] && [ "${_main_runtime_status}" = "ok" ] && [ "${_sixstem}" = "ok" ] && _six_stem_ready="yes"
+  if [ "${_ffmpeg_status}" = "ok" ] && [ "${_runtime_status}" = "ok" ] && [ "${_drumsep_model_status}" = "ok" ]; then
     _direct_kit_ready="yes"
     [ "${_normal_model_ready}" = "yes" ] && _kit_split_ready="yes"
   fi
@@ -324,6 +431,10 @@ write_ready_to_go_state() {
     echo "READY_TO_GO_DETAIL=${_detail}"
     echo "READY_TO_GO_LAST_CHECK_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)"
     echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"
+    echo "FFMPEG_STATUS=${_ffmpeg_status}"
+    echo "FFMPEG_REASON=${_ffmpeg_reason}"
+    echo "FFMPEG_PATH=${FFMPEG:-}"
+    echo "FFPROBE_PATH=${FFPROBE:-}"
     echo "CORE_MODEL_CACHE_DIR=${_model_dir}"
     echo "CORE_MODEL_FAST_STATUS=${_fast}"
     echo "CORE_MODEL_QUALITY_STATUS=${_quality}"
@@ -1159,6 +1270,9 @@ write_state() {
       echo "SYSTEM_PYTHON_USED=${SYSTEM_PYTHON_USED}"
       echo "MACOS_BUNDLED_PAYLOAD_STATUS=${MACOS_BUNDLED_PAYLOAD_STATUS}"
       echo "MACOS_BUNDLED_FFMPEG_STATUS=${MACOS_BUNDLED_FFMPEG_STATUS}"
+      echo "MACOS_BUNDLED_FFMPEG_REASON=${MACOS_BUNDLED_FFMPEG_REASON:-not_checked}"
+      echo "MACOS_FFMPEG_VALIDATED=${FFMPEG_VALIDATED:-no}"
+      echo "MACOS_FFMPEG_VALIDATION_REASON=${FFMPEG_VALIDATION_REASON:-not_checked}"
       echo "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
       echo "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
       echo "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
@@ -1178,6 +1292,7 @@ write_state() {
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
       [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
+      [ -n "${FFPROBE:-}" ] && echo "FFPROBE_PATH=${FFPROBE}"
       [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
       [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
     } > "${STATE_FILE}"
@@ -1318,6 +1433,7 @@ MACOS_BUNDLED_FFMPEG_STATUS="missing"
 MACOS_BUNDLED_WHEELHOUSE_STATUS="missing"
 MACOS_BUNDLED_MODELS_STATUS="missing"
 MACOS_BUNDLED_DRUMSEP_STATUS="missing"
+MACOS_BUNDLED_FFMPEG_REASON="not_checked"
 MACOS_MANAGED_WHEELHOUSE_STATUS="missing"
 MACOS_ARCH_GUARD_STATUS="not_run"
 MACOS_ARCH_GUARD_DETAIL=""
@@ -1326,10 +1442,22 @@ MANAGED_WHEELS_DIR=""
 
 if bundled_payload_available; then
   MACOS_BUNDLED_PAYLOAD_STATUS="present"
+  MACOS_BUNDLED_FFMPEG_STATUS="validated"
+  MACOS_BUNDLED_FFMPEG_REASON="ffmpeg_pair_valid"
   BUNDLED_WHEELS_DIR="$(bundled_wheels_dir || true)"
   [ -n "${BUNDLED_WHEELS_DIR}" ] && MACOS_BUNDLED_WHEELHOUSE_STATUS="present"
   [ -n "$(bundled_models_dir || true)" ] && MACOS_BUNDLED_MODELS_STATUS="present"
   [ -n "$(bundled_drumsep_dir || true)" ] && MACOS_BUNDLED_DRUMSEP_STATUS="present"
+elif [ "${MAC_ARCH}" = "arm64" ] && [ -d "${BUNDLED_PAYLOAD_DIR}" ]; then
+  MACOS_BUNDLED_PAYLOAD_STATUS="unusable"
+  _bundled_candidate="$(bundled_ffmpeg_path || true)"
+  if validate_ffmpeg_pair "${_bundled_candidate}"; then
+    MACOS_BUNDLED_FFMPEG_STATUS="validated"
+    MACOS_BUNDLED_FFMPEG_REASON="bundled_payload_incomplete_or_corrupt"
+  else
+    MACOS_BUNDLED_FFMPEG_STATUS="validation_failed"
+    MACOS_BUNDLED_FFMPEG_REASON="${FFMPEG_VALIDATION_REASON:-bundled_payload_incomplete_or_corrupt}"
+  fi
 fi
 # Managed repo-wheelhouse (2.3.1.0): kleine platform-wheelhouse in de ReaPack-tree.
 # Kandidaat-volgorde analoog aan Linux: managed repo-wheelhouse beschikbaar als overlay,
@@ -1341,6 +1469,7 @@ if [ -d "${SCRIPT_DIR}/vendor/wheels/darwin-${MAC_ARCH}-cp312" ]; then
 fi
 log "MACOS_BUNDLED_PAYLOAD_STATUS=${MACOS_BUNDLED_PAYLOAD_STATUS}"
 log "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
+log "MACOS_BUNDLED_FFMPEG_REASON=${MACOS_BUNDLED_FFMPEG_REASON}"
 log "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
 log "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
 log "MACOS_MANAGED_WHEELHOUSE_STATUS=${MACOS_MANAGED_WHEELHOUSE_STATUS}"
@@ -1349,6 +1478,13 @@ STATUS="ok"
 STATUS_REASON=""
 PYTHON=""
 FFMPEG=""
+FFPROBE=""
+FFMPEG_VALIDATED="no"
+if [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" = "unusable" ]; then
+  FFMPEG_VALIDATION_REASON="${MACOS_BUNDLED_FFMPEG_REASON}"
+else
+  FFMPEG_VALIDATION_REASON="not_checked"
+fi
 VENV_PY=""
 # Conservative default on macOS to avoid GPU extras with limited wheel support.
 PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
@@ -1398,6 +1534,7 @@ MACOS_RUNTIME_POLICY_STATUS="not_checked"
 MACOS_RUNTIME_POLICY_REASON=""
 MACOS_RUNTIME_POLICY_OBSERVED=""
 MACOS_RUNTIME_POLICY_MUTATION_STARTED="false"
+RUNTIME_POLICY_MATCHED="no"
 
 if command -v managed_python_init_state >/dev/null 2>&1; then
   managed_python_init_state
@@ -1428,14 +1565,19 @@ elif [ "${MAC_ARCH}" = "arm64" ] && [ -d "${BUNDLED_PAYLOAD_DIR}" ]; then
   # met herstelactie (de vroegere apple_silicon_requires_bundled_payload-semantiek blijft
   # voor deze corruptie-klasse bestaan; een afwezige payload is dat niet).
   MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
-  MACOS_PAYLOAD_PREFLIGHT_REASON="bundled_payload_incomplete_or_corrupt"
+  _bundled_primary_reason="${MACOS_BUNDLED_FFMPEG_REASON:-bundled_payload_incomplete_or_corrupt}"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="${_bundled_primary_reason}"
   log "Bundled payload is present but incomplete or corrupt; reinstall the bundled Apple Silicon installer, or remove ${BUNDLED_PAYLOAD_DIR} to use online Repair"
   log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
   log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
   log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
   log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"
-  set_status "deps_failed" "apple_silicon_requires_bundled_payload"
-  write_ready_to_go_state "mps" "missing" "missing" "apple_silicon_requires_bundled_payload" "missing"
+  case "${_bundled_primary_reason}" in
+    ffmpeg_*|ffprobe_*) set_status "missing_ffmpeg" "${_bundled_primary_reason}" ;;
+    *) set_status "deps_failed" "${_bundled_primary_reason}" ;;
+  esac
+  FFMPEG_VALIDATION_REASON="${_bundled_primary_reason}"
+  write_ready_to_go_state "mps" "missing" "missing" "${_bundled_primary_reason}" "missing"
   write_state
   exit 1
 elif [ "${MAC_ARCH}" = "arm64" ]; then
@@ -1460,14 +1602,16 @@ if [ "${MODE}" = "repair" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
       log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
       log "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"
       log "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false"
+      RUNTIME_POLICY_MATCHED="yes"
+      PYTHON="${RUNTIME_BASE}/.venv/bin/python"
+      VENV_PY="${PYTHON}"
+      SELECTED_PYTHON_VERSION="$(get_python_version "${PYTHON}" || true)"
       set_status "ok" ""
-      write_state
-      exit 0
       ;;
     mismatch\|*)
       MACOS_RUNTIME_POLICY_STATUS="mismatch"
       MACOS_RUNTIME_POLICY_REASON="runtime_policy_mismatch_requires_rebuild"
-      log "Existing managed runtime is operational but does not match the bundled 2.3.0.6 dependency policy"
+      log "Existing managed runtime is operational but does not match the bundled 2.3.1.0 dependency policy"
       log "MACOS_RUNTIME_POLICY_STATUS=${MACOS_RUNTIME_POLICY_STATUS}"
       log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
       log "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"
@@ -1622,6 +1766,7 @@ preflight_managed_python_available() {
   return 1
 }
 
+if [ "${RUNTIME_POLICY_MATCHED}" != "yes" ]; then
 if ! preflight_managed_python_available; then
   MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
   MACOS_PAYLOAD_PREFLIGHT_REASON="online_fallback_failed"
@@ -1878,17 +2023,15 @@ else
     fi
   fi
 fi
+fi
 
 set_progress "4" "${STEP_TOTAL}" "Checking FFmpeg"
 
-_bundled_ffmpeg="$(bundled_ffmpeg_path || true)"
-if [ -n "${_bundled_ffmpeg}" ] && [ -x "${_bundled_ffmpeg}" ]; then
-  FFMPEG="${_bundled_ffmpeg}"
-  MACOS_BUNDLED_FFMPEG_STATUS="ok"
-fi
-log "MACOS_BUNDLED_FFMPEG_STATUS=${MACOS_BUNDLED_FFMPEG_STATUS}"
-
+_path_ffmpeg="$(command_path ffmpeg || true)"
+_saw_ffmpeg_candidate="no"
+_candidate_failure_reason=""
 for p in \
+  "$(bundled_ffmpeg_path || true)" \
   "${RUNTIME_BASE}/bin/ffmpeg" \
   "${RUNTIME_BASE}/ffmpeg/bin/ffmpeg" \
   "/opt/homebrew/bin/ffmpeg" \
@@ -1896,20 +2039,35 @@ for p in \
   "/opt/local/bin/ffmpeg" \
   "/opt/homebrew/opt/ffmpeg/bin/ffmpeg" \
   "/usr/local/opt/ffmpeg/bin/ffmpeg" \
-  "/usr/bin/ffmpeg"
+  "/usr/bin/ffmpeg" \
+  "${_path_ffmpeg}"
 do
-  if [ -n "${FFMPEG}" ]; then
+  [ -n "${p}" ] || continue
+  if [ -e "${p}" ]; then _saw_ffmpeg_candidate="yes"; fi
+  if validate_ffmpeg_pair "${p}"; then
     break
   fi
-  if [ -x "$p" ]; then
-    FFMPEG="$p"
-    break
+  if [ -e "${p}" ] && [ -z "${_candidate_failure_reason}" ]; then
+    _candidate_failure_reason="${FFMPEG_VALIDATION_REASON}"
   fi
 done
-
-if [ -z "${FFMPEG}" ]; then
-  set_status "missing_ffmpeg" "ffmpeg_not_found"
+if [ "${FFMPEG_VALIDATED}" != "yes" ]; then
+  FFMPEG=""
+  FFPROBE=""
+  FFMPEG_VALIDATED="no"
+  if [ "${_saw_ffmpeg_candidate}" = "yes" ]; then
+    FFMPEG_VALIDATION_REASON="${_candidate_failure_reason:-ffmpeg_validation_failed}"
+  else
+    FFMPEG_VALIDATION_REASON="ffmpeg_not_found"
+  fi
+  set_status "missing_ffmpeg" "${FFMPEG_VALIDATION_REASON}"
 fi
+if [ "${FFMPEG_VALIDATED}" = "yes" ] && [ "${FFMPEG}" = "$(bundled_ffmpeg_path || true)" ]; then
+  MACOS_BUNDLED_FFMPEG_STATUS="validated"
+fi
+log "MACOS_BUNDLED_FFMPEG_STATUS=${MACOS_BUNDLED_FFMPEG_STATUS}"
+log "MACOS_FFMPEG_VALIDATED=${FFMPEG_VALIDATED}"
+log "MACOS_FFMPEG_VALIDATION_REASON=${FFMPEG_VALIDATION_REASON}"
 
 set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"
 
@@ -1949,14 +2107,23 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
     FINAL_RUNTIME_VERIFIED="no"
     set_status "deps_failed" "torch_pin_assert_failed"
   fi
-  if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then
-    case "${STATUS_REASON}" in
-      torch_install_failed|torch_pin_repair_failed|torch_pin_assert_failed)
+  if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] \
+    && [ "${FFMPEG_VALIDATED}" = "yes" ] \
+    && [ "${STATUS}" != "ok" ]; then
+    # This final block just re-verified numba, samplerate, audio-separator,
+    # onnxruntime, stemwerk-core, and the full pinned torch stack from
+    # scratch. Together with a live-validated ffmpeg+ffprobe pair this is
+    # stronger proof of current health than an earlier remediated dependency STATUS
+    # in the meantime (e.g. a transient onnxruntime-not-installed-yet
+    # assertion before its own remediation step ran). Clearing here keys
+    # on that already-computed truth directly, not on enumerating which
+    # specific STATUS_REASON string happened to be first -- an earlier,
+    # narrower whitelist here left non-torch first-run-only transients
+    # (audio_separator/numba/samplerate ordering, etc.) permanently
+    # stuck despite this same successful re-verification.
+    log "Cleared stale STATUS=${STATUS}/${STATUS_REASON} after final runtime verification succeeded"
     STATUS="ok"
     STATUS_REASON=""
-        log "Cleared stale STATUS from earlier pinned torch failure after final runtime verification success"
-        ;;
-    esac
   fi
 fi
 
@@ -1980,10 +2147,18 @@ if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
       MACOS_BUNDLED_MODELS_STATUS="copy_failed"
     fi
   fi
-  if ! ensure_core_model_cache "${VENV_PY}" "$(model_cache_dir)"; then
-    READY_DETAIL="core_model_download_failed"
-    log "core_model_prefetch_failed=core_model_download_failed"
-    set_status "deps_failed" "core_model_download_failed"
+  ensure_core_model_cache "${VENV_PY}" "$(model_cache_dir)"
+  _core_model_rc=$?
+  if [ "${_core_model_rc}" -ne 0 ]; then
+    if [ "${_core_model_rc}" -eq 2 ]; then
+      READY_DETAIL="${CORE_MODEL_PREFETCH_REASON:-ffmpeg_validation_failed}"
+      log "core_model_prefetch_failed=${READY_DETAIL}"
+      set_status "missing_ffmpeg" "${READY_DETAIL}"
+    else
+      READY_DETAIL="${CORE_MODEL_PREFETCH_REASON:-core_model_download_failed}"
+      log "core_model_prefetch_failed=${READY_DETAIL}"
+      set_status "deps_failed" "${READY_DETAIL}"
+    fi
   fi
 fi
 if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then

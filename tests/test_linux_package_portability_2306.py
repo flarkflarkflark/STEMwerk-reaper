@@ -11,6 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PROCESS_SCRIPT = ROOT / "scripts/reaper/audio_separator_process.py"
+ARCH_INSTALL_SCRIPT = ROOT / "installer/linux/arch/stemwerk.install"
 FORBIDDEN_BUILD_HOST_PATHS = (
     "/home/flark",
     "/Users/flark",
@@ -20,6 +21,12 @@ COLLECTED_HOST_PLATFORM = sys.platform
 COLLECTED_SUBPROCESS_RUN = subprocess.run
 COLLECTED_SUBPROCESS_POPEN = subprocess.Popen
 COLLECTED_ENVIRONMENT = dict(os.environ)
+LINUX_EXCLUDED_DEV_SCRIPTS = (
+    "STEMwerk_Benchmark_Flashy_Idle.lua",
+    "STEMwerk_Benchmark_REAPER_Native_Idle.lua",
+    "STEMwerk_Dev_Prepare_Benchmark_State.lua",
+    "STEMwerk_Dev_Project_State_Snapshot.lua",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +85,107 @@ def test_linux_staged_payload_has_no_build_checkout_or_user_paths(tmp_path):
     assert offenders == []
 
 
+def test_linux_staged_payload_satisfies_production_payload_contract(tmp_path):
+    from tools import release_gate
+
+    staged = tmp_path / "payload"
+    command = (
+        f'source "{ROOT / "installer/linux/stage_payload.sh"}"; '
+        f'copy_linux_payload "{ROOT}" "{staged}"'
+    )
+    _run("bash", "-c", command)
+
+    contract = release_gate.parse_production_payload_contract(release_gate.PRODUCTION_PAYLOAD_CONTRACT)
+    required = release_gate.required_files_for_platform(contract, "linux")
+
+    missing = sorted(
+        req
+        for req in required
+        if not (staged / req[len("scripts/reaper/"):]).exists()
+    )
+    assert not missing, f"Linux staged payload missing production payload contract entries: {missing}"
+
+
+def test_linux_staged_payload_excludes_darwin_wheels_and_dev_scripts(tmp_path):
+    staged = tmp_path / "payload"
+    command = (
+        f'source "{ROOT / "installer/linux/stage_payload.sh"}"; '
+        f'copy_linux_payload "{ROOT}" "{staged}"'
+    )
+    _run("bash", "-c", command)
+
+    darwin_wheels = sorted(
+        path.relative_to(staged)
+        for path in staged.glob("vendor/wheels/darwin-*/*.whl")
+    )
+    staged_dev_scripts = sorted(
+        name for name in LINUX_EXCLUDED_DEV_SCRIPTS if (staged / name).exists()
+    )
+
+    assert darwin_wheels == []
+    assert staged_dev_scripts == []
+
+
+def test_arch_install_hook_is_lf_only_when_staged_and_packaged(tmp_path):
+    staged = tmp_path / "stemwerk.install"
+    shutil.copy2(ARCH_INSTALL_SCRIPT, staged)
+
+    staged_bytes = staged.read_bytes()
+    assert b"\r" not in staged_bytes
+    _run("bash", "-n", str(staged))
+
+    package = tmp_path / "stemwerk-test.pkg.tar"
+    with tarfile.open(package, "w") as archive:
+        archive.add(staged, arcname=".INSTALL")
+    with tarfile.open(package, "r") as archive:
+        packaged_bytes = archive.extractfile(".INSTALL").read()
+
+    assert packaged_bytes == staged_bytes
+    assert b"\r" not in packaged_bytes
+
+
+def test_linux_contract_remains_platform_scoped_while_reapack_keeps_darwin_wheels():
+    from tools import release_gate
+
+    contract = release_gate.parse_production_payload_contract(release_gate.PRODUCTION_PAYLOAD_CONTRACT)
+    linux_required = release_gate.required_files_for_platform(contract, "linux")
+    reapack_required = release_gate.required_files_for_platform(contract, "reapack")
+    darwin_wheels = {
+        path for path in contract.required["macos"] if "/vendor/wheels/darwin-" in path
+    }
+    index_xml = (ROOT / "index.xml").read_text(encoding="utf-8")
+
+    assert darwin_wheels
+    assert darwin_wheels.isdisjoint(linux_required)
+    assert darwin_wheels <= reapack_required
+    assert all(path in index_xml for path in darwin_wheels)
+
+
+def test_linux_staged_payload_contains_all_statically_detected_or_dynamic_dependencies(tmp_path):
+    from tools import release_gate
+
+    staged = tmp_path / "payload"
+    command = (
+        f'source "{ROOT / "installer/linux/stage_payload.sh"}"; '
+        f'copy_linux_payload "{ROOT}" "{staged}"'
+    )
+    _run("bash", "-c", command)
+
+    deps: set[str] = set()
+    for lua_file in release_gate.iter_lua_files(ROOT):
+        text = release_gate.read_text(lua_file)
+        found, _ = release_gate.extract_internal_deps(ROOT, lua_file, text)
+        deps.update(found)
+    deps.update(release_gate.collect_dynamic_production_dependencies(ROOT))
+
+    missing = sorted(
+        dep
+        for dep in deps
+        if not (staged / dep[len("scripts/reaper/"):]).exists()
+    )
+    assert not missing, f"Linux staged payload missing statically detected or declared dynamic-dispatch runtime deps: {missing}"
+
+
 def test_managed_python_invocation_remains_explicit_across_platforms():
     main_lua = (ROOT / "scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
     setup_lua = (ROOT / "scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(
@@ -86,7 +194,11 @@ def test_managed_python_invocation_remains_explicit_across_platforms():
     assert "quoteArg(PYTHON_PATH),\n        quoteArg(SEPARATOR_SCRIPT)," in main_lua
     assert 'set -- "$PY" -u "$SEP"' in main_lua
     assert "Start-Process -FilePath $py -ArgumentList $args" in main_lua
-    assert 'quoteArg(pythonPath) .. " -u " .. quoteArg(separatorScript)' in setup_lua
+    # This is the Setup/Check-only device probe (probeRuntimeDevices), not
+    # the real separation run. It now also passes -B so this diagnostic
+    # probe doesn't write __pycache__ into the shipped source tree; the
+    # invocation is still explicit (still names the interpreter, still -u).
+    assert 'quoteArg(pythonPath) .. " -B -u " .. quoteArg(separatorScript)' in setup_lua
 
 
 def test_macos_and_windows_bootstraps_still_select_python_explicitly():

@@ -2,8 +2,16 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.3.1.0" author="flarkAUDIO" time="1785067200">
+      <version name="2.3.1.1" author="flarkAUDIO" time="1787738400">
         <changelog><![CDATA[
+STEMwerk 2.3.1.1 - macOS Apple Silicon FFmpeg hotfix (issue #111)
+
+- The bundled Apple Silicon package includes portable, self-contained arm64 FFmpeg and ffprobe built from pinned LGPL FFmpeg 8.0.3 source; Setup no longer depends on Homebrew or MacPorts for these tools.
+- Setup validates the live FFmpeg/ffprobe pair fail-closed, including executable status, dependencies and tool identity. Repair performs these checks and readiness recovery even when the managed-Python policy already matches.
+- Check-only and Repair now report the actual FFmpeg/readiness state with understandable user-facing messages, while retaining technical reason codes in diagnostics.
+- Core-model prefetch does not start without a valid FFmpeg/ffprobe pair.
+- Payload, final-package, managed-Python provenance, FFmpeg provenance and dependency-closure audits now fail closed against the definitive package contents.
+
 STEMwerk 2.3.1.0 - macOS online Repair and no downloads during processing
 
 - macOS Repair/Rebuild now works without the bundled payload: a small managed wheelhouse (diffq, samplerate, stemwerk_core, ~4 MB per architecture) ships in the ReaPack package and the rest is resolved online from PyPI, following the Linux candidate order (managed wheelhouse → bundled payload → online). A present-but-corrupt payload still fails safely with a concrete recovery action.
@@ -13,6 +21,11 @@ STEMwerk 2.3.1.0 - macOS online Repair and no downloads during processing
 - Actionable error messages with a recovery step and download link instead of bare failure reasons.
 - onnxruntime is now pinned per platform (1.27.0 on macOS 14+ Apple Silicon, 1.23.2 on macOS 13 Apple Silicon and on Intel, 1.17.3 on macOS 12 Apple Silicon, 1.19.2 on macOS 11–12 Intel); the onnxruntime-silicon fork is no longer attempted. Minimum macOS: 12 on Apple Silicon, 11 on Intel.
 - The bundled Apple Silicon installer is now runtime-only (~260 MB instead of 1.07 GB): models and DrumSep checkpoints download via the online catalog. The thin online installer now refuses to overwrite a full bundled installation instead of silently removing it.
+- The no-download-during-processing guarantee is now enforced with a preflight check before the separation worker launches, closing gaps on the Direct Kit and Kit Split routes so a missing model asset is caught before any work starts rather than partway through.
+- Fixed a macOS runtime-detection bug (issue #110) where a single timed-out interpreter probe could make an already-working, fully-set-up Python installation look unusable, incorrectly falling back to an unrelated system Python and reporting a false "setup failed" in the UI even though processing itself kept working.
+- Fixed Kit Split (Drum Kit extraction) silently reporting success with 0 tracks imported when a mid-run settings reload reset the internal stem list; REAPER import now always reuses the validated output paths and a real mismatch is reported as a clear failure instead of a false green completion.
+- Additional macOS Repair reliability fixes: a samplerate-library architecture mismatch is now classified as its own diagnostic instead of a generic failure; the offline recovery preflight no longer creates runtime directories before confirming a managed Python is actually available; and Repair now exits immediately once it confirms the existing runtime already matches policy, instead of continuing into install steps that could touch a healthy environment.
+- Fixed a packaging gap where the ReaPack index was missing the Kit Split import module, which would have made STEMwerk fail to load entirely on a fresh install of this version.
 
 STEMwerk 2.3.0.7 - ReaPack distribution hotfix
 
@@ -27,6 +40,7 @@ STEMwerk 2.3.0.6 - Narrow corrective runtime hotfix
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
         <source file="../STEMwerk_Save_Support_Bundle.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Save_Support_Bundle.lua</source>
+        <source file="../STEMwerk_Set_FFmpegPath.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Set_FFmpegPath.lua</source>
         <source file="../STEMwerk_AI_Separate.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_AI_Separate.lua</source>
         <source file="../STEMwerk_Setup_Toolbar.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Setup_Toolbar.lua</source>
         <source file="../STEMwerk_Explode_Takes.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Explode_Takes.lua</source>
@@ -44,6 +58,7 @@ STEMwerk 2.3.0.6 - Narrow corrective runtime hotfix
         <source file="../audio_separator_process.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/audio_separator_process.py</source>
 
         <source file="../_internal/STEMwerk_Devices.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Devices.lua</source>
+        <source file="../_internal/STEMwerk_DKS_Import.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_DKS_Import.lua</source>
         <source file="../_internal/STEMwerk_DrumKit_Workflow.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua</source>
         <source file="../_internal/STEMwerk_ExtState.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_ExtState.lua</source>
         <source file="../_internal/STEMwerk_Glue_Helpers.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Glue_Helpers.lua</source>
@@ -57,6 +72,7 @@ STEMwerk 2.3.0.6 - Narrow corrective runtime hotfix
         <source file="../_internal/STEMwerk_Path_Helper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Path_Helper.lua</source>
         <source file="../_internal/STEMwerk_Platform.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Platform.lua</source>
         <source file="../_internal/STEMwerk_Progress_Render.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Progress_Render.lua</source>
+        <source file="../_internal/STEMwerk_Project_Context.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Project_Context.lua</source>
         <source file="../_internal/STEMwerk_Runtime_Setup.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua</source>
         <source file="../_internal/STEMwerk_Settings.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Settings.lua</source>
         <source file="../_internal/STEMwerk_Setup_Internal.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Setup_Internal.lua</source>

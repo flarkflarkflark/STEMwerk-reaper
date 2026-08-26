@@ -7,6 +7,7 @@ SCRIPTS_DIR="$ROOT_DIR/installer/macos/scripts"
 BUNDLED_PAYLOAD_ROOT="$ROOT_DIR/scripts/reaper/_bundled/macos/apple-silicon"
 PAYLOAD_MANIFEST="$ROOT_DIR/installer/macos/payload-manifest.txt"
 PAYLOAD_AUDITOR="$ROOT_DIR/installer/macos/audit_payload.py"
+PACKAGE_AUDITOR="$ROOT_DIR/installer/macos/audit_pkg.py"
 
 VERSION="${STEMWERK_VERSION:-}"
 PKG_ID="com.flarkaudio.stemwerk"
@@ -69,6 +70,8 @@ esac
 STAGE="$ROOT_DIR/installer/macos/build/$VARIANT/root"
 PAYLOAD_DEST="$STAGE/Users/Shared/STEMwerk-reaper/_bundled/macos/apple-silicon"
 OUTPUT_PKG="$OUT_DIR/STEMwerk-$VERSION$OUTPUT_SUFFIX.pkg"
+PAYLOAD_INVENTORY="$ROOT_DIR/installer/macos/build/$VARIANT/payload-inventory.json"
+PACKAGE_AUDIT_REPORT="$ROOT_DIR/installer/macos/build/$VARIANT/final-package-audit.json"
 PACKAGE_REPACK_DIR=""
 
 cleanup() {
@@ -142,7 +145,7 @@ esac
 
 remove_appledouble_sidecars "$STAGE"
 python3 "$PAYLOAD_AUDITOR" --root "$PAYLOAD_ROOT" \
-  --variant "$VARIANT" --inventory "$ROOT_DIR/installer/macos/build/$VARIANT/payload-inventory.json"
+  --variant "$VARIANT" --inventory "$PAYLOAD_INVENTORY"
 
 if [[ "${STEMWERK_STAGE_ONLY:-0}" == "1" ]]; then
   echo "Staged and audited: $PAYLOAD_ROOT"
@@ -160,5 +163,13 @@ pkgbuild \
   "$OUTPUT_PKG"
 
 repack_pkg_without_appledouble
+
+PYTHONDONTWRITEBYTECODE=1 python3 "$PACKAGE_AUDITOR" \
+  --package "$OUTPUT_PKG" \
+  --variant "$VARIANT" \
+  --expected-identifier "$PKG_ID" \
+  --expected-version "$VERSION" \
+  --expected-inventory "$PAYLOAD_INVENTORY" \
+  --report "$PACKAGE_AUDIT_REPORT"
 
 echo "Built: $OUTPUT_PKG"
