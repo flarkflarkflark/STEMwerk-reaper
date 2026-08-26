@@ -112,18 +112,24 @@ def macho_build_metadata(path: Path) -> dict[str, object]:
         window = [item.strip() for item in output[index + 1:index + 10]]
         if command == "cmd LC_BUILD_VERSION":
             for item in window:
+                if item.startswith("Load command"):
+                    break
                 if item.startswith("minos "):
                     minimum_os = item.split(None, 1)[1]
                 elif item.startswith("sdk "):
                     sdk = item.split(None, 1)[1]
         elif command == "cmd LC_VERSION_MIN_MACOSX":
             for item in window:
+                if item.startswith("Load command"):
+                    break
                 if item.startswith("version "):
                     minimum_os = item.split(None, 1)[1]
                 elif item.startswith("sdk "):
                     sdk = item.split(None, 1)[1]
         elif command == "cmd LC_RPATH":
             for item in window:
+                if item.startswith("Load command"):
+                    break
                 if item.startswith("path "):
                     rpaths.append(item.split(None, 2)[1])
                     break

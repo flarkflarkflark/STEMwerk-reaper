@@ -401,6 +401,71 @@ def test_legacy_macos_minimum_version_command_is_accepted(
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="requires the macOS Mach-O toolchain")
+def test_real_lc_version_min_macosx_followed_by_lc_source_version_reports_correct_minimum_os(
+    tmp_path: Path,
+) -> None:
+    """Regression test for a real parsing bug found by adversarial review
+    with an actual compiled binary (not a mocked otool string): the window
+    scan for LC_VERSION_MIN_MACOSX did not stop at the boundary of its own
+    load command, so it read into the immediately following, unrelated
+    LC_SOURCE_VERSION command -- which also happens to have a field named
+    "version" (its own source-control version, "0.0" when unset). The
+    later, unrelated line silently overwrote the correct minimum_os.
+
+    x86_64 with an old -mmacosx-version-min is the only realistic way to
+    get clang to emit LC_VERSION_MIN_MACOSX today (arm64 always emits
+    LC_BUILD_VERSION); LC_SOURCE_VERSION is emitted automatically by clang
+    for every Mach-O and is confirmed below to immediately follow it, so
+    this fixture reproduces the exact real-world load command sequence the
+    bug was found with, not an approximation."""
+    source = tmp_path / "legacy_version_min.c"
+    output = tmp_path / "legacy_version_min.dylib"
+    source.write_text("int stemwerk_fixture(void) { return 1; }\n", encoding="utf-8")
+    subprocess.run(
+        [
+            "xcrun",
+            "clang",
+            "-dynamiclib",
+            "-arch",
+            "x86_64",
+            "-mmacosx-version-min=10.9",
+            str(source),
+            "-o",
+            str(output),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    raw = subprocess.run(
+        ["otool", "-l", str(output)], check=True, capture_output=True, text=True
+    ).stdout
+    # Confirm the fixture actually reproduces the real-world load command
+    # sequence the bug depends on, rather than silently testing nothing if
+    # a future toolchain stops emitting one of these commands.
+    version_min_index = raw.index("cmd LC_VERSION_MIN_MACOSX")
+    source_version_index = raw.index("cmd LC_SOURCE_VERSION")
+    assert version_min_index < source_version_index, (
+        "fixture no longer has LC_VERSION_MIN_MACOSX immediately followed by "
+        "LC_SOURCE_VERSION -- this test would no longer reproduce the bug"
+    )
+    assert 'version 0.0' in raw[source_version_index:], (
+        "LC_SOURCE_VERSION no longer reports the colliding 'version 0.0' "
+        "field this regression depends on"
+    )
+
+    metadata = macos_ffmpeg.macho_build_metadata(output)
+
+    assert metadata["minimum_os"] == "10.9", (
+        "macho_build_metadata misread LC_VERSION_MIN_MACOSX's minimum_os as "
+        f"{metadata['minimum_os']!r} -- the window scan read past the load "
+        "command boundary into the following LC_SOURCE_VERSION's own "
+        "'version' field instead of stopping"
+    )
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="requires the macOS Mach-O toolchain")
 def test_minos_13_0_was_rejected_under_the_old_ceiling_now_accepted_under_the_bundled_ceiling(
     tmp_path: Path,
 ) -> None:
