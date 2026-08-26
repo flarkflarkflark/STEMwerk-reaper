@@ -1,6 +1,6 @@
 # THIRD_PARTY_NOTICES
 
-Last updated: 2026-04-23
+Last updated: 2026-08-26
 
 This file lists third-party components used or redistributed by STEMwerk builds.
 
@@ -17,6 +17,15 @@ Notes: used to create the local STEMwerk runtime environment.
 Source: https://www.gyan.dev/ffmpeg/builds/
 Upstream: https://ffmpeg.org/
 Notes: used for audio decoding/encoding in runtime workflows.
+
+3. FFmpeg 8.0.3 (macOS Apple Silicon source build)
+Source: https://ffmpeg.org/releases/ffmpeg-8.0.3.tar.xz
+License: LGPL-2.1-or-later (external/GPL/nonfree codecs disabled)
+Notes: `ffmpeg` and `ffprobe` are built as thin arm64 executables with static FFmpeg
+libraries and macOS system-library references only. Exact source and binary provenance is
+recorded by `tools/macos_ffmpeg.py`; see `tools/macos-ffmpeg/PROVENANCE.md`. The corresponding
+verified source is prepared as the accompanying release artifact `ffmpeg-8.0.3.tar.xz` with
+SHA-256 `6136812ea6d4e68bdba27e33c2a94382711cdf4f8602ffef056ff792bd6f9818`.
 
 ## Python Ecosystem Components (Installed by Bootstrap)
 

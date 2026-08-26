@@ -708,6 +708,26 @@ local function prettySetupReason(reason)
             part = "ffprobe executable validation failed"
         elseif lower == "ffmpeg_not_found" then
             part = "STEMwerk could not find FFmpeg"
+        elseif lower == "ffmpeg_not_executable" then
+            part = "FFmpeg was found but is not executable"
+        elseif lower == "ffmpeg_dependency_failed" then
+            part = "FFmpeg could not start because a required macOS library is unavailable"
+        elseif lower == "ffmpeg_identity_mismatch" then
+            part = "The selected FFmpeg executable did not identify itself as FFmpeg"
+        elseif lower == "ffprobe_not_found" then
+            part = "FFprobe is missing next to FFmpeg"
+        elseif lower == "ffprobe_not_executable" then
+            part = "FFprobe was found but is not executable"
+        elseif lower == "ffprobe_dependency_failed" then
+            part = "FFprobe could not start because a required macOS library is unavailable"
+        elseif lower == "ffprobe_identity_mismatch" then
+            part = "The selected FFprobe executable did not identify itself as FFprobe"
+        elseif lower == "ffmpeg_constructor_failed" then
+            part = "FFmpeg failed while the core model downloader was being initialized"
+        elseif lower == "core_model_cache_incomplete_after_prefetch" then
+            part = "Core model download finished, but the model cache is incomplete"
+        elseif lower == "bundled_payload_incomplete_or_corrupt" then
+            part = "The bundled macOS recovery payload is incomplete or corrupt"
         elseif lower == "ffmpeg_shim_path" then
             part = "Windows shim FFmpeg path detected (install a real ffmpeg.exe)"
         elseif lower == "stemwerk_core_bundle_incomplete" then
@@ -806,6 +826,34 @@ local function prettySetupReason(reason)
         end
     end
     return table.concat(parts, "; ")
+end
+
+local function prettyFfmpegCheckDetail(ffmpegOk, ffmpegPath, ffmpegReason)
+    if ffmpegOk then
+        local path = trim(ffmpegPath)
+        return path ~= "" and path or "FFmpeg and FFprobe validated"
+    end
+    local rawReason = trim(ffmpegReason)
+    local friendlyReason = prettySetupReason(rawReason)
+    if friendlyReason ~= "" and friendlyReason:lower() ~= rawReason:lower() then
+        return friendlyReason
+    end
+    return "FFmpeg and FFprobe could not be validated"
+end
+
+-- Pure production row-builder exposed for the existing headless Setup tests.
+-- The Check-only UI and its test seam therefore execute the same mapping.
+function buildFfmpegCheckRow(verification, ffmpegPath)
+    verification = verification or {}
+    return {
+        label = "FFmpeg + ffprobe",
+        ok = verification.ffmpegOk == true,
+        detail = prettyFfmpegCheckDetail(
+            verification.ffmpegOk == true,
+            ffmpegPath,
+            verification.ffmpegReason
+        ),
+    }
 end
 
 local function prettyCheckError(err)
@@ -2735,6 +2783,7 @@ local function verifyRuntimePaths(state, publishExtState)
     local errors = {}
     local pythonOk = false
     local ffmpegOk = false
+    local ffmpegReason = ""
     local ffprobePath = ""
     local audioOk = false
     local torchRuntime = {
@@ -2789,7 +2838,8 @@ local function verifyRuntimePaths(state, publishExtState)
             ffprobePath = resolvedFfprobe
             if publishExtState then setExt("ffmpegPath", resolved.ffmpegPath) end
         else
-            errors[#errors + 1] = pairReason ~= "" and pairReason or "ffmpeg_unusable"
+            ffmpegReason = pairReason ~= "" and pairReason or "ffmpeg_unusable"
+            errors[#errors + 1] = ffmpegReason
         end
     end
 
@@ -2816,6 +2866,7 @@ local function verifyRuntimePaths(state, publishExtState)
         ffprobePath = ffprobePath,
         pythonOk = pythonOk,
         ffmpegOk = ffmpegOk,
+        ffmpegReason = ffmpegReason,
         audioOk = audioOk,
         detectedPythonVersion = detectedPythonVersion,
         supportedPythonFound = supportedPythonFound,
@@ -6449,8 +6500,7 @@ verifyExistingSetup = function(runtime, separatorScript)
           detail = fileExists(capFile) and capFile or "Not found" },
         { label = "Python path",         ok = pythonPath ~= "" and fileExists(pythonPath),
           detail = pythonPath ~= "" and pythonPath or "Not set in bootstrap.env" },
-        { label = "FFmpeg path",         ok = ffmpegPath ~= "" and fileExists(ffmpegPath),
-          detail = ffmpegPath ~= "" and ffmpegPath or "Not set in bootstrap.env/capabilities.env" },
+        buildFfmpegCheckRow(verification, ffmpegPath),
         { label = "Virtual environment", ok = pathExists(runtime.venvDir),
           detail = pathExists(runtime.venvDir) and runtime.venvDir or ("Not found: " .. tostring(runtime.venvDir)) },
     }

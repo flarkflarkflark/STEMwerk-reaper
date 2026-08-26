@@ -6113,16 +6113,20 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert 'replace_samplerate_with_native_arm64(wheels_dir)' in script
 
 
-def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
+def test_macos_payload_builder_requires_official_ffmpeg_and_local_runtime_sources():
     script = Path("tools/build_macos_apple_silicon_payload.py").read_text()
 
-    assert 'default="/opt/homebrew/bin/ffmpeg"' in script
-    assert 'default="/opt/homebrew/bin/ffprobe"' in script
-    assert 'default=str(Path.home() / "Library" / "Application Support" / "STEMwerk" / "python")' in script
+    assert 'return build_official_arm64_ffmpeg(destination, source_artifact_dir=source_artifact_dir)' in script
+    assert 'Release mode refuses all FFmpeg/ffprobe overrides' in script
+    assert '--allow-development-ffmpeg-override' in script
+    assert '"release_eligible": False' in script
+    assert '"--managed-python-artifact"' in script
+    assert 'Release mode requires --managed-python-artifact' in script
+    assert 'Release mode refuses --managed-python development directory overrides' in script
     assert 'Library" / "Application Support" / "STEMwerk" / "models"' in script
     assert 'Missing required {label}' in script
-    assert '"ffmpeg binary"' in script
-    assert '"managed Python runtime payload"' in script
+    assert '"ffmpeg override"' in script
+    assert 'prepare_managed_python_payload(' in script
     assert '"core model payload file"' in script
     assert '"DrumSep payload file"' in script
     assert 'Incomplete wheelhouse: missing' in script
@@ -6130,7 +6134,7 @@ def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
     assert '"samplerate==0.1.0"' in script
     assert 'build_stemwerk_core_wheel(repo_root, wheels_dir, python_executable)' in script
     assert '"--no-build-isolation"' in script
-    assert 'copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")' in script
+    assert 'validate_official_managed_python_provenance(output_dir / "python", manifest)' in script
 
 
 def test_macos_bootstrap_uses_bundled_apple_silicon_payloads_when_present():
@@ -6172,9 +6176,9 @@ def test_macos_bootstrap_records_bundled_payload_status_markers():
 def test_macos_bootstrap_prefers_bundled_ffmpeg_and_offline_wheelhouse():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
-    assert '_bundled_ffmpeg="$(bundled_ffmpeg_path || true)"' in script
-    assert 'FFMPEG="${_bundled_ffmpeg}"' in script
-    assert 'MACOS_BUNDLED_FFMPEG_STATUS="ok"' in script
+    assert '"$(bundled_ffmpeg_path || true)" \\' in script
+    assert 'if validate_ffmpeg_pair "${p}"; then' in script
+    assert 'MACOS_BUNDLED_FFMPEG_STATUS="validated"' in script
     assert '"${_py}" -m pip install --no-index --find-links "${BUNDLED_WHEELS_DIR}" "$@"' in script
     assert 'bundled_managed_python_dir()' in script
     assert 'install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip' in script
@@ -7276,7 +7280,9 @@ def test_macos_bootstrap_clears_stale_torch_pin_assert_failure_after_final_runti
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     assert 'FINAL_RUNTIME_VERIFIED="yes"' in script
-    assert 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS}" != "ok" ]; then' in script
+    assert 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] \\' in script
+    assert '&& [ "${FFMPEG_VALIDATED}" = "yes" ] \\' in script
+    assert '&& [ "${STATUS}" != "ok" ]; then' in script
     assert 'STATUS="ok"' in script
     assert 'STATUS_REASON=""' in script
     assert 'Cleared stale STATUS=${STATUS}/${STATUS_REASON} after final runtime verification succeeded' in script
@@ -7286,7 +7292,7 @@ def test_macos_bootstrap_only_clears_stale_torch_pin_status_after_real_final_che
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     line_no = lambda needle: next(i for i, line in enumerate(script.splitlines(), 1) if needle in line)
-    clear_line = 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS}" != "ok" ]; then'
+    clear_line = 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] \\'
     assert line_no(clear_line) > line_no('if [ "${_onnx_observed}" != "${PINNED_ONNXRUNTIME_VERSION}" ]; then')
     assert line_no(clear_line) > line_no('if ! assert_pinned_torch_stack "${VENV_PY}"; then')
 
@@ -7931,7 +7937,10 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' not in core_section
     assert 'core_model_prefetch_ffmpeg_path=${_prefetch_ffmpeg_path}' in macos_bootstrap
     assert 'core_model_prefetch_path_prefix=${_prefetch_ffmpeg_dir}' in macos_bootstrap
-    assert 'PATH="${_prefetch_path}" FFMPEG_PATH="${_prefetch_ffmpeg_path}" STEMWERK_FFMPEG_PATH="${_prefetch_ffmpeg_path}" IMAGEIO_FFMPEG_EXE="${_prefetch_ffmpeg_path}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' in macos_bootstrap
+    assert '_prefetch_log="$(mktemp "${TMPDIR:-/tmp}/stemwerk-core-model-prefetch.XXXXXX")" || return 1' in macos_bootstrap
+    assert 'PATH="${_prefetch_path}" FFMPEG_PATH="${_prefetch_ffmpeg_path}" STEMWERK_FFMPEG_PATH="${_prefetch_ffmpeg_path}" IMAGEIO_FFMPEG_EXE="${_prefetch_ffmpeg_path}" "${_py}" - <<PY > "${_prefetch_log}" 2>&1' in macos_bootstrap
+    assert 'cat "${_prefetch_log}" >> "${LOG_FILE}" 2>/dev/null || true' in macos_bootstrap
+    assert 'CORE_MODEL_PREFETCH_REASON="ffmpeg_constructor_failed"' in macos_bootstrap
     assert 'STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' in macos_bootstrap
     assert 'detail_path = os.environ.get("STEMWERK_DRUMSEP_DETAIL_FILE", "").strip()' in macos_bootstrap
     assert 'if detail_path:' in macos_bootstrap
@@ -7939,9 +7948,11 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'sep.load_model(resolve_audio_separator_model_id(model_name))' in macos_bootstrap
     assert 'READY_MAIN_RUNTIME_STATUS="missing"' in macos_bootstrap
     assert 'echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"' in macos_bootstrap
-    assert 'READY_DETAIL="core_model_download_failed"' in macos_bootstrap
-    assert 'log "core_model_prefetch_failed=core_model_download_failed"' in macos_bootstrap
-    assert 'set_status "deps_failed" "core_model_download_failed"' in macos_bootstrap
+    assert 'READY_DETAIL="${CORE_MODEL_PREFETCH_REASON:-ffmpeg_validation_failed}"' in macos_bootstrap
+    assert 'READY_DETAIL="${CORE_MODEL_PREFETCH_REASON:-core_model_download_failed}"' in macos_bootstrap
+    assert 'log "core_model_prefetch_failed=${READY_DETAIL}"' in macos_bootstrap
+    assert 'set_status "missing_ffmpeg" "${READY_DETAIL}"' in macos_bootstrap
+    assert 'set_status "deps_failed" "${READY_DETAIL}"' in macos_bootstrap
     assert 'set_status "deps_failed" "core_model_prefetch_failed"' not in macos_bootstrap
     assert 'DRUMSEP_PREFETCH_DETAIL="$(cat "${_detail_file}" 2>/dev/null || true)"' in macos_bootstrap
     assert 'log "drumsep_model_prefetch_detail=${DRUMSEP_PREFETCH_DETAIL:-unknown}"' in macos_bootstrap

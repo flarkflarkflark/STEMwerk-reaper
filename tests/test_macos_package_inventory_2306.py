@@ -103,7 +103,8 @@ def test_windows_launcher_injection_is_rejected(tmp_path):
 def test_appledouble_injection_is_rejected(tmp_path):
     (tmp_path / "._payload").write_bytes(b"bad")
     records, counts = load_auditor().inventory(tmp_path)
-    assert records[0]["classification"] == "unknown"
+    appledouble = next(record for record in records if record["path"] == "._payload")
+    assert appledouble["classification"] == "unknown"
     assert counts["appledouble"] == 1
 
 

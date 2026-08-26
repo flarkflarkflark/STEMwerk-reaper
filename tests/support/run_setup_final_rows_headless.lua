@@ -65,6 +65,7 @@ assertf(type(buildCheckOnlyFinalMessage) == "function", "buildCheckOnlyFinalMess
 assertf(type(classifyReadyState) == "function", "classifyReadyState was not exposed as a global function")
 assertf(type(resolveDrumsepPolicyState) == "function", "resolveDrumsepPolicyState was not exposed as a global function")
 assertf(type(buildWindowsSetupOverview) == "function", "buildWindowsSetupOverview was not exposed as a global function")
+assertf(type(buildFfmpegCheckRow) == "function", "buildFfmpegCheckRow was not exposed as a global function")
 
 local function findRow(rows, label)
     for _, row in ipairs(rows) do
@@ -75,6 +76,40 @@ end
 
 local function containsSubstring(text, needle)
     return tostring(text or ""):find(needle, 1, true) ~= nil
+end
+
+local function testFfmpegReasonsAreFriendlyInActualCheckOnlyRow()
+    local cases = {
+        ffmpeg_not_executable = "FFmpeg was found but is not executable",
+        ffmpeg_dependency_failed = "FFmpeg could not start because a required macOS library is unavailable",
+        ffmpeg_identity_mismatch = "The selected FFmpeg executable did not identify itself as FFmpeg",
+        ffprobe_not_found = "FFprobe is missing next to FFmpeg",
+        ffprobe_not_executable = "FFprobe was found but is not executable",
+        ffprobe_dependency_failed = "FFprobe could not start because a required macOS library is unavailable",
+        ffprobe_identity_mismatch = "The selected FFprobe executable did not identify itself as FFprobe",
+        ffmpeg_constructor_failed = "FFmpeg failed while the core model downloader was being initialized",
+        core_model_cache_incomplete_after_prefetch = "Core model download finished, but the model cache is incomplete",
+        bundled_payload_incomplete_or_corrupt = "The bundled macOS recovery payload is incomplete or corrupt",
+    }
+    for reason, expected in pairs(cases) do
+        local row = buildFfmpegCheckRow({ ffmpegOk = false, ffmpegReason = reason }, "/tmp/ffmpeg")
+        assertf(row.label == "FFmpeg + ffprobe", "unexpected Check-only row label")
+        assertf(row.ok == false, "failed FFmpeg reason must produce a failed Check-only row")
+        assertf(row.detail == expected,
+            "friendly reason mismatch for " .. reason .. ": expected=" .. expected .. ", actual=" .. tostring(row.detail))
+        assertf(not containsSubstring(row.detail, reason),
+            "Check-only row leaked raw internal reason code: " .. reason)
+    end
+
+    local unknown = buildFfmpegCheckRow({ ffmpegOk = false, ffmpegReason = "unexpected" }, "/tmp/ffmpeg")
+    assertf(unknown.detail == "FFmpeg and FFprobe could not be validated",
+        "unknown reason must use the safe friendly fallback, got: " .. tostring(unknown.detail))
+    local empty = buildFfmpegCheckRow({ ffmpegOk = false, ffmpegReason = "" }, "")
+    assertf(empty.detail == "FFmpeg and FFprobe could not be validated",
+        "empty reason must use the safe friendly fallback, got: " .. tostring(empty.detail))
+    local healthy = buildFfmpegCheckRow({ ffmpegOk = true }, "/path with spaces/ffmpeg")
+    assertf(healthy.ok == true and healthy.detail == "/path with spaces/ffmpeg",
+        "healthy Check-only row must retain its validated executable path")
 end
 
 -- ---------------------------------------------------------------------
@@ -481,6 +516,7 @@ local function testWindowsCurrentHealthyStateStaysHealthy()
 end
 
 local tests = {
+    { "ffmpeg-reasons-are-friendly-in-actual-check-only-row", testFfmpegReasonsAreFriendlyInActualCheckOnlyRow },
     { "resolved-verdict-wins-over-stale-state", testResolvedVerdictWinsOverStaleState },
     { "build-linux-final-rows-does-not-reresolve-stale-state", testBuildLinuxFinalRowsDoesNotReresolveStaleState },
     { "copy-summary-shows-real-failure-reason", testCopySummaryShowsRealFailureReason },

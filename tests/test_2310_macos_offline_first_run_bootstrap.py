@@ -121,6 +121,7 @@ _FUNCTIONS = (
     "repair_samplerate_if_arch_mismatch",
     "verify_venv_arch",
     "verify_audio_separator_runtime_deps",
+    "validate_ffmpeg_pair",
 )
 
 
@@ -144,7 +145,7 @@ def _driver_segment(text: str) -> str:
     start = text.index('  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then\n')
     end = text.index("\nREADY_RUNTIME_KIND=", start)
     segment = text[start:end]
-    orphan_fi = "    fi\n  fi\nfi\n\nset_progress"
+    orphan_fi = "    fi\n  fi\nfi\nfi\n\nset_progress"
     replacement = "    fi\n  fi\n\nset_progress"
     assert segment.count(orphan_fi) == 1, segment
     return segment.replace(orphan_fi, replacement)
@@ -261,6 +262,11 @@ def _build_harness(
         encoding="utf-8",
     )
     fake_python.chmod(0o755)
+    fake_ffmpeg = tmp_path / "ffmpeg pair" / "ffmpeg"
+    fake_ffmpeg.parent.mkdir()
+    for tool in (fake_ffmpeg, fake_ffmpeg.parent / "ffprobe"):
+        tool.write_text("#!/bin/sh\necho fixture version\nexit 0\n", encoding="utf-8")
+        tool.chmod(0o755)
 
     harness = tmp_path / "harness.sh"
     harness.write_text(
@@ -288,7 +294,10 @@ def _build_harness(
             BUNDLED_WHEELS_DIR=""
             MANAGED_WHEELS_DIR=""
             TORCH_PIN_APPLIED="0"
-            FFMPEG=""
+            FFMPEG="{fake_ffmpeg}"
+            FFPROBE="{fake_ffmpeg.parent / 'ffprobe'}"
+            FFMPEG_VALIDATED="yes"
+            FFMPEG_VALIDATION_REASON="ffmpeg_pair_valid"
             VENV_PY=""
             STATUS="{"deps_failed" if pre_status_reason is not None else "ok"}"
             STATUS_REASON="{pre_status_reason or ""}"
@@ -352,6 +361,8 @@ def _build_harness(
             resolve_core_target() {{ CORE_TARGET="stub"; CORE_TARGET_DESC="stub"; return 0; }}
             install_stemwerk_core_target() {{ return 0; }}
             log_final_dependency_versions() {{ :; }}
+            bundled_ffmpeg_path() {{ printf '%s\\n' '{fake_ffmpeg}'; }}
+            command_path() {{ return 1; }}
 
             {funcs}
 
