@@ -5098,9 +5098,10 @@ def _assert_readme_release_contract(readme, target_version):
     assert "## What's new in 2.3.0.6 / 2.3.0.7" in readme
 
 
-def test_shipped_readme_identifies_current_2310_release_and_assets():
-    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
-    assert target_version == "2.3.1.0"
+def test_shipped_readme_identifies_current_public_2310_release_and_assets():
+    repository_version = Path("VERSION").read_text(encoding="utf-8").strip()
+    assert repository_version == "2.3.1.1"
+    target_version = "2.3.1.0"
 
     readme = Path("README.md").read_text(encoding="utf-8")
     _assert_readme_release_contract(readme, target_version)
@@ -5115,7 +5116,8 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
     deliberately-unpublished Linux native packages or the separate-channel
     offline/allmodels pkg advertised as release assets, and dropped published
     rows."""
-    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
+    assert Path("VERSION").read_text(encoding="utf-8").strip() == "2.3.1.1"
+    target_version = "2.3.1.0"
     real_readme = Path("README.md").read_text(encoding="utf-8")
 
     def mutate(anchor, inserted_line):

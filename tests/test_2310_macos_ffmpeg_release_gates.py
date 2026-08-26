@@ -337,7 +337,7 @@ def test_real_final_package_passes_post_repack_audit_when_requested(tmp_path: Pa
         package,
         variant="bundled-apple-silicon",
         expected_identifier="com.flarkaudio.stemwerk",
-        expected_version="2.3.1.0",
+        expected_version=(ROOT / "VERSION").read_text(encoding="utf-8").strip(),
         expected_inventory=inventory,
         report=tmp_path / "audit.json",
     )

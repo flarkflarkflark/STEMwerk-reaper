@@ -2,8 +2,16 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.3.1.0" author="flarkAUDIO" time="1785067200">
+      <version name="2.3.1.1" author="flarkAUDIO" time="1787738400">
         <changelog><![CDATA[
+STEMwerk 2.3.1.1 - macOS Apple Silicon FFmpeg hotfix (issue #111)
+
+- The bundled Apple Silicon package includes portable, self-contained arm64 FFmpeg and ffprobe built from pinned LGPL FFmpeg 8.0.3 source; Setup no longer depends on Homebrew or MacPorts for these tools.
+- Setup validates the live FFmpeg/ffprobe pair fail-closed, including executable status, dependencies and tool identity. Repair performs these checks and readiness recovery even when the managed-Python policy already matches.
+- Check-only and Repair now report the actual FFmpeg/readiness state with understandable user-facing messages, while retaining technical reason codes in diagnostics.
+- Core-model prefetch does not start without a valid FFmpeg/ffprobe pair.
+- Payload, final-package, managed-Python provenance, FFmpeg provenance and dependency-closure audits now fail closed against the definitive package contents.
+
 STEMwerk 2.3.1.0 - macOS online Repair and no downloads during processing
 
 - macOS Repair/Rebuild now works without the bundled payload: a small managed wheelhouse (diffq, samplerate, stemwerk_core, ~4 MB per architecture) ships in the ReaPack package and the rest is resolved online from PyPI, following the Linux candidate order (managed wheelhouse → bundled payload → online). A present-but-corrupt payload still fails safely with a concrete recovery action.

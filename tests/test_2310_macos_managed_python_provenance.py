@@ -212,7 +212,8 @@ def test_manifest_preserves_exact_managed_python_provenance(
     destination, provenance, _manifest = _official_fixture(tmp_path, monkeypatch)
     output = tmp_path / "manifest-output"
     output.mkdir()
-    payload_builder.write_manifest(output, "2.3.1.0", [], None, False, {}, provenance)
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    payload_builder.write_manifest(output, version, [], None, False, {}, provenance)
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["managed_python"] == provenance
     macos_managed_python.validate_official_managed_python_provenance(destination, manifest)
