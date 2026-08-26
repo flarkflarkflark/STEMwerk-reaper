@@ -102,7 +102,7 @@ def _official_fixture(root: Path) -> tuple[Path, dict[str, object], dict[str, ob
         "license": macos_ffmpeg.FFMPEG_LICENSE,
         "source_url": macos_ffmpeg.FFMPEG_SOURCE_URL,
         "source_sha256": macos_ffmpeg.FFMPEG_SOURCE_SHA256,
-        "deployment_target": macos_ffmpeg.MACOS_DEPLOYMENT_TARGET,
+        "deployment_target": macos_ffmpeg.FFMPEG_DEPLOYMENT_TARGET,
         "configure": ["./configure", *macos_ffmpeg.FFMPEG_CONFIGURE_FLAGS],
         "build_command": ["make", "-j1", "ffmpeg", "ffprobe"],
         "configuration_macros": {"CONFIG_GPL": 0, "CONFIG_NONFREE": 0},
@@ -245,7 +245,7 @@ def test_official_pair_rejects_wrong_minimum_os(
     with pytest.raises(RuntimeError, match="minimum macOS: 11.0"):
         macos_ffmpeg.validate_ffmpeg_pair(
             ffmpeg, ffprobe,
-            expected_deployment_target=macos_ffmpeg.MACOS_DEPLOYMENT_TARGET,
+            expected_deployment_target=macos_ffmpeg.FFMPEG_DEPLOYMENT_TARGET,
             require_official_build=True,
         )
 

@@ -11,6 +11,7 @@ import subprocess
 import tarfile
 import tempfile
 import urllib.request
+import zipfile
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -19,7 +20,22 @@ FFMPEG_VERSION = "8.0.3"
 FFMPEG_SOURCE_URL = f"https://ffmpeg.org/releases/ffmpeg-{FFMPEG_VERSION}.tar.xz"
 FFMPEG_SOURCE_SHA256 = "6136812ea6d4e68bdba27e33c2a94382711cdf4f8602ffef056ff792bd6f9818"
 FFMPEG_LICENSE = "LGPL-2.1-or-later"
-MACOS_DEPLOYMENT_TARGET = "12.0"
+
+# FFmpeg's own build target. A component built for a LOWER minimum-OS than
+# the rest of a payload does not weaken the payload's effective floor (that
+# floor is the HIGHEST minOS among all bundled Mach-O objects), so this can
+# stay well below the bundled Apple Silicon package's own contract.
+FFMPEG_DEPLOYMENT_TARGET = "12.0"
+
+# The Mach-O audit ceiling for the bundled Apple Silicon payload as a whole
+# (see validate_macho_release_contract below). This is the package-level
+# minimum-OS contract, distinct from FFMPEG_DEPLOYMENT_TARGET above -- it is
+# driven by the pinned onnxruntime==1.27.0 wheel, which has shipped no
+# macOS-13-or-lower cp312 arm64 wheel since onnxruntime 1.25.0 (confirmed
+# against real PyPI wheel metadata: onnxruntime-1.27.0-cp312-cp312-
+# macosx_14_0_arm64.whl, both embedded Mach-O objects report minos 14.0).
+BUNDLED_APPLE_SILICON_MACOS_AUDIT_MAXIMUM = "14.0"
+
 FFMPEG_CONFIGURE_FLAGS = (
     f"--prefix=/STEMwerk/ffmpeg-{FFMPEG_VERSION}",
     "--arch=arm64",
@@ -31,8 +47,8 @@ FFMPEG_CONFIGURE_FLAGS = (
     "--disable-ffplay",
     "--disable-network",
     "--disable-autodetect",
-    f"--extra-cflags=-arch arm64 -mmacosx-version-min={MACOS_DEPLOYMENT_TARGET}",
-    f"--extra-ldflags=-arch arm64 -mmacosx-version-min={MACOS_DEPLOYMENT_TARGET}",
+    f"--extra-cflags=-arch arm64 -mmacosx-version-min={FFMPEG_DEPLOYMENT_TARGET}",
+    f"--extra-ldflags=-arch arm64 -mmacosx-version-min={FFMPEG_DEPLOYMENT_TARGET}",
 )
 
 FORBIDDEN_ABSOLUTE_PREFIXES = (
@@ -96,24 +112,137 @@ def macho_build_metadata(path: Path) -> dict[str, object]:
         window = [item.strip() for item in output[index + 1:index + 10]]
         if command == "cmd LC_BUILD_VERSION":
             for item in window:
+                if item.startswith("Load command"):
+                    break
                 if item.startswith("minos "):
                     minimum_os = item.split(None, 1)[1]
                 elif item.startswith("sdk "):
                     sdk = item.split(None, 1)[1]
         elif command == "cmd LC_VERSION_MIN_MACOSX":
             for item in window:
+                if item.startswith("Load command"):
+                    break
                 if item.startswith("version "):
                     minimum_os = item.split(None, 1)[1]
                 elif item.startswith("sdk "):
                     sdk = item.split(None, 1)[1]
         elif command == "cmd LC_RPATH":
             for item in window:
+                if item.startswith("Load command"):
+                    break
                 if item.startswith("path "):
                     rpaths.append(item.split(None, 2)[1])
                     break
     if not minimum_os:
         raise RuntimeError(f"Mach-O has no macOS minimum-version load command: {path}")
     return {"minimum_os": minimum_os, "sdk": sdk, "rpaths": rpaths}
+
+
+MACHO_ARCHITECTURE_REASON = "macos_macho_architecture_mismatch"
+MACHO_MINIMUM_OS_MISSING_REASON = "macos_macho_minimum_os_missing"
+MACHO_MINIMUM_OS_INVALID_REASON = "macos_macho_minimum_os_invalid"
+MACHO_MINIMUM_OS_TOO_NEW_REASON = "macos_macho_minimum_os_too_new"
+
+
+def _macos_version_tuple(value: str) -> tuple[int, int, int]:
+    try:
+        parts = [int(part) for part in value.split(".")]
+    except ValueError as exc:
+        raise ValueError(f"invalid macOS version {value!r}") from exc
+    if not parts or len(parts) > 3:
+        raise ValueError(f"invalid macOS version {value!r}")
+    normalized = (parts + [0, 0, 0])[:3]
+    return normalized[0], normalized[1], normalized[2]
+
+
+def validate_macho_release_contract(
+    path: Path,
+    *,
+    expected_arch: str = "arm64",
+    maximum_deployment_target: str = BUNDLED_APPLE_SILICON_MACOS_AUDIT_MAXIMUM,
+) -> dict[str, object] | None:
+    """Validate one Mach-O against the bundled Apple Silicon package contract.
+
+    Returns None for a non-Mach-O file (nothing to validate). The
+    ``maximum_deployment_target`` is the package-level audit ceiling
+    (BUNDLED_APPLE_SILICON_MACOS_AUDIT_MAXIMUM by default) -- this is
+    deliberately independent of FFMPEG_DEPLOYMENT_TARGET, which only governs
+    how STEMwerk's own bundled FFmpeg binary is built.
+    """
+    architectures = macho_architectures(path)
+    if not architectures:
+        return None
+    if architectures != (expected_arch,):
+        raise RuntimeError(
+            f"reason={MACHO_ARCHITECTURE_REASON} path={path} "
+            f"architectures={' '.join(architectures)} expected={expected_arch}"
+        )
+    try:
+        metadata = macho_build_metadata(path)
+    except (RuntimeError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            f"reason={MACHO_MINIMUM_OS_MISSING_REASON} path={path} detail={exc}"
+        ) from exc
+    minimum_os = str(metadata.get("minimum_os", ""))
+    try:
+        minimum = _macos_version_tuple(minimum_os)
+        maximum = _macos_version_tuple(maximum_deployment_target)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"reason={MACHO_MINIMUM_OS_INVALID_REASON} path={path} "
+            f"minimum_os={minimum_os!r} detail={exc}"
+        ) from exc
+    if minimum > maximum:
+        raise RuntimeError(
+            f"reason={MACHO_MINIMUM_OS_TOO_NEW_REASON} path={path} "
+            f"minimum_os={minimum_os} maximum={maximum_deployment_target}"
+        )
+    return {
+        "architectures": list(architectures),
+        "minimum_os": minimum_os,
+        "sdk": metadata.get("sdk", ""),
+        "rpaths": metadata.get("rpaths", []),
+    }
+
+
+def validate_macho_tree_release_contract(
+    root: Path, *, maximum_deployment_target: str = BUNDLED_APPLE_SILICON_MACOS_AUDIT_MAXIMUM
+) -> list[dict[str, object]]:
+    """Validate every Mach-O file under a payload tree."""
+    records: list[dict[str, object]] = []
+    for candidate in sorted(root.rglob("*")):
+        if not candidate.is_file():
+            continue
+        validation = validate_macho_release_contract(
+            candidate, maximum_deployment_target=maximum_deployment_target
+        )
+        if validation is not None:
+            records.append({"path": candidate.relative_to(root).as_posix(), **validation})
+    return records
+
+
+def validate_macho_wheel_release_contract(
+    wheel: Path, *, maximum_deployment_target: str = BUNDLED_APPLE_SILICON_MACOS_AUDIT_MAXIMUM
+) -> list[dict[str, object]]:
+    """Extract one already hygiene-validated wheel and audit all Mach-O entries."""
+    with tempfile.TemporaryDirectory(prefix="stemwerk-wheel-macho-audit-") as temp_name:
+        root = Path(temp_name)
+        with zipfile.ZipFile(wheel) as archive:
+            archive.extractall(root)
+        records: list[dict[str, object]] = []
+        for candidate in sorted(root.rglob("*")):
+            if not candidate.is_file():
+                continue
+            entry = candidate.relative_to(root).as_posix()
+            try:
+                validation = validate_macho_release_contract(
+                    candidate, maximum_deployment_target=maximum_deployment_target
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(f"{exc} wheel={wheel.name} entry={entry}") from exc
+            if validation is not None:
+                records.append({"path": entry, **validation})
+        return records
 
 
 def embedded_forbidden_paths(path: Path) -> tuple[str, ...]:
@@ -273,7 +402,7 @@ def _toolchain_metadata() -> dict[str, str]:
     xcode_detail = "\n".join(part.strip() for part in (xcode.stdout, xcode.stderr) if part.strip())
     values["xcode"] = f"exit={xcode.returncode}; {xcode_detail or 'no output'}"
     values["host_architecture"] = os.uname().machine
-    values["deployment_target"] = MACOS_DEPLOYMENT_TARGET
+    values["deployment_target"] = FFMPEG_DEPLOYMENT_TARGET
     return values
 
 
@@ -323,7 +452,7 @@ def build_official_arm64_ffmpeg(
         configure = ["./configure", *FFMPEG_CONFIGURE_FLAGS]
         build_command = ["make", f"-j{max(1, os.cpu_count() or 1)}", "ffmpeg", "ffprobe"]
         env = os.environ.copy()
-        env.update({"MACOSX_DEPLOYMENT_TARGET": MACOS_DEPLOYMENT_TARGET, "LC_ALL": "C"})
+        env.update({"MACOSX_DEPLOYMENT_TARGET": FFMPEG_DEPLOYMENT_TARGET, "LC_ALL": "C"})
         _run(configure, cwd=extracted, env=env, capture_output=True)
         config_text = (extracted / "config.h").read_text(encoding="utf-8")
         configuration_macros = {}
@@ -344,7 +473,7 @@ def build_official_arm64_ffmpeg(
     audit = validate_ffmpeg_pair(
         destination / "ffmpeg",
         destination / "ffprobe",
-        expected_deployment_target=MACOS_DEPLOYMENT_TARGET,
+        expected_deployment_target=FFMPEG_DEPLOYMENT_TARGET,
         require_official_build=True,
     )
     provenance = {
@@ -356,7 +485,7 @@ def build_official_arm64_ffmpeg(
         "license": FFMPEG_LICENSE,
         "source_url": FFMPEG_SOURCE_URL,
         "source_sha256": FFMPEG_SOURCE_SHA256,
-        "deployment_target": MACOS_DEPLOYMENT_TARGET,
+        "deployment_target": FFMPEG_DEPLOYMENT_TARGET,
         "configure": configure,
         "build_command": build_command,
         "configuration_macros": configuration_macros,
@@ -395,7 +524,7 @@ def validate_official_provenance(
         "license": FFMPEG_LICENSE,
         "source_url": FFMPEG_SOURCE_URL,
         "source_sha256": FFMPEG_SOURCE_SHA256,
-        "deployment_target": MACOS_DEPLOYMENT_TARGET,
+        "deployment_target": FFMPEG_DEPLOYMENT_TARGET,
         "configuration_macros": {"CONFIG_GPL": 0, "CONFIG_NONFREE": 0},
     }
     for key, value in expected.items():
@@ -413,7 +542,7 @@ def validate_official_provenance(
     )
     if not isinstance(toolchain, Mapping) or any(not toolchain.get(key) for key in required_toolchain):
         raise RuntimeError("FFmpeg provenance does not contain the complete build toolchain")
-    if toolchain.get("host_architecture") != "arm64" or toolchain.get("deployment_target") != MACOS_DEPLOYMENT_TARGET:
+    if toolchain.get("host_architecture") != "arm64" or toolchain.get("deployment_target") != FFMPEG_DEPLOYMENT_TARGET:
         raise RuntimeError("FFmpeg provenance build host/target is not the release contract")
     source_artifact = provenance.get("source_artifact")
     if source_artifact != {
@@ -426,7 +555,7 @@ def validate_official_provenance(
     audit = validate_ffmpeg_pair(
         ffmpeg_dir / "ffmpeg",
         ffmpeg_dir / "ffprobe",
-        expected_deployment_target=MACOS_DEPLOYMENT_TARGET,
+        expected_deployment_target=FFMPEG_DEPLOYMENT_TARGET,
         require_official_build=True,
     )
     if provenance.get("validation") != audit:
