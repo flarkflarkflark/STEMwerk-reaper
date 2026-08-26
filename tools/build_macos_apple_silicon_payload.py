@@ -27,7 +27,15 @@ try:
         FFMPEG_SOURCE_URL,
         FFMPEG_VERSION,
         build_official_arm64_ffmpeg,
+        macho_architectures,
+        validate_macho_release_contract,
+        validate_macho_tree_release_contract,
+        validate_macho_wheel_release_contract,
         validate_ffmpeg_pair,
+    )
+    from tools.macos_release_hygiene import (
+        validate_macos_release_wheelhouse,
+        validate_stemwerk_core_source_tree,
     )
     from tools.macos_managed_python import (
         prepare_managed_python_payload,
@@ -40,7 +48,15 @@ except ModuleNotFoundError:  # Direct execution via ``python tools/...py``.
         FFMPEG_SOURCE_URL,
         FFMPEG_VERSION,
         build_official_arm64_ffmpeg,
+        macho_architectures,
+        validate_macho_release_contract,
+        validate_macho_tree_release_contract,
+        validate_macho_wheel_release_contract,
         validate_ffmpeg_pair,
+    )
+    from macos_release_hygiene import (  # type: ignore[no-redef]
+        validate_macos_release_wheelhouse,
+        validate_stemwerk_core_source_tree,
     )
     from macos_managed_python import (  # type: ignore[no-redef]
         prepare_managed_python_payload,
@@ -407,36 +423,19 @@ def _repack_wheel(root: Path, output: Path) -> None:
                 archive.writestr(info, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
 
 
-def macho_architectures(path: Path) -> tuple[str, ...]:
-    with path.open("rb") as handle:
-        magic = handle.read(4)
-    macho_magics = {
-        b"\xfe\xed\xfa\xce",
-        b"\xfe\xed\xfa\xcf",
-        b"\xce\xfa\xed\xfe",
-        b"\xcf\xfa\xed\xfe",
-        b"\xca\xfe\xba\xbe",
-        b"\xbe\xba\xfe\xca",
-        b"\xca\xfe\xba\xbf",
-        b"\xbf\xba\xfe\xca",
-    }
-    if magic not in macho_magics:
-        return ()
-    output = subprocess.run(
-        ["lipo", "-archs", str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    ).stdout
-    return tuple(output.strip().split())
-
-
 def assert_arm64_macho(path: Path) -> None:
     architectures = macho_architectures(path)
     if architectures and architectures != ("arm64",):
-        raise RuntimeError(f"Non-arm64-only Mach-O object: {path} ({' '.join(architectures)})")
+        raise RuntimeError(
+            "reason=macos_macho_architecture_mismatch "
+            f"Non-arm64-only Mach-O object: {path} ({' '.join(architectures)})"
+        )
+    # Uses validate_macho_release_contract's default ceiling
+    # (BUNDLED_APPLE_SILICON_MACOS_AUDIT_MAXIMUM, "14.0") -- this builder
+    # assembles the bundled Apple Silicon payload, so every Mach-O it
+    # produces (including FFmpeg's own binaries) is checked against the
+    # PACKAGE's contract here, not FFmpeg's own (lower) build target.
+    validate_macho_release_contract(path)
 
 
 def _retag_wheel_file(original: Path, root: Path, *, force_samplerate: bool = False) -> Path:
@@ -501,7 +500,12 @@ def thin_universal_wheels(wheels_dir: Path) -> None:
                     subprocess.run(["lipo", str(candidate), "-thin", "arm64", "-output", str(thinned)], check=True)
                     thinned.replace(candidate)
                     changed = True
-                assert_arm64_macho(candidate)
+                try:
+                    assert_arm64_macho(candidate)
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        f"{exc} wheel={wheel.name} entry={candidate.relative_to(root).as_posix()}"
+                    ) from exc
             if changed:
                 _retag_wheel_file(wheel, root)
 
@@ -569,18 +573,13 @@ def verify_offline_resolution(wheels_dir: Path, python_executable: str) -> None:
 
 
 def verify_payload_architectures(output_dir: Path) -> None:
+    # Both helpers default to BUNDLED_APPLE_SILICON_MACOS_AUDIT_MAXIMUM
+    # ("14.0"). FFmpeg's own binaries (built at FFMPEG_DEPLOYMENT_TARGET,
+    # "12.0") pass this trivially: 12.0 does not exceed the 14.0 ceiling.
     for root in (output_dir / "ffmpeg", output_dir / "python"):
-        for candidate in root.rglob("*"):
-            if candidate.is_file():
-                assert_arm64_macho(candidate)
-    for wheel in (output_dir / "wheels").glob("*.whl"):
-        with tempfile.TemporaryDirectory(prefix="stemwerk-wheel-audit-") as temp_name:
-            root = Path(temp_name)
-            with zipfile.ZipFile(wheel) as archive:
-                archive.extractall(root)
-            for candidate in root.rglob("*"):
-                if candidate.is_file():
-                    assert_arm64_macho(candidate)
+        validate_macho_tree_release_contract(root)
+    for wheel in (output_dir / "wheels").rglob("*.whl"):
+        validate_macho_wheel_release_contract(wheel)
 
 
 def prepare_portable_ffmpeg(
@@ -704,6 +703,9 @@ def main() -> int:
     python_executable = payload_python()
 
     validate_declared_policy(RUNTIME_REQUIREMENTS)
+    validate_stemwerk_core_source_tree(
+        repo_root / "scripts/reaper/vendor/stemwerk-core", release_mode=args.release_mode
+    )
     reset_dir(output_dir)
     ffmpeg_provenance = prepare_portable_ffmpeg(
         output_dir / "ffmpeg",
@@ -721,6 +723,7 @@ def main() -> int:
     build_stemwerk_core_wheel(repo_root, wheels_dir, python_executable)
     replace_samplerate_with_native_arm64(wheels_dir)
     thin_universal_wheels(wheels_dir)
+    validate_macos_release_wheelhouse(wheels_dir)
     inventory = resolved_wheel_inventory(wheels_dir)
     verify_offline_resolution(wheels_dir, python_executable)
 

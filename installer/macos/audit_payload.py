@@ -15,8 +15,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.macos_ffmpeg import macho_architectures, sha256_file, validate_official_provenance
+from tools.macos_ffmpeg import (
+    sha256_file,
+    validate_macho_tree_release_contract,
+    validate_macho_wheel_release_contract,
+    validate_official_provenance,
+)
 from tools.macos_managed_python import validate_official_managed_python_provenance
+from tools.macos_release_hygiene import validate_macos_release_wheelhouse
 
 
 WINDOWS_SUFFIXES = {".exe", ".dll", ".bat", ".cmd", ".ps1"}
@@ -123,6 +129,10 @@ def audit_bundled_apple_silicon_payload(root: Path) -> None:
     bundled = root / "_bundled/macos/apple-silicon"
     ffmpeg_dir = bundled / "ffmpeg"
     manifest_path = bundled / "manifest.json"
+    wheels_dir = bundled / "wheels"
+    validate_macos_release_wheelhouse(wheels_dir)
+    for wheel in sorted(wheels_dir.rglob("*.whl")):
+        validate_macho_wheel_release_contract(wheel)
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -135,15 +145,10 @@ def audit_bundled_apple_silicon_payload(root: Path) -> None:
     bundled_notice = ffmpeg_dir / "THIRD_PARTY_NOTICES.md"
     if not root_notice.is_file() or sha256_file(root_notice) != sha256_file(bundled_notice):
         raise RuntimeError("Package and bundled FFmpeg third-party notices are missing or inconsistent")
-    for candidate in bundled.rglob("*"):
-        if not candidate.is_file():
-            continue
-        architectures = macho_architectures(candidate)
-        if architectures and architectures != ("arm64",):
-            raise RuntimeError(
-                f"Bundled Apple Silicon payload contains non-arm64 Mach-O: "
-                f"{candidate.relative_to(root)} ({' '.join(architectures)})"
-            )
+    # Uses the default maximum_deployment_target (BUNDLED_APPLE_SILICON_MACOS_
+    # AUDIT_MAXIMUM, "14.0") -- the bundled Apple Silicon package's own
+    # contract, not FFmpeg's build target.
+    validate_macho_tree_release_contract(bundled)
 
 
 def main() -> int:
