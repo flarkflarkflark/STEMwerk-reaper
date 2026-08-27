@@ -100,6 +100,7 @@ $drumsepTorchVersion = "2.12.0"
 $drumsepTorchVisionVersion = "0.27.0"
 $drumsepLlvmliteVersion = "0.47.0"
 $drumsepNumbaVersion = "0.65.1"
+$drumsepLibrosaVersion = "0.11.0"
 $drumsepDirectMlLibrosaVersion = "0.11.0"
 $drumsepDirectMlSamplerateVersion = "0.1.0"
 $drumsepDirectMlSoundFileVersion = "0.14.0"
@@ -1119,7 +1120,7 @@ function GetAudioRuntimeDependencyList([string]$BackendName) {
         "beartype>=0.18.5,<0.19.0",
         "diffq-fixed>=0.2",
         "einops>=0.7",
-        "librosa>=0.10",
+        "librosa==0.11.0",
         "ml_collections",
         "numpy<2",
         "onnx>=1.14",
@@ -2614,7 +2615,8 @@ function InstallDrumsepRuntime([string]$BasePythonPath) {
         "torch==$drumsepTorchVersion",
         "torchvision==$drumsepTorchVisionVersion",
         "llvmlite==$drumsepLlvmliteVersion",
-        "numba==$drumsepNumbaVersion"
+        "numba==$drumsepNumbaVersion",
+        "librosa==$drumsepLibrosaVersion"
     )
     $installOk = $false
     if ($offlineBundledAllmodelsMode) {
@@ -2809,7 +2811,8 @@ function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
         "torch==$torchVersion$torchCudaSuffix",
         "torchvision==$torchVisionVersion$torchCudaSuffix",
         "torchaudio==$torchAudioVersion$torchCudaSuffix",
-        "onnxruntime-gpu==$onnxRuntimeGpuVersion"
+        "onnxruntime-gpu==$onnxRuntimeGpuVersion",
+        "librosa==$drumsepLibrosaVersion"
     )
     $installOk = $false
     if ($offlineBundledAllmodelsMode) {
@@ -2824,7 +2827,8 @@ function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
             "torch==$torchVersion$torchCudaSuffix",
             "torchvision==$torchVisionVersion$torchCudaSuffix",
             "torchaudio==$torchAudioVersion$torchCudaSuffix",
-            "onnxruntime-gpu==$onnxRuntimeGpuVersion"
+            "onnxruntime-gpu==$onnxRuntimeGpuVersion",
+            "librosa==$drumsepLibrosaVersion"
         )
         $installOk = InstallWithPipAllowOnlineFallback $drumsepPython $drumsepCudaInstallArgs "Install DrumSep CUDA packages"
     }
