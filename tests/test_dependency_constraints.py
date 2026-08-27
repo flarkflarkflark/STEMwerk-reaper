@@ -45,6 +45,17 @@ def _read_utf8(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8", errors="replace")
 
 
+def _quoted_librosa_requirements(text: str) -> list[str]:
+    requirements = []
+    for line in text.splitlines():
+        token = line.strip().rstrip(",")
+        if token.startswith('"librosa'):
+            closing_quote = token.find('"', 1)
+            if closing_quote != -1:
+                requirements.append(token[1:closing_quote])
+    return requirements
+
+
 def _service_line_torch_runtime_status(torch_version, torchaudio_version="2.5.1"):
     core = str(torch_version).split("+", 1)[0]
     major, minor = [int(x) for x in core.split(".")[:2]]
@@ -4343,22 +4354,102 @@ def test_linux_drumsep_runtime_installer_is_isolated_and_pinned():
     assert script.index('if [ "${MODE}" = "drumsep-runtime" ]; then') < script.index('log_stage "Creating venv"')
 
 
-def test_linux_drumsep_runtime_installer_pins_librosa_below_1_0():
+def test_linux_drumsep_runtime_installer_pins_librosa_exactly():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
     drumsep_install = script.split("install_drumsep_runtime() {", 1)[1].split("\n\nresolve_core_target()", 1)[0]
 
-    assert '"librosa==0.11.0"' in drumsep_install
+    assert drumsep_install.count('"librosa==0.11.0"') == 1
     assert '"numba==${DRUMSEP_NUMBA_VERSION}"' in drumsep_install
 
 
-def test_windows_audio_runtime_dependency_list_pins_librosa_below_1_0():
+def test_windows_audio_runtime_dependency_list_pins_librosa_exactly():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
     dep_list = script.split(
         "function GetAudioRuntimeDependencyList([string]$BackendName) {", 1
     )[1].split("\n\nfunction GetMatchedTorchaudioContract", 1)[0]
 
-    assert '"librosa>=0.10,<1.0"' in dep_list
-    assert '"librosa>=0.10"' not in dep_list
+    assert _quoted_librosa_requirements(dep_list) == ["librosa==0.11.0"]
+    assert '"librosa>=0.10,<1.0"' not in dep_list
+
+
+def test_windows_drumsep_cpu_runtime_pins_librosa_exactly_once():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
+    drumsep_install = script.split(
+        "function InstallDrumsepRuntime([string]$BasePythonPath) {", 1
+    )[1].split("\n\nfunction InstallDrumsepDirectmlRuntime", 1)[0]
+
+    assert _quoted_librosa_requirements(drumsep_install) == [
+        "librosa==$drumsepLibrosaVersion"
+    ]
+
+
+def test_windows_drumsep_cuda_offline_and_online_routes_pin_librosa_separately():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
+    cuda_install = script.split(
+        "function InstallDrumsepCudaRuntime([string]$BasePythonPath) {", 1
+    )[1].split("\n\n$candidates = @()", 1)[0]
+    offline_args = cuda_install.split(
+        "$drumsepCudaInstallArgs = @(", 1
+    )[1].split("\n    )", 1)[0]
+    install_routes = cuda_install.split(
+        "if ($offlineBundledAllmodelsMode) {", 1
+    )[1]
+    offline_route, online_route = install_routes.split("} else {", 1)
+    online_route = online_route.split(
+        '$installOk = InstallWithPipAllowOnlineFallback', 1
+    )[0]
+
+    assert _quoted_librosa_requirements(offline_args) == [
+        "librosa==$drumsepLibrosaVersion"
+    ]
+    assert "InstallBundledDrumsepPackages $drumsepPython $drumsepCudaInstallArgs" in offline_route
+    assert _quoted_librosa_requirements(online_route) == [
+        "librosa==$drumsepLibrosaVersion"
+    ]
+
+
+def test_linux_main_runtime_constraints_pin_librosa_exactly():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    constraint_generation = script.split(
+        'log_step "Pinned torch version for downstream installs: ${TORCH_VER}"', 1
+    )[1].split(
+        'log_step "CUDA/NVIDIA package overrides blocked via constraints"', 1
+    )[0]
+
+    assert constraint_generation.count('echo "librosa==0.11.0"') == 1
+    assert constraint_generation.index('echo "numba==${PINNED_NUMBA_VERSION}"') < constraint_generation.index(
+        'echo "librosa==0.11.0"'
+    )
+    assert constraint_generation.index('echo "librosa==0.11.0"') < constraint_generation.index(
+        'for name in ("torch","torchvision","torchaudio"):'
+    )
+
+
+def test_linux_main_audio_install_fallback_and_repair_routes_preserve_librosa_pin():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    pin_enforcement = script.split("enforce_runtime_python_pins() {", 1)[1].split(
+        '\n}\n\nif [ -z "${RUNTIME_BASE}" ]', 1
+    )[0]
+    main_flow = script.split('if [ -z "${RUNTIME_BASE}" ]', 1)[1]
+    audio_routes = main_flow.split(
+        'log_stage "Checking/installing audio_separator"', 1
+    )[1].split(
+        'if [ "${audio_install_rc}" -eq 0 ] && [ "${STATUS}" = "ok" ]; then', 1
+    )[0]
+    initial_route, after_initial = audio_routes.split(
+        'if [ "${audio_install_rc}" -ne 0 ] && [ "${PACKAGE}" != "audio-separator==0.23.0" ]; then', 1
+    )
+    fallback_route, repair_route = after_initial.split(
+        'if [ "${audio_install_rc}" -ne 0 ] && [ "${managed_diffq_required}" -eq 0 ]; then', 1
+    )
+
+    assert _quoted_librosa_requirements(pin_enforcement) == ["librosa==0.11.0"]
+    assert main_flow.index("enforce_runtime_python_pins") < main_flow.index(
+        'log_stage "Installing STEMwerk-core"'
+    )
+    assert '-c "${CONSTRAINTS_FILE}"' in initial_route
+    assert '-c "${CONSTRAINTS_FILE}"' in fallback_route
+    assert '-c "${CONSTRAINTS_FILE}"' in repair_route
 
 
 def test_linux_drumsep_runtime_state_fields_are_written():

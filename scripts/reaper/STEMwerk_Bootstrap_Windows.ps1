@@ -1120,7 +1120,7 @@ function GetAudioRuntimeDependencyList([string]$BackendName) {
         "beartype>=0.18.5,<0.19.0",
         "diffq-fixed>=0.2",
         "einops>=0.7",
-        "librosa>=0.10,<1.0",
+        "librosa==0.11.0",
         "ml_collections",
         "numpy<2",
         "onnx>=1.14",
