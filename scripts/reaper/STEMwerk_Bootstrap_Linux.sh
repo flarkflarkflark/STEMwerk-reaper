@@ -1505,7 +1505,8 @@ install_drumsep_runtime() {
     "onnx2torch-py313==${DRUMSEP_ONNX2TORCH_PY313_VERSION}" \
     "torch==${DRUMSEP_TORCH_VERSION}" \
     "torchvision==${DRUMSEP_TORCHVISION_VERSION}" \
-    "numba==${DRUMSEP_NUMBA_VERSION}" >> "${_drumsep_log}" 2>&1; then
+    "numba==${DRUMSEP_NUMBA_VERSION}" \
+    "librosa==0.11.0" >> "${_drumsep_log}" 2>&1; then
     write_drumsep_state "install_failed" "missing" "package_install_failed"
     return 1
   fi

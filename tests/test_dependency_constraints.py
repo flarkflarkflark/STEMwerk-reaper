@@ -4343,6 +4343,24 @@ def test_linux_drumsep_runtime_installer_is_isolated_and_pinned():
     assert script.index('if [ "${MODE}" = "drumsep-runtime" ]; then') < script.index('log_stage "Creating venv"')
 
 
+def test_linux_drumsep_runtime_installer_pins_librosa_below_1_0():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    drumsep_install = script.split("install_drumsep_runtime() {", 1)[1].split("\n\nresolve_core_target()", 1)[0]
+
+    assert '"librosa==0.11.0"' in drumsep_install
+    assert '"numba==${DRUMSEP_NUMBA_VERSION}"' in drumsep_install
+
+
+def test_windows_audio_runtime_dependency_list_pins_librosa_below_1_0():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
+    dep_list = script.split(
+        "function GetAudioRuntimeDependencyList([string]$BackendName) {", 1
+    )[1].split("\n\nfunction GetMatchedTorchaudioContract", 1)[0]
+
+    assert '"librosa>=0.10,<1.0"' in dep_list
+    assert '"librosa>=0.10"' not in dep_list
+
+
 def test_linux_drumsep_runtime_state_fields_are_written():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
