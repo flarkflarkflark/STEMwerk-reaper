@@ -670,7 +670,7 @@ def test_linux_cuda_drumsep_path_uses_shared_five_step_setup_and_stays_out_of_ro
     assert 'STEP_TOTAL="5"' in bootstrap
     assert 'set_status "running" "launcher_started" "1" "5" "Launching bootstrap"' in launcher
     assert 'if OS ~= "Windows" then' in setup_internal
-    assert '{ id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }' in setup_internal
+    assert '{ id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 }, linuxGpuCapability = drumsepRuntimeLabelCapability }' in setup_internal
     assert '{ id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }' in setup_internal
     assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime" and mode ~= "ready-to-go-verify"' in setup_internal
 
@@ -4481,7 +4481,7 @@ def test_linux_setup_exposes_explicit_drumsep_runtime_action_without_normal_setu
     assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime"' in setup_internal
     assert '((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or "bootstrap.env")' in setup_internal
     assert '((isDrumsepRuntime and "drumsep_install.log") or (isDrumsepRocmRuntime and "drumsep_rocm_install.log") or "bootstrap.log")' in setup_internal
-    assert '{ id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }' in setup_internal
+    assert '{ id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 }, linuxGpuCapability = drumsepRuntimeLabelCapability }' in setup_internal
     assert '{ id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }' in setup_internal
     assert 'refreshSetupMenuChoiceLabels({ choices = choices })' in setup_internal
     assert 'startLinuxSetup(runtime, separatorScript, chosen)' in setup_internal
@@ -4492,6 +4492,14 @@ def test_linux_setup_exposes_explicit_drumsep_runtime_action_without_normal_setu
 
 
 def test_windows_setup_exposes_directml_drumsep_runtime_action_and_state_files():
+    # 2.3.1.1 Setup UX/installer-policy cleanup: Windows install/repair is
+    # owned by the external STEMwerk .exe installer, so the in-REAPER Setup
+    # menu no longer offers CUDA/DirectML DrumSep runtime install buttons
+    # (see tests/test_2311_setup_ui_policy.py for the full policy coverage).
+    # startWindowsSetup's internal mode recognition/state-file naming for
+    # these modes is deliberately left in place (defense in depth / matches
+    # the fail-closed guard's "even if reached some other way" contract) --
+    # only the choices-list buttons that used to dispatch into it are gone.
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8", errors="replace")
 
     assert 'WINDOWS_SETUP.mode == "drumsep-cuda-runtime"' in setup_internal
@@ -4499,13 +4507,16 @@ def test_windows_setup_exposes_directml_drumsep_runtime_action_and_state_files()
     assert '(isDrumsepCudaRuntime and "drumsep_runtime_cuda.env")' in setup_internal
     assert '(isDrumsepCudaRuntime and "drumsep_cuda_install.log")' in setup_internal
     assert '(isDrumsepCudaRuntime and "drumsep_cuda_runtime.pid")' in setup_internal
-    assert '{ id = "drumsep-cuda-runtime", accent = { 0.22, 0.62, 0.70 } }' in setup_internal
+    assert '{ id = "drumsep-cuda-runtime", accent = { 0.22, 0.62, 0.70 } }' not in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env")' in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_directml_install.log")' in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_directml_runtime.pid")' in setup_internal
-    assert '{ id = "drumsep-directml-runtime", accent = { 0.12, 0.58, 0.76 } }' in setup_internal
+    assert '{ id = "drumsep-directml-runtime", accent = { 0.12, 0.58, 0.76 } }' not in setup_internal
     assert 'refreshSetupMenuChoiceLabels({ choices = choices })' in setup_internal
+    # The dispatch call itself still exists (it is the fail-closed guard's
+    # entry point), but it is now unreachable from the Windows choices list.
     assert 'startWindowsSetup(runtime, separatorScript, chosen, true)' in setup_internal
+    assert 'if OS == "Windows" then\n        msgBox(\n            "STEMwerk Setup",\n            "Windows install, repair, and uninstall are handled by the STEMwerk installer' in setup_internal
 
 
 def test_linux_drumsep_rocm_runtime_installer_has_disk_preflight_and_rocm_pins():

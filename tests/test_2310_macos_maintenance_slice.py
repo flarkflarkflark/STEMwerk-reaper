@@ -4,6 +4,19 @@
    visible on Linux -- it was gated by `OS ~= "Windows"` (true on macOS
    too), so it incorrectly appeared in the macOS Setup menu even though
    AMD ROCm is a Linux-only runtime.
+
+   2.3.1.1 update: the choices-list construction that item 1 pins was
+   extracted from startExistingRuntimeSetupMenu into a standalone,
+   directly-callable global function (buildSetupMenuChoices), and the
+   ROCm choice is now additionally gated on Linux by actually-detected
+   ROCm hardware evidence (capabilities.env), not just OS == "Linux" --
+   see tests/test_2311_setup_ui_policy.py for the full CPU/CUDA/ROCm/
+   unknown capability matrix. _run_choices_harness below now dofile()s
+   the real script and calls buildSetupMenuChoices directly (matching
+   tests/support/run_*_headless.lua's pattern) instead of extracting a
+   source substring, and test_rocm_setup_action_visible_on_linux supplies
+   real ROCm capability evidence to match that updated, more precise
+   contract.
 2. The D4 cross-variant installer guard (postinstall) already refuses
    correctly and prints informative `echo` text, but macOS Installer.app's
    GUI never surfaces stdout -- only a generic failure dialog. The guard
@@ -49,17 +62,37 @@ def _read(path: Path) -> str:
 # --- Item 1: ROCm Setup action is Linux-only -------------------------------
 
 
-def _run_choices_harness(tmp_path: Path, os_value: str) -> list[str]:
-    text = _read(SETUP)
-    start = text.index("local choices = {")
-    end = text.index("refreshSetupMenuChoiceLabels({ choices = choices })", start)
-    snippet = text[start:end]
+def _lua_state_literal(state: dict[str, str] | None) -> str:
+    if not state:
+        return "nil"
+    parts = ", ".join(f'{key} = "{value}"' for key, value in state.items())
+    return "{ " + parts + " }"
 
+
+def _run_choices_harness(
+    tmp_path: Path, os_value: str, runtime_state_dir: Path | None = None, state: dict[str, str] | None = None
+) -> list[str]:
     harness = tmp_path / f"choices_{os_value}.lua"
+    state_dir = str(runtime_state_dir).replace("\\", "\\\\") if runtime_state_dir else str(tmp_path).replace("\\", "\\\\")
     harness.write_text(
         f"""
-OS = "{os_value}"
-{snippet}
+STEMWERK_SETUP_HEADLESS_TEST = true
+reaper = {{
+    ShowMessageBox = function() return 0 end,
+    GetOS = function() return "{'Win64' if os_value == 'Windows' else ('OSX64' if os_value == 'macOS' else 'Other')}" end,
+    GetExtState = function() return "" end,
+    SetExtState = function() end,
+    HasExtState = function() return false end,
+    DeleteExtState = function() end,
+    ShowConsoleMsg = function() end,
+    defer = function() end,
+    GetResourcePath = function() return "/tmp" end,
+    get_action_context = function() return "", "" end,
+}}
+gfx = {{ init = function() end, mouse_wheel = 0, mouse_cap = 0, w = 1000, h = 700 }}
+assert(loadfile("{str(SETUP)}"))()
+local runtime = {{ runtimeState = "{state_dir}", runtimeLogs = "{state_dir}", base = "{state_dir}" }}
+local choices = buildSetupMenuChoices(runtime, {_lua_state_literal(state)})
 for _, c in ipairs(choices) do print(c.id) end
 """,
         encoding="utf-8",
@@ -79,15 +112,43 @@ def test_rocm_setup_action_hidden_on_macos(tmp_path: Path):
 
 @pytestmark_lua
 def test_rocm_setup_action_visible_on_linux(tmp_path: Path):
-    ids = _run_choices_harness(tmp_path, "Linux")
-    assert "drumsep-rocm-runtime" in ids, f"ROCm action must still appear on Linux: {ids}"
+    # 2.3.1.1 (second review, Finding 2): the ROCm choice is only shown once
+    # ROCm hardware is evidenced by an actual probe from THIS invocation
+    # (state.CURRENT_PROBE_*, invocation-local, never read from disk alone)
+    # -- see tests/test_2311_setup_ui_policy.py for the full capability
+    # matrix, including the neutral-until-probed contract this pins here too.
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "capabilities.env").write_text(
+        "CAP_VERSION=1\nPROFILE=linux-rocm\nBACKEND=rocm\nCUDA_AVAILABLE=true\nCUDA_COUNT=1\nTORCH_HIP=6.4.43483-a187df25c\n",
+        encoding="utf-8",
+    )
+    current_probe = {
+        "CURRENT_PROBE_OK": "true",
+        "CURRENT_PROBE_PROFILE": "linux-rocm",
+        "CURRENT_PROBE_BACKEND": "rocm",
+        "CURRENT_PROBE_CUDA_AVAILABLE": "true",
+        "CURRENT_PROBE_CUDA_COUNT": "1",
+        "CURRENT_PROBE_TORCH_HIP": "6.4.43483-a187df25c",
+    }
+    ids = _run_choices_harness(tmp_path, "Linux", runtime_state_dir=state_dir, state=current_probe)
+    assert "drumsep-rocm-runtime" in ids, f"ROCm action must appear on Linux with a current-invocation ROCm probe: {ids}"
+
+    # Without a current-invocation probe, the same persisted capabilities.env
+    # must NOT be enough on its own (this is exactly the bug Finding 2 closed).
+    idsNoProbe = _run_choices_harness(tmp_path, "Linux", runtime_state_dir=state_dir)
+    assert "drumsep-rocm-runtime" not in idsNoProbe, (
+        f"persisted capabilities.env alone (no current-invocation probe) must never surface the ROCm choice: {idsNoProbe}"
+    )
 
 
 @pytestmark_lua
 def test_rocm_setup_action_still_hidden_on_windows(tmp_path: Path):
     ids = _run_choices_harness(tmp_path, "Windows")
     assert "drumsep-rocm-runtime" not in ids
-    assert "drumsep-cuda-runtime" in ids and "drumsep-directml-runtime" in ids
+    # 2.3.1.1: Windows Setup-within-REAPER no longer offers any mutating
+    # action, including these -- see tests/test_2311_setup_ui_policy.py.
+    assert "drumsep-cuda-runtime" not in ids and "drumsep-directml-runtime" not in ids
 
 
 def test_red_old_guard_would_have_shown_rocm_action_on_macos():
@@ -95,10 +156,10 @@ def test_red_old_guard_would_have_shown_rocm_action_on_macos():
     Linux and macOS, so it could not have distinguished them -- pins the
     exact shape of the bug this fix closes."""
     text = _read(SETUP)
-    start = text.index("local choices = {")
-    end = text.index("refreshSetupMenuChoiceLabels({ choices = choices })", start)
+    start = text.index("function buildSetupMenuChoices(runtime, state)")
+    end = text.index("\nend", start)
     snippet = text[start:end]
-    assert 'if OS == "Linux" then' in snippet, "current source must gate ROCm specifically to Linux"
+    assert 'if OS == "Linux" and' in snippet, "current source must gate ROCm specifically to Linux"
     old_os_check_alone_would_include_macos = ("macOS" != "Windows")
     assert old_os_check_alone_would_include_macos, "sanity: macOS satisfies the old OS ~= Windows guard"
 

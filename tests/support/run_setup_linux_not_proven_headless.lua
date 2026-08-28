@@ -48,6 +48,7 @@ local REPO_ROOT = scriptDir() .. "/../.."
 local TARGET = REPO_ROOT .. "/scripts/reaper/_internal/STEMwerk_Setup_Internal.lua"
 
 STEMWERK_SETUP_HEADLESS_TEST = true
+STEMWERK_SETUP_TEST_HOOKS = {}
 reaper = {
     ShowMessageBox = function() return 0 end,
     GetOS = function() return "Other" end,
@@ -70,6 +71,13 @@ assertf(type(buildLinuxFinalRows) == "function", "buildLinuxFinalRows was not ex
 assertf(type(buildCheckOnlyFinalMessage) == "function", "buildCheckOnlyFinalMessage was not exposed as a global function")
 assertf(type(labelHistoricalCheckOnlyLogLines) == "function", "labelHistoricalCheckOnlyLogLines was not exposed as a global function")
 assertf(type(linuxLogPanelDefaultScrollToTop) == "function", "linuxLogPanelDefaultScrollToTop was not exposed as a global function")
+assertf(type(splitHistoricalLogBanner) == "function", "splitHistoricalLogBanner was not exposed as a global function")
+assertf(type(historicalCheckOnlyLogMarkerText) == "function", "historicalCheckOnlyLogMarkerText was not exposed as a global function")
+assertf(type(syncLinuxLogScroll) == "function", "syncLinuxLogScroll was not exposed as a global function")
+assertf(type(setLinuxLogScrollManual) == "function", "setLinuxLogScrollManual was not exposed as a global function")
+assertf(type(adjustLinuxLogScroll) == "function", "adjustLinuxLogScroll was not exposed as a global function")
+assertf(type(STEMWERK_SETUP_TEST_HOOKS.buildLinuxLogDisplayLines) == "function",
+    "the namespaced test hook did not expose the real production display-line builder")
 
 local function containsSubstring(text, needle)
     return tostring(text or ""):find(needle, 1, true) ~= nil
@@ -341,21 +349,77 @@ local function testFixtureE_HistoricalLogLabelledForCheckOnly()
         assertf(unchanged[i] == line, "a live run's log line " .. i .. " must be byte-identical to the source")
     end
 
-    -- BLOCKER 2: labelling alone is not enough -- the live AMD retest showed
-    -- the historical marker line 1 with NO visible marker on screen, because
-    -- the log panel's default scroll position (logScroll=0) shows the BOTTOM
-    -- (most recent) end of a long buffer, scrolling the marker (prepended at
-    -- the top/oldest position) out of view. linuxLogPanelDefaultScrollToTop is
-    -- the pure decision drawn on to fix this: a Check-only final window
-    -- (checkVerdict ~= nil) must default to showing the TOP of the buffer so
-    -- the marker is visible without the user having to scroll; a live run's
-    -- log panel (checkVerdict == nil, no marker is ever prepended) is
-    -- unaffected and keeps its normal bottom/most-recent default.
+    -- BLOCKER 2 (original fix, 2.3.1.0): labelling alone was not enough --
+    -- the live AMD retest showed the historical marker line 1 with NO
+    -- visible marker on screen, because the log panel's default scroll
+    -- position (logScroll=0) shows the BOTTOM (most recent) end of a long
+    -- buffer, scrolling the marker (prepended at the top/oldest position)
+    -- out of view. The original fix made a Check-only final window default
+    -- to the TOP of the buffer instead -- but that traded the marker's
+    -- visibility for hiding the actual current end-lines behind a full
+    -- scroll (Finding 3, 2.3.1.1 adversarial review).
+    --
+    -- NEW DUAL CONTRACT (2.3.1.1): both properties must hold at once --
+    -- (1) the historical-provenance marker stays visible regardless of
+    -- scroll position, and (2) the console's initial position shows the
+    -- actual current end-lines, same as any other log panel. This is now
+    -- solved structurally, not via scroll position: drawLinuxLogPanel calls
+    -- splitHistoricalLogBanner to peel the marker off the scrollable buffer
+    -- and renders it as a fixed banner instead. Because
+    -- splitHistoricalLogBanner's signature takes no scroll offset at all,
+    -- its result -- and therefore the marker's visibility -- cannot vary
+    -- with scroll position by construction.
     local sampleVerdict = { isCheckOnly = true, verifiedRuntimeOk = false, notProvenOnly = true }
-    assertf(linuxLogPanelDefaultScrollToTop(sampleVerdict) == true,
-        "a Check-only final window (marker always present) must default its log panel to the top of the buffer")
+    assertf(linuxLogPanelDefaultScrollToTop(sampleVerdict) == false,
+        "part 2 of the dual contract: a Check-only final window must now default its log panel to the bottom (actual current end-lines), same as a live run")
     assertf(linuxLogPanelDefaultScrollToTop(nil) == false,
-        "a live (non-Check) run (no marker ever prepended) must keep the log panel's normal bottom/most-recent default")
+        "a live (non-Check) run must keep the log panel's normal bottom/most-recent default")
+end
+
+-- =======================================================================
+-- Fixture G: HISTORICAL BANNER PEELING -- part 1 of the Finding 3 dual
+-- contract: splitHistoricalLogBanner must reliably recover the exact marker
+-- text prepended by labelHistoricalCheckOnlyLogLines, and the untouched body
+-- lines behind it, from the real production marker text -- not a
+-- reimplementation or a source-text assertion. A live run's lines (never
+-- marker-prefixed) must be returned with no banner and byte-identical body.
+-- =======================================================================
+local function testFixtureG_HistoricalBannerPeeledStructurallyFromScroll()
+    local rawLines = {
+        "Setup run started (repair)",
+        "Mode: repair",
+        "Successfully installed pip-26.2.1",
+    }
+
+    -- Check-only path: labelHistoricalCheckOnlyLogLines prepends the real
+    -- marker; splitHistoricalLogBanner must peel exactly that marker back
+    -- off and reproduce the original body verbatim.
+    local labelled = labelHistoricalCheckOnlyLogLines(rawLines, true)
+    local banner, body = splitHistoricalLogBanner(labelled)
+    assertf(banner == historicalCheckOnlyLogMarkerText(),
+        "splitHistoricalLogBanner must recover the exact marker text prepended by labelHistoricalCheckOnlyLogLines, got: " .. tostring(banner))
+    assertf(#body == #rawLines, "peeled body must have exactly the original line count, got " .. tostring(#body))
+    for i, line in ipairs(rawLines) do
+        assertf(body[i] == line, "peeled body content must be preserved verbatim (line " .. i .. ")")
+    end
+
+    -- Live (non-Check) path: labelHistoricalCheckOnlyLogLines never prepends
+    -- a marker, so splitHistoricalLogBanner must report no banner at all and
+    -- return the original lines unchanged -- proving live runs never get the
+    -- banner treatment.
+    local unlabelled = labelHistoricalCheckOnlyLogLines(rawLines, false)
+    local liveBanner, liveBody = splitHistoricalLogBanner(unlabelled)
+    assertf(liveBanner == nil, "a live run's lines must never be treated as carrying a historical banner")
+    assertf(#liveBody == #rawLines, "a live run's body must be returned with its original line count")
+    for i, line in ipairs(rawLines) do
+        assertf(liveBody[i] == line, "a live run's body line " .. i .. " must be byte-identical to the source")
+    end
+
+    -- Empty/nil input must not error and must report no banner.
+    local emptyBanner, emptyBody = splitHistoricalLogBanner({})
+    assertf(emptyBanner == nil and #emptyBody == 0, "an empty log buffer must report no banner and an empty body")
+    local nilBanner, nilBody = splitHistoricalLogBanner(nil)
+    assertf(nilBanner == nil and #nilBody == 0, "a nil log buffer must report no banner and an empty body")
 end
 
 -- =======================================================================
@@ -448,6 +512,321 @@ local function testLiveRegressionShapeAmdCase()
     assertf(containsSubstring(labelled[1], "historical"), "old repair/pip log content must be clearly labelled historical")
 end
 
+-- =======================================================================
+-- Fixture H: Finding 5 (2.3.1.1 adversarial review) -- keyboard scroll must
+-- update followTail exactly like wheel/scrollbar, through the one shared
+-- helper (syncLinuxLogScroll / setLinuxLogScrollManual / adjustLinuxLogScroll)
+-- all scroll input now routes through. These are the REAL production
+-- functions (not a reimplementation) -- their `target` parameter exists
+-- purely so this exact logic can be driven against a synthetic state table
+-- headlessly, instead of the real module-local LINUX_SETUP window, which
+-- only a live gfx/REAPER window can construct. Every call below mirrors
+-- exactly what a real input handler in linuxSetupTick does:
+--   Up/Down arrow  -> adjustLinuxLogScroll(+-5, total, visible, target)
+--   Page Up/Down   -> adjustLinuxLogScroll(+-visible, total, visible, target)
+--   Home           -> setLinuxLogScrollManual(math.huge, total, visible, target)
+--   End            -> setLinuxLogScrollManual(0, total, visible, target)
+--   wheel/scrollbar -> adjustLinuxLogScroll / setLinuxLogScrollManual likewise
+-- =======================================================================
+local function testFixtureH_KeyboardScrollUpdatesFollowTailLikeWheelScrollbar()
+    -- 1) Start at the bottom, following the tail (matches a freshly opened
+    -- running window: logScroll = 0, followTail = true).
+    local target = { logScroll = 0, followTail = true }
+    local total, visible = 50, 10
+    local raw = {}
+    for i = 1, total do raw[i] = "line-" .. i end
+    syncLinuxLogScroll(STEMWERK_SETUP_TEST_HOOKS.buildLinuxLogDisplayLines(raw, 80), visible, target)
+    assertf(target.logScroll == 0, "sanity: must start at the bottom")
+    assertf(target.followTail == true, "sanity: must start following the tail")
+
+    -- 2) Keyboard scroll up (mirrors the real Up-arrow handler, key 30064).
+    adjustLinuxLogScroll(5, total, visible, target)
+    assertf(target.logScroll == 5, "Up-arrow must move the scroll position, got " .. tostring(target.logScroll))
+    assertf(target.followTail == false,
+        "keyboard scroll away from the bottom must clear followTail just like wheel/scrollbar do -- this is the exact bug Finding 5 fixes")
+
+    -- 3) New log lines arrive (totalLines grows). This mirrors linuxSetupTick's
+    -- per-tick resync (drawLinuxLogPanel always calls syncLinuxLogScroll) --
+    -- with followTail already false, growing totalLines must not silently
+    -- pull the scroll position back down.
+    total = 60
+    for i = 51, total do raw[i] = "line-" .. i end
+    syncLinuxLogScroll(STEMWERK_SETUP_TEST_HOOKS.buildLinuxLogDisplayLines(raw, 80), visible, target)
+
+    -- 4) Position stays put: Finding 3 (second review) -- logScroll is a
+    -- distance-from-bottom, so preserving its raw NUMBER while the bottom
+    -- itself moved 10 lines further away would silently drag the viewport
+    -- toward the new content. The CONTENT the user was looking at stays
+    -- anchored only if logScroll advances by exactly the same 10 lines that
+    -- were appended (5 -> 15); followTail is still false (nothing here
+    -- silently re-enabled it).
+    assertf(target.logScroll == 15, "new log lines must advance the anchor by the same amount so the same content stays visible, got " .. tostring(target.logScroll))
+    assertf(target.followTail == false, "new log lines must not silently resume follow-tail on their own")
+
+    -- 5) End explicitly returns to live-follow (mirrors the new End-key
+    -- handler, key 6647396).
+    setLinuxLogScrollManual(0, total, visible, target)
+    assertf(target.logScroll == 0, "End must jump back to the bottom, got " .. tostring(target.logScroll))
+    assertf(target.followTail == true, "End must explicitly resume live-follow")
+
+    -- 6) New log lines are followed again: once followTail is true,
+    -- linuxSetupTick's own per-tick rule (`if followTail then logScroll = 0
+    -- end`, unchanged by this fix and covered by
+    -- test_console_autoscroll_follows_tail_and_respects_manual_scroll)
+    -- keeps pinning the view to the bottom as content grows; the scroll
+    -- helper itself must not fight that by drifting off zero on a mere
+    -- resync.
+    total = 70
+    for i = 61, total do raw[i] = "line-" .. i end
+    if target.followTail then target.logScroll = 0 end
+    syncLinuxLogScroll(STEMWERK_SETUP_TEST_HOOKS.buildLinuxLogDisplayLines(raw, 80), visible, target)
+    assertf(target.logScroll == 0, "once following again, new log lines must keep the view pinned to the bottom, got " .. tostring(target.logScroll))
+
+    -- 7) Completion behavior: the deferred finalize transition
+    -- (`pendingFinalScrollReset`, unchanged by this fix) always resets to
+    -- the bottom with follow-tail resumed, matching exactly what
+    -- setLinuxLogScrollManual(0, ...) itself produces -- proving the
+    -- keyboard-scroll fix and the completion transition converge on the
+    -- same final state instead of two different ideas of "the bottom".
+    local completionTarget = { logScroll = 5, followTail = false }
+    setLinuxLogScrollManual(0, total, visible, completionTarget)
+    assertf(completionTarget.logScroll == 0 and completionTarget.followTail == true,
+        "completion must land on the same (logScroll=0, followTail=true) state as an explicit End keypress")
+
+    -- Page Up / Page Down (mirrors the new key handlers, keys 1885828464 /
+    -- 1885824110) must also update followTail through the same helper.
+    local pageTarget = { logScroll = 0, followTail = true }
+    adjustLinuxLogScroll(visible, total, visible, pageTarget)
+    assertf(pageTarget.followTail == false, "Page Up must clear followTail like every other manual scroll input")
+    adjustLinuxLogScroll(-visible, total, visible, pageTarget)
+    assertf(pageTarget.followTail == true, "Page Down back to the bottom must resume followTail")
+
+    -- Home (mirrors key 1752132965) must jump to the top and clear followTail.
+    local homeTarget = { logScroll = 0, followTail = true }
+    setLinuxLogScrollManual(math.huge, total, visible, homeTarget)
+    local expectedMax = total - visible
+    assertf(homeTarget.logScroll == expectedMax, "Home must jump to the top of the buffer, got " .. tostring(homeTarget.logScroll))
+    assertf(homeTarget.followTail == false, "Home must clear followTail (the top is never the bottom)")
+end
+
+-- =======================================================================
+-- Fixture I: Finding 3 (2.3.1.1 second adversarial review) -- manual scroll
+-- must anchor the same VISIBLE CONTENT, not just preserve a numeric
+-- distance-from-bottom. This drives the real syncLinuxLogScroll /
+-- setLinuxLogScrollManual production functions and independently recomputes
+-- the first-visible-line INDEX using the exact same formula drawLinuxLogPanel
+-- itself uses (startIdx = totalLines - visibleLines - logScroll + 1, pinned
+-- below by a source-text cross-check against the real renderer so this
+-- helper cannot silently drift from production) -- then confirms that index
+-- still names the same synthetic line CONTENT (a stable "line-N" identity
+-- array modeling the growing display-line buffer) before and after growth,
+-- not just that logScroll itself moved by a plausible-looking amount.
+-- =======================================================================
+local function startIdxFor(totalLines, visibleLines, logScroll)
+    return math.max(1, totalLines - visibleLines - logScroll + 1)
+end
+
+local function testFixtureI_ManualScrollAnchorsSameVisibleContentThroughGrowth()
+    local rendererText = _G.__setup_internal_source_for_fixture_i
+    if not rendererText then
+        local f = io.open(TARGET, "r")
+        rendererText = f:read("*a")
+        f:close()
+        _G.__setup_internal_source_for_fixture_i = rendererText
+    end
+    assertf(rendererText:find("totalLines - visibleLines - (LINUX_SETUP.logScroll or 0) + 1", 1, true) ~= nil,
+        "startIdxFor above must match the exact formula drawLinuxLogPanel uses to pick the first visible display line")
+
+    -- 1) 50 display lines, modeled as a stable identity array; line 50 is
+    -- the newest/bottom-most.
+    local lines = {}
+    for i = 1, 50 do lines[i] = "line-" .. i end
+    local total, visible = 50, 10
+    local target = { logScroll = 0, followTail = true }
+    local display = STEMWERK_SETUP_TEST_HOOKS.buildLinuxLogDisplayLines(lines, 80)
+    syncLinuxLogScroll(display, visible, target)
+
+    -- 2) User scrolls up to view line 36 (startIdx=36 <=> logScroll=5, since
+    -- 50-10-5+1=36).
+    adjustLinuxLogScroll(5, total, visible, target)
+    local firstVisibleBefore = startIdxFor(total, visible, target.logScroll)
+    assertf(firstVisibleBefore == 36, "sanity: expected to be viewing line 36, computed startIdx=" .. tostring(firstVisibleBefore))
+    assertf(lines[firstVisibleBefore] == "line-36", "sanity check on the identity array itself")
+
+    -- 3) follow-tail is off (set by the manual scroll above).
+    assertf(target.followTail == false, "sanity: manual scroll must have cleared followTail")
+
+    -- 4) 10 new display lines arrive at the bottom.
+    for i = 51, 60 do lines[i] = "line-" .. i end
+    total = 60
+    display = STEMWERK_SETUP_TEST_HOOKS.buildLinuxLogDisplayLines(lines, 80)
+    syncLinuxLogScroll(display, visible, target)
+
+    -- 5) The first visible line must still be line 36 -- the same CONTENT,
+    -- not merely a similar-looking offset number.
+    local firstVisibleAfter = startIdxFor(total, visible, target.logScroll)
+    assertf(lines[firstVisibleAfter] == "line-36",
+        "the first visible line must still be the SAME content (line-36) after growth, got " .. tostring(lines[firstVisibleAfter]) .. " (startIdx=" .. tostring(firstVisibleAfter) .. ", logScroll=" .. tostring(target.logScroll) .. ")")
+
+    -- 6) End returns to the bottom and resumes follow-tail.
+    setLinuxLogScrollManual(0, total, visible, target)
+    assertf(target.followTail == true, "End must resume follow-tail")
+    assertf(startIdxFor(total, visible, target.logScroll) == total - visible + 1, "End must show the true bottom of the buffer")
+
+    -- 7) New lines are followed again: as more content arrives while
+    -- followTail is true, linuxSetupTick's own per-tick rule (logScroll=0
+    -- whenever followTail) keeps the viewport pinned to the newest content,
+    -- i.e. the first visible line keeps advancing forward, not staying put.
+    for i = 61, 65 do lines[i] = "line-" .. i end
+    total = 65
+    if target.followTail then target.logScroll = 0 end
+    display = STEMWERK_SETUP_TEST_HOOKS.buildLinuxLogDisplayLines(lines, 80)
+    syncLinuxLogScroll(display, visible, target)
+    local firstVisibleFollowing = startIdxFor(total, visible, target.logScroll)
+    assertf(lines[firstVisibleFollowing] == "line-56",
+        "while following, the first visible line must advance with new content (expected line-56, the new tail's top row), got " .. tostring(lines[firstVisibleFollowing]))
+
+    -- 8) Truncation of the anchored line clamps predictably: scroll away
+    -- from the bottom again, anchor onto a specific line, then simulate the
+    -- buffer being truncated (e.g. readTail's sliding window dropping old
+    -- lines) so that anchored line no longer exists -- logScroll must clamp
+    -- to the new maxScroll rather than pointing past the (now smaller)
+    -- buffer, landing predictably at the new top of the buffer.
+    local truncTarget = { logScroll = 0, followTail = true }
+    syncLinuxLogScroll(display, visible, truncTarget)
+    adjustLinuxLogScroll(50, 65, visible, truncTarget)
+    assertf(truncTarget.logScroll == 50, "sanity: scrolled 50 lines up from the bottom of a 65-line buffer")
+    assertf(truncTarget.followTail == false, "sanity: manual scroll must have cleared followTail")
+    -- Buffer truncated down to 20 lines (older content fell off the top of
+    -- a sliding readTail() window); the anchored line is long gone.
+    local maxScrollAfterTruncation = math.max(0, 20 - visible)
+    local truncated = {}
+    for i = 46, 65 do truncated[#truncated + 1] = "line-" .. i end
+    syncLinuxLogScroll(STEMWERK_SETUP_TEST_HOOKS.buildLinuxLogDisplayLines(truncated, 80), visible, truncTarget)
+    assertf(truncTarget.logScroll == maxScrollAfterTruncation,
+        "truncation must clamp logScroll predictably to the new maxScroll, got " .. tostring(truncTarget.logScroll) .. " expected " .. tostring(maxScrollAfterTruncation))
+    assertf(startIdxFor(20, visible, truncTarget.logScroll) == 1, "a clamped-after-truncation view must land at the new top of the buffer")
+end
+
+-- =======================================================================
+-- Fixture J: final-review content anchor. This drives the real production
+-- display builder and scroll synchronizer. Assertions use the first visible
+-- display item's source identity and character offset, never logScroll alone.
+-- =======================================================================
+local function testFixtureJ_ContentAnchorSurvivesReflowResizeAndSlidingTail()
+    local buildDisplay = STEMWERK_SETUP_TEST_HOOKS.buildLinuxLogDisplayLines
+
+    local function numbered(first, last)
+        local lines = {}
+        for i = first, last do lines[#lines + 1] = "line-" .. i end
+        return lines
+    end
+
+    local function render(target, raw, width, visible)
+        local display = buildDisplay(raw, width)
+        syncLinuxLogScroll(display, visible, target)
+        local idx = math.max(1, #display - visible - (target.logScroll or 0) + 1)
+        return display, display[idx], idx
+    end
+
+    local function anchorAt(target, display, visible, index)
+        local scroll = math.max(0, #display - visible - index + 1)
+        setLinuxLogScrollManual(scroll, #display, visible, target)
+        syncLinuxLogScroll(display, visible, target)
+    end
+
+    -- 1) 50 -> 60 append and 2) viewport height changes keep line 36.
+    local raw = numbered(1, 50)
+    local target = { logScroll = 0, followTail = true }
+    local display = render(target, raw, 80, 10)
+    anchorAt(target, display, 10, 36)
+    for i = 51, 60 do raw[#raw + 1] = "line-" .. i end
+    local grown, first = render(target, raw, 80, 10)
+    assertf(first.source == "line-36", "append must retain line-36, got " .. tostring(first.source))
+    local _, taller = render(target, raw, 80, 15)
+    assertf(taller.source == "line-36", "taller viewport must retain line-36, got " .. tostring(taller.source))
+    local _, shorter = render(target, raw, 80, 6)
+    assertf(shorter.source == "line-36", "shorter viewport must retain line-36, got " .. tostring(shorter.source))
+
+    -- 3/10) Width reflow keeps both the source and the wrapped character
+    -- position for an anchor in the third segment of a long line.
+    local wrappedRaw = numbered(1, 20)
+    wrappedRaw[12] = "line-12 " .. string.rep("alpha beta gamma delta ", 8)
+    local wrappedTarget = { logScroll = 0, followTail = true }
+    local wide = render(wrappedTarget, wrappedRaw, 24, 8)
+    local thirdSegment
+    for i, item in ipairs(wide) do
+        if item.sourceIndex == 12 and item.segmentIndex == 3 then thirdSegment = i break end
+    end
+    assertf(thirdSegment ~= nil, "sanity: long line must have a third wrapped segment")
+    anchorAt(wrappedTarget, wide, 8, thirdSegment)
+    local _, beforeWrap = render(wrappedTarget, wrappedRaw, 24, 8)
+    local _, afterWrap = render(wrappedTarget, wrappedRaw, 15, 8)
+    assertf(afterWrap.sourceIndex == 12 and afterWrap.source == wrappedRaw[12], "reflow must retain the same source line")
+    assertf(afterWrap.charStart <= beforeWrap.charStart,
+        "reflow must select the segment containing the old character offset")
+    assertf((afterWrap.charEnd or math.huge) >= beforeWrap.charStart,
+        "reflowed segment must cover the old wrapped character offset")
+
+    -- 4) Duplicate line text is disambiguated by neighboring source context.
+    local duplicateRaw = numbered(1, 50)
+    duplicateRaw[20] = "repeated-status"
+    duplicateRaw[36] = "repeated-status"
+    duplicateRaw[19], duplicateRaw[21] = "first-before", "first-after"
+    duplicateRaw[35], duplicateRaw[37] = "anchor-before", "anchor-after"
+    local duplicateTarget = { logScroll = 0, followTail = true }
+    local duplicates = render(duplicateTarget, duplicateRaw, 80, 10)
+    anchorAt(duplicateTarget, duplicates, 10, 36)
+    for _ = 1, 5 do table.remove(duplicateRaw, 1) end
+    for i = 51, 55 do duplicateRaw[#duplicateRaw + 1] = "line-" .. i end
+    local _, duplicateFirst = render(duplicateTarget, duplicateRaw, 80, 10)
+    assertf(duplicateFirst.source == "repeated-status" and duplicateFirst.sourceIndex == 31,
+        "duplicate anchor must follow its anchor-before/anchor-after context, got sourceIndex=" .. tostring(duplicateFirst.sourceIndex))
+
+    -- 5) Growth plus head truncation keeps a retained anchor.
+    local sliding = numbered(1, 50)
+    local slidingTarget = { logScroll = 0, followTail = true }
+    local slidingDisplay = render(slidingTarget, sliding, 80, 10)
+    anchorAt(slidingTarget, slidingDisplay, 10, 36)
+    sliding = numbered(11, 60)
+    local _, slidingFirst = render(slidingTarget, sliding, 80, 10)
+    assertf(slidingFirst.source == "line-36", "sliding tail must retain line-36, got " .. tostring(slidingFirst.source))
+
+    -- 6) If the anchor itself was truncated, clamp predictably to new top.
+    local removed = numbered(1, 50)
+    local removedTarget = { logScroll = 0, followTail = true }
+    local removedDisplay = render(removedTarget, removed, 80, 10)
+    anchorAt(removedTarget, removedDisplay, 10, 6)
+    removed = numbered(11, 60)
+    local _, removedFirst = render(removedTarget, removed, 80, 10)
+    assertf(removedFirst.source == "line-11", "removed anchor must clamp to retained head line-11, got " .. tostring(removedFirst.source))
+
+    -- 7) Repeated rapid append+truncation updates do not accumulate drift.
+    local rapid = numbered(1, 50)
+    local rapidTarget = { logScroll = 0, followTail = true }
+    local rapidDisplay = render(rapidTarget, rapid, 80, 10)
+    anchorAt(rapidTarget, rapidDisplay, 10, 36)
+    for step = 1, 8 do
+        table.remove(rapid, 1)
+        rapid[#rapid + 1] = "line-" .. (50 + step)
+        local _, rapidFirst = render(rapidTarget, rapid, 80, 10)
+        assertf(rapidFirst.source == "line-36", "rapid update " .. step .. " drifted to " .. tostring(rapidFirst.source))
+    end
+
+    -- 8) End resumes tail; 9) Home remains anchored after the next update.
+    setLinuxLogScrollManual(0, #grown, 10, target)
+    raw[#raw + 1] = "line-61"
+    local _, endFirst = render(target, raw, 80, 10)
+    assertf(target.followTail and endFirst.source == "line-52", "End must resume tail-follow at the newest content")
+
+    setLinuxLogScrollManual(math.huge, #grown + 1, 10, target)
+    raw[#raw + 1] = "line-62"
+    local _, homeFirst = render(target, raw, 80, 10)
+    assertf(not target.followTail and homeFirst.source == "line-1", "Home must remain anchored to the retained head")
+
+    print("PASS fixture-j-content-anchor-survives-reflow-resize-and-sliding-tail")
+end
+
 local tests = {
     { "incomplete-probe-stays-not-proven-code", testIncompleteProbeStaysNotProvenCode },
     { "explicit-import-failure-gets-own-failed-code", testExplicitImportFailureGetsOwnFailedCode },
@@ -457,8 +836,12 @@ local tests = {
     { "fixture-c-not-proven-overall-headline", testFixtureC_NotProvenOverallHeadline },
     { "fixture-d-repair-guidance-only-for-genuine-failure", testFixtureD_RepairGuidanceOnlyForGenuineFailure },
     { "fixture-e-historical-log-labelled-for-check-only", testFixtureE_HistoricalLogLabelledForCheckOnly },
+    { "fixture-g-historical-banner-peeled-structurally-from-scroll", testFixtureG_HistoricalBannerPeeledStructurallyFromScroll },
     { "fixture-f-copy-summary-matches-visible-rows-for-both-verdicts", testFixtureF_CopySummaryMatchesVisibleRowsForBothVerdicts },
     { "live-regression-shape-amd-case", testLiveRegressionShapeAmdCase },
+    { "fixture-h-keyboard-scroll-updates-follow-tail-like-wheel-scrollbar", testFixtureH_KeyboardScrollUpdatesFollowTailLikeWheelScrollbar },
+    { "fixture-i-manual-scroll-anchors-same-visible-content-through-growth", testFixtureI_ManualScrollAnchorsSameVisibleContentThroughGrowth },
+    { "fixture-j-content-anchor-survives-reflow-resize-and-sliding-tail", testFixtureJ_ContentAnchorSurvivesReflowResizeAndSlidingTail },
 }
 
 for _, t in ipairs(tests) do

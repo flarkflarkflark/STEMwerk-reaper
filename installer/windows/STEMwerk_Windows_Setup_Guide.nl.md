@@ -33,7 +33,7 @@ Deze installers zijn bedoeld om volledig offline te kunnen afronden met alleen d
 ## Wat je nu doet
 
 1. Start REAPER.
-2. Als de `STEMwerk`-acties al zichtbaar zijn, voer dan `STEMwerk: Setup` uit als je de runtime wilt controleren of herstellen.
+2. Als de `STEMwerk`-acties al zichtbaar zijn, voer dan `STEMwerk: Setup` uit als je de runtime wilt controleren.
 3. Gebruik `Check only` om de runtime te verifieren.
 4. Start `Stemwerk: Main` vanuit het Actions-menu voor normaal gebruik.
 5. Als `STEMwerk`-acties ontbreken, open dan `Actions -> Show action list -> ReaScript: Load...`.
@@ -43,16 +43,14 @@ Deze installers zijn bedoeld om volledig offline te kunnen afronden met alleen d
 
 ## Setup en herstel
 
-Gebruik `STEMwerk: Setup` voor:
+Op Windows worden installatie, update en herstel afgehandeld door de STEMwerk-installer, niet door `STEMwerk: Setup` binnen REAPER. Gebruik `STEMwerk: Setup` alleen voor:
 
 - `Check only`
-- `Repair`
-- `Rebuild venv`
 - `Save Support Bundle`
 - `Open logs folder`
 - `Open runtime folder`
 
-Voer de installer vooral opnieuw uit als de geinstalleerde scriptpayload ontbreekt of beschadigd is, of als je meegeleverde payloads opnieuw wilt installeren.
+Als `Check only` een probleem meldt, voer dan dezelfde STEMwerk-installer (online of bundled) opnieuw uit die je eerder gebruikte; die herstelt de runtime ter plekke. Voer de installer ook opnieuw uit als de geinstalleerde scriptpayload ontbreekt of beschadigd is, of als je meegeleverde payloads opnieuw wilt installeren.
 
 De-installeren verwijdert STEMwerk-runtime-data en geinstalleerde STEMwerk REAPER-scripts.
 
@@ -69,7 +67,7 @@ De-installeren verwijdert STEMwerk-runtime-data en geinstalleerde STEMwerk REAPE
 6. Laad niet zomaar elk `.lua`-bestand in deze map.
 7. Laad geen bestanden uit `_internal\`.
 8. `STEMwerk_AI_Separate.lua` is alleen een compatibiliteitswrapper voor oudere installs en is niet nodig bij een verse installatie.
-9. Voer na registratie `STEMwerk: Setup` uit, klik op `Check only` en gebruik daarna `Repair` of `Rebuild venv` als dat wordt aangeraden.
+9. Voer na registratie `STEMwerk: Setup` uit en klik op `Check only`. Meldt dat een probleem, voer dan de STEMwerk-installer opnieuw uit om de runtime te herstellen.
 10. Gebruik `Open logs folder` of `Save Support Bundle` als je hulp vraagt.
 11. Voer de installer alleen opnieuw uit als de installatiepayload zelf ontbreekt of beschadigd is.
 

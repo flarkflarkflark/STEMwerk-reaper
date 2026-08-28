@@ -33,7 +33,7 @@ Diese Installer sollen die Einrichtung fuer ihre Ziel-Runtime vollstaendig offli
 ## Naechste Schritte
 
 1. Starte REAPER.
-2. Wenn die `STEMwerk`-Aktionen bereits sichtbar sind, fuehre `STEMwerk: Setup` aus, wenn du die Runtime pruefen oder reparieren willst.
+2. Wenn die `STEMwerk`-Aktionen bereits sichtbar sind, fuehre `STEMwerk: Setup` aus, wenn du die Runtime pruefen willst.
 3. Nutze `Check only`, um den Runtime-Zustand zu verifizieren.
 4. Starte `Stemwerk: Main` aus dem Actions-Menue fuer die normale Nutzung.
 5. Wenn `STEMwerk`-Aktionen fehlen, oeffne `Actions -> Show action list -> ReaScript: Load...`.
@@ -43,16 +43,14 @@ Diese Installer sollen die Einrichtung fuer ihre Ziel-Runtime vollstaendig offli
 
 ## Setup und Reparatur
 
-Nutze `STEMwerk: Setup` fuer:
+Unter Windows werden Installation, Update und Reparatur vom STEMwerk-Installer erledigt, nicht von `STEMwerk: Setup` innerhalb von REAPER. Nutze `STEMwerk: Setup` nur fuer:
 
 - `Check only`
-- `Repair`
-- `Rebuild venv`
 - `Save Support Bundle`
 - `Open logs folder`
 - `Open runtime folder`
 
-Fuehre den Installer vor allem dann erneut aus, wenn die installierte Skript-Payload fehlt oder beschaedigt ist, oder wenn du gebuendelte Payloads erneut installieren willst.
+Meldet `Check only` ein Problem, fuehre denselben STEMwerk-Installer (online oder bundled) erneut aus, den du zuvor verwendet hast; er repariert die Runtime an Ort und Stelle. Fuehre den Installer auch dann erneut aus, wenn die installierte Skript-Payload fehlt oder beschaedigt ist, oder wenn du gebuendelte Payloads erneut installieren willst.
 
 Die Deinstallation entfernt STEMwerk-Runtime-Daten und installierte STEMwerk-REAPER-Skripte.
 
@@ -69,7 +67,7 @@ Die Deinstallation entfernt STEMwerk-Runtime-Daten und installierte STEMwerk-REA
 6. Lade nicht einfach jede `.lua`-Datei in diesem Ordner.
 7. Lade keine Dateien unter `_internal\`.
 8. `STEMwerk_AI_Separate.lua` ist nur ein Kompatibilitaets-Wrapper fuer aeltere Installationen und wird bei einer frischen Installation nicht benoetigt.
-9. Fuehre nach der Registrierung `STEMwerk: Setup` aus, klicke auf `Check only` und nutze danach `Repair` oder `Rebuild venv`, wenn das empfohlen wird.
+9. Fuehre nach der Registrierung `STEMwerk: Setup` aus und klicke auf `Check only`. Meldet das ein Problem, fuehre den STEMwerk-Installer erneut aus, um die Runtime zu reparieren.
 10. Nutze `Open logs folder` oder `Save Support Bundle`, wenn du Hilfe anforderst.
 11. Fuehre den Installer nur erneut aus, wenn die Installations-Payload selbst fehlt oder beschaedigt ist.
 
