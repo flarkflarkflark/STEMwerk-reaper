@@ -1717,6 +1717,8 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
             runtimeGuidance = "Run Setup/Repair to install the Apple MPS Drum Kit Split runtime.\n"
         elseif OS == "Linux" then
             runtimeGuidance = runtimeGuidance .. "Optional GPU path: Setup/Repair Drum Kit Split ROCm runtime.\n"
+        elseif OS == "Windows" then
+            runtimeGuidance = "Re-run the STEMwerk installer to repair the Drum Kit Split runtime.\n"
         end
         local msg = headline .. "\n"
             .. runtimeGuidance
@@ -13770,8 +13772,9 @@ local function fileSizeBytes(p)
     return tonumber(sz) or -1
 end
 
-B0_MODEL_BLOCK_MESSAGE =
-    "The required model for this workflow is not installed. Open STEMwerk Setup and run Repair to install the required models before processing."
+B0_MODEL_BLOCK_MESSAGE = (OS == "Windows")
+    and "The required model for this workflow is not installed. Re-run the STEMwerk installer to install the required models before processing."
+    or "The required model for this workflow is not installed. Open STEMwerk Setup and run Repair to install the required models before processing."
 
 function B0_readSimpleEnvFile(path)
     local out = {}
@@ -20443,7 +20446,9 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         if not pythonAvailable then
             local msg =
                 "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
-                .. "Run STEMwerk-SETUP.lua to repair the runtime."
+                .. ((OS == "Windows")
+                    and "Re-run the STEMwerk installer to repair the runtime."
+                    or "Run STEMwerk-SETUP.lua to repair the runtime.")
             debugLog(msg)
             SW_LOG.logExecResult("preflight: python missing", -1, msg)
             local lf = io.open(logFile, "w")
@@ -22862,7 +22867,9 @@ _sep.processAllStemsResult = function()
                 .. "\n\nFix:\n"
                 .. "Install the missing ONNX Runtime package into the Python venv that REAPER is using:\n"
                 .. onnxFixCmd .. "\n\n"
-                .. "Then rerun STEMwerk-SETUP.lua in REAPER to repair the runtime.\n\n"
+                .. ((OS == "Windows")
+                    and "Then run STEMwerk: Setup in REAPER and click Check only to verify the runtime. If problems remain, re-run the STEMwerk installer to repair it.\n\n"
+                    or "Then rerun STEMwerk-SETUP.lua in REAPER to repair the runtime.\n\n")
                 .. "On Windows DirectML, use:\n"
                 .. tostring(PYTHON_PATH) .. " -m pip install onnxruntime-directml\n\n"
                 .. "On Apple Silicon, use:\n"

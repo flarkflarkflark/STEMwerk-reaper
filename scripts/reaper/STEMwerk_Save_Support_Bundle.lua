@@ -3372,7 +3372,9 @@ local function parseSupportRunText(entry, text)
     end
     if hasUnsupportedModelId and tostring(entry.error_class or "unknown") == "unknown" then
         kvAssignLast(entry, "error_class", "model_mapping_failed")
-        kvAssignLast(entry, "error_hint", "Normal model setup failed internally. Save a Support Bundle and run Setup/Repair before retrying.")
+        kvAssignLast(entry, "error_hint", (OS == "Windows")
+            and "Normal model setup failed internally. Save a Support Bundle, then re-run the STEMwerk installer before retrying."
+            or "Normal model setup failed internally. Save a Support Bundle and run Setup/Repair before retrying.")
         kvAssignLast(entry, "model_cache_hint", "This is not an internet/DNS/proxy failure. STEMwerk passed an unsupported internal model id to audio-separator.")
         setRunResult(entry, "fail", 5)
         entry._clearFailures = (entry._clearFailures or 0) + 1
