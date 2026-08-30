@@ -14,6 +14,53 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = ROOT / "VERSION"
 
+WINDOWS_CURRENT_VERSION_FIELDS = (
+    (
+        "installer/windows/STEMwerk_Windows_Setup_Guide.md",
+        (
+            (
+                "installer identity",
+                re.compile(r"This guide is for the Windows installer build of STEMwerk (?P<version>[0-9.]+)\."),
+            ),
+            (
+                "fresh-install target",
+                re.compile(r"then install `(?P<version>[0-9.]+)` fresh"),
+            ),
+            (
+                "latest Windows fixes target",
+                re.compile(r"latest Windows setup/runtime fixes from `(?P<version>[0-9.]+)`"),
+            ),
+        ),
+    ),
+    (
+        "installer/windows/STEMwerk_Windows_Setup_Guide.nl.md",
+        (
+            (
+                "installer identity",
+                re.compile(r"Deze handleiding hoort bij de Windows-installer van STEMwerk (?P<version>[0-9.]+)\."),
+            ),
+        ),
+    ),
+    (
+        "installer/windows/STEMwerk_Windows_Setup_Guide.de.md",
+        (
+            (
+                "installer identity",
+                re.compile(r"Diese Anleitung gilt fuer den Windows-Installer von STEMwerk (?P<version>[0-9.]+)\."),
+            ),
+        ),
+    ),
+    (
+        "installer/windows/STEMwerk_License_Agreement.txt",
+        (
+            (
+                "license header",
+                re.compile(r"^Version: (?P<version>[0-9.]+)$", re.MULTILINE),
+            ),
+        ),
+    ),
+)
+
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -83,6 +130,35 @@ def update_setup_guide(text: str, version: str) -> tuple[str, list[str], list[st
     return text, notes, errors
 
 
+def update_current_version_fields(
+    text: str,
+    version: str,
+    label: str,
+    fields: tuple[tuple[str, re.Pattern[str]], ...],
+) -> tuple[str, list[str], list[str]]:
+    notes: list[str] = []
+    errors: list[str] = []
+    for field_name, pattern in fields:
+        matches = list(pattern.finditer(text))
+        if len(matches) != 1:
+            errors.append(
+                f"{label} ({field_name}): expected exactly one current-version field, found {len(matches)}"
+            )
+    if errors:
+        return text, notes, errors
+
+    for field_name, pattern in fields:
+        match = pattern.search(text)
+        assert match is not None
+        found = match.group("version")
+        if found == version:
+            continue
+        notes.append(f"{label} ({field_name}): expected {version}, found {found}")
+        start, end = match.span("version")
+        text = text[:start] + version + text[end:]
+    return text, notes, errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sync repo version references.")
     mode = parser.add_mutually_exclusive_group()
@@ -103,19 +179,29 @@ def main() -> int:
     changes: list[str] = []
     errors: list[str] = []
     notes: list[str] = []
+    original_texts: dict[Path, str] = {}
+    proposed_texts: dict[Path, str] = {}
+    prepared_paths: list[Path] = []
 
-    def apply_update(path: Path, updater, label: str) -> None:
+    # Phase 1: prepare and validate every configured update in memory. No file
+    # may be written until every updater has completed without semantic errors.
+    def prepare_update(path: Path, updater, label: str) -> None:
         nonlocal changes, errors, notes
-        text = read_text(path)
+        if path not in original_texts:
+            text = read_text(path)
+            original_texts[path] = text
+            proposed_texts[path] = text
+            prepared_paths.append(path)
+        else:
+            text = proposed_texts[path]
         new_text, new_notes, new_errors = updater(text)
         notes.extend(new_notes)
         errors.extend(new_errors)
         if new_text != text:
             changes.append(str(path.relative_to(ROOT)))
-            if write_changes:
-                write_text(path, new_text)
+            proposed_texts[path] = new_text
 
-    apply_update(ROOT / "index.xml", lambda t: update_index_xml(t, version), "index.xml")
+    prepare_update(ROOT / "index.xml", lambda t: update_index_xml(t, version), "index.xml")
 
     lua_version_files = [
         "scripts/reaper/STEMwerk.lua",
@@ -134,14 +220,22 @@ def main() -> int:
     ]
     for rel in lua_version_files:
         path = ROOT / rel
-        apply_update(path, lambda t, p=rel: update_lua_version(t, version, p), rel)
+        prepare_update(path, lambda t, p=rel: update_lua_version(t, version, p), rel)
 
     app_version_path = ROOT / "scripts/reaper/STEMwerk.lua"
-    apply_update(app_version_path, lambda t: update_app_version(t, version, "scripts/reaper/STEMwerk.lua"), "scripts/reaper/STEMwerk.lua")
+    prepare_update(app_version_path, lambda t: update_app_version(t, version, "scripts/reaper/STEMwerk.lua"), "scripts/reaper/STEMwerk.lua")
 
     setup_guide = ROOT / "tools/STEMwerk_Setup_Guide_Linux_macOS.md"
     if setup_guide.exists():
-        apply_update(setup_guide, lambda t: update_setup_guide(t, version), "tools/STEMwerk_Setup_Guide_Linux_macOS.md")
+        prepare_update(setup_guide, lambda t: update_setup_guide(t, version), "tools/STEMwerk_Setup_Guide_Linux_macOS.md")
+
+    for rel, fields in WINDOWS_CURRENT_VERSION_FIELDS:
+        path = ROOT / rel
+        prepare_update(
+            path,
+            lambda t, p=rel, f=fields: update_current_version_fields(t, version, p, f),
+            rel,
+        )
 
     if notes and not write_changes:
         for note in notes:
@@ -158,6 +252,14 @@ def main() -> int:
             print(f" - {item}")
         print("Run: python tools/version_sync.py --write", file=sys.stderr)
         return 1
+
+    # Phase 2: commit validated changes. This guarantees validation atomicity
+    # across the CLI run, but is not a rollback transaction for OS/I/O failures.
+    if write_changes:
+        for path in prepared_paths:
+            new_text = proposed_texts[path]
+            if new_text != original_texts[path]:
+                write_text(path, new_text)
 
     if write_changes and changes:
         print("Updated:")

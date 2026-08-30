@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import os
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -8,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ISS = ROOT / "installer" / "windows" / "STEMwerk.iss"
 PAYLOAD_ISS = ROOT / "installer" / "windows" / "STEMwerk_Windows_Payload.iss"
 WINDOWS_DIR = ROOT / "installer" / "windows"
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 SOURCE_RE = re.compile(
@@ -151,7 +157,7 @@ def test_online_and_normal_bundled_payload_contract_remains_narrow() -> None:
     assert "update-patch" not in text.lower()
 
 
-def test_current_windows_release_documents_identify_2306() -> None:
+def test_current_windows_release_documents_match_repository_version() -> None:
     guides = [
         WINDOWS_DIR / "STEMwerk_Windows_Setup_Guide.md",
         WINDOWS_DIR / "STEMwerk_Windows_Setup_Guide.nl.md",
@@ -159,22 +165,23 @@ def test_current_windows_release_documents_identify_2306() -> None:
     ]
     for guide in guides:
         first_section = "\n".join(guide.read_text(encoding="utf-8").splitlines()[:5])
-        assert "2.3.1.0" in first_section, guide.name
+        assert VERSION in first_section, guide.name
         assert "2.3.0.6" not in first_section, guide.name
 
     license_text = (WINDOWS_DIR / "STEMwerk_License_Agreement.txt").read_text(
         encoding="utf-8"
     )
-    assert "Version: 2.3.1.0" in license_text
+    assert f"Version: {VERSION}" in license_text
     assert "Version: 2.3.0.6" not in license_text
 
 
-def test_current_identity_has_no_2304_or_2305_but_history_is_preserved() -> None:
+def test_current_identity_matches_version_and_allmodels_history_is_preserved() -> None:
     english = (WINDOWS_DIR / "STEMwerk_Windows_Setup_Guide.md").read_text(
         encoding="utf-8"
     )
-    assert "install `2.3.1.0` fresh" in english
-    assert "latest Windows setup/runtime fixes from `2.3.1.0`" in english
+    assert f"install `{VERSION}` fresh" in english
+    assert f"latest Windows setup/runtime fixes from `{VERSION}`" in english
+    assert "`2.3.0.0` release line" in english
     for path in (
         WINDOWS_DIR / "STEMwerk_Windows_Setup_Guide.md",
         WINDOWS_DIR / "STEMwerk_Windows_Setup_Guide.nl.md",
@@ -182,3 +189,193 @@ def test_current_identity_has_no_2304_or_2305_but_history_is_preserved() -> None
         WINDOWS_DIR / "STEMwerk_License_Agreement.txt",
     ):
         assert "2.3.0.5" not in path.read_text(encoding="utf-8")
+
+
+def test_version_sync_covers_current_windows_installer_identity_fields() -> None:
+    from tools import version_sync
+
+    configured = {rel: fields for rel, fields in version_sync.WINDOWS_CURRENT_VERSION_FIELDS}
+    expected = {
+        "installer/windows/STEMwerk_Windows_Setup_Guide.md",
+        "installer/windows/STEMwerk_Windows_Setup_Guide.nl.md",
+        "installer/windows/STEMwerk_Windows_Setup_Guide.de.md",
+        "installer/windows/STEMwerk_License_Agreement.txt",
+    }
+    assert set(configured) == expected
+
+    for rel, fields in configured.items():
+        original = (ROOT / rel).read_text(encoding="utf-8")
+        for field_name, pattern in fields:
+            match = pattern.search(original)
+            assert match is not None, f"{rel} ({field_name})"
+            start, end = match.span("version")
+            stale = original[:start] + "9.9.9.9" + original[end:]
+            updated, notes, errors = version_sync.update_current_version_fields(
+                stale, VERSION, rel, fields
+            )
+            assert not errors
+            assert updated == original
+            assert f"{rel} ({field_name}): expected {VERSION}, found 9.9.9.9" in notes
+
+            unrelated = "\nHistorical fixture version: 9.9.9.9\n"
+            updated, notes, errors = version_sync.update_current_version_fields(
+                stale + unrelated, VERSION, rel, fields
+            )
+            assert not errors
+            assert updated == original + unrelated
+            assert "Historical fixture version: 9.9.9.9" in updated
+
+
+def test_version_sync_rejects_missing_or_duplicate_windows_fields_without_partial_update() -> None:
+    from tools import version_sync
+
+    for rel, fields in version_sync.WINDOWS_CURRENT_VERSION_FIELDS:
+        original = (ROOT / rel).read_text(encoding="utf-8")
+        first_name, first_pattern = fields[0]
+        first_match = first_pattern.search(original)
+        assert first_match is not None
+
+        duplicate_base = original
+        if len(fields) > 1:
+            second_match = fields[1][1].search(duplicate_base)
+            assert second_match is not None
+            start, end = second_match.span("version")
+            duplicate_base = duplicate_base[:start] + "9.9.9.9" + duplicate_base[end:]
+        duplicate = duplicate_base + "\n" + first_match.group(0) + "\n"
+        updated, _, errors = version_sync.update_current_version_fields(
+            duplicate, VERSION, rel, fields
+        )
+        assert updated == duplicate
+        assert f"{rel} ({first_name}): expected exactly one current-version field, found 2" in errors
+
+        missing = first_pattern.sub("", original, count=1)
+        if len(fields) > 1:
+            second_pattern = fields[1][1]
+            second_match = second_pattern.search(missing)
+            assert second_match is not None
+            start, end = second_match.span("version")
+            missing = missing[:start] + "9.9.9.9" + missing[end:]
+        updated, _, errors = version_sync.update_current_version_fields(
+            missing, VERSION, rel, fields
+        )
+        assert updated == missing
+        assert f"{rel} ({first_name}): expected exactly one current-version field, found 0" in errors
+
+
+def _tree_sha256(root: Path) -> dict[str, str]:
+    return {
+        str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_version_sync_write_prevalidates_all_files_before_any_write(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    shutil.copytree(
+        ROOT,
+        repo,
+        symlinks=True,
+        ignore=shutil.ignore_patterns(".git", ".pytest_cache", "__pycache__", "*.pyc"),
+    )
+    script = repo / "tools" / "version_sync.py"
+    env = os.environ.copy()
+    env["PYTHONPYCACHEPREFIX"] = str(tmp_path / "pycache")
+
+    early_paths = (
+        repo / "index.xml",
+        repo / "scripts" / "reaper" / "STEMwerk.lua",
+    )
+    early_paths[0].write_text(
+        early_paths[0].read_text(encoding="utf-8").replace(
+            f'<version name="{VERSION}"', '<version name="9.9.9.9"'
+        ),
+        encoding="utf-8",
+    )
+    early_paths[1].write_text(
+        early_paths[1].read_text(encoding="utf-8").replace(
+            f"-- @version {VERSION}", "-- @version 9.9.9.9", 1
+        ),
+        encoding="utf-8",
+    )
+
+    guide = repo / "installer" / "windows" / "STEMwerk_Windows_Setup_Guide.md"
+    historical_fixture = "\nHistorical fixture version: 9.9.9.9\n"
+    guide.write_text(
+        guide.read_text(encoding="utf-8") + historical_fixture,
+        encoding="utf-8",
+    )
+
+    license_path = repo / "installer" / "windows" / "STEMwerk_License_Agreement.txt"
+    valid_license = license_path.read_bytes()
+    version_line = f"Version: {VERSION}"
+
+    for late_failure, expected_count in (("missing", 0), ("duplicate", 2)):
+        license_text = valid_license.decode("utf-8")
+        if late_failure == "missing":
+            license_text = license_text.replace(version_line, "", 1)
+        else:
+            license_text += f"\n{version_line}\n"
+        license_path.write_text(license_text, encoding="utf-8")
+
+        protected_paths = (*early_paths, guide, license_path)
+        protected_bytes = {path: path.read_bytes() for path in protected_paths}
+        before = _tree_sha256(repo)
+        failed = subprocess.run(
+            [sys.executable, str(script), "--write"],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert failed.returncode == 1
+        assert (
+            "installer/windows/STEMwerk_License_Agreement.txt (license header): "
+            f"expected exactly one current-version field, found {expected_count}"
+        ) in failed.stderr
+        assert _tree_sha256(repo) == before
+        assert {path: path.read_bytes() for path in protected_paths} == protected_bytes
+
+        license_path.write_bytes(valid_license)
+
+    written = subprocess.run(
+        [sys.executable, str(script), "--write"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert written.returncode == 0, written.stderr
+    assert "Updated:" in written.stdout
+    assert f'<version name="{VERSION}"' in early_paths[0].read_text(encoding="utf-8")
+    assert f"-- @version {VERSION}" in early_paths[1].read_text(encoding="utf-8")
+    assert guide.read_text(encoding="utf-8").endswith(historical_fixture)
+
+    after_write = _tree_sha256(repo)
+    repeated = subprocess.run(
+        [sys.executable, str(script), "--write"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert repeated.returncode == 0, repeated.stderr
+    assert "Version references are in sync." in repeated.stdout
+    assert _tree_sha256(repo) == after_write
+
+    checked = subprocess.run(
+        [sys.executable, str(script), "--check"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert checked.returncode == 0, checked.stderr
+    assert _tree_sha256(repo) == after_write

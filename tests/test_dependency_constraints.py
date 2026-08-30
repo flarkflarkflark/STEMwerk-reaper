@@ -5,6 +5,7 @@ import json
 import ntpath
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -1446,22 +1447,31 @@ def test_windows_setup_overview_ignores_stale_failed_capabilities_when_bootstrap
     assert "verification = \"\"" in setup_internal
 
 
-def test_windows_setup_overview_ignores_stale_running_and_failed_bootstrap_state_when_ready_is_ok():
+def test_windows_setup_overview_keeps_current_bootstrap_status_authoritative():
     setup_internal = _read_utf8("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua")
+    start = setup_internal.index("function buildWindowsSetupOverview(")
+    end = setup_internal.index("\nlocal function drawButton", start)
+    overview = setup_internal[start:end]
 
-    assert 'local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"' in setup_internal
-    assert 'local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"' in setup_internal
-    assert 'local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)' in setup_internal
-    assert 'local readyHealthy = (' in setup_internal
-    assert 'trim(readyState.READY_TO_GO_STATUS or "") == "ok"' in setup_internal
-    assert 'trim(readyState.MAIN_RUNTIME_STATUS or "") == "ok"' in setup_internal
-    assert 'local staleRunning = (status == "running") and (not pid) and (not guardBusy) and readyHealthy' in setup_internal
-    assert 'local staleGuardFailed = (trim(guard.STATUS or "") == "failed") and readyHealthy and bootstrapComplete and (not guardBusy)' in setup_internal
-    assert 'local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running")' in setup_internal
-    assert 'and readyHealthy and bootstrapComplete and not runtimePolicyRequiresRebuild(state)' in setup_internal
-    assert 'if staleRunning or staleGuardFailed or staleFailedState then' in setup_internal
-    assert 'status = "ok"' in setup_internal
-    assert 'reason = ""' in setup_internal
+    assert 'local status = trim(state.STATUS or "")' in overview
+    assert 'local reason = trim(state.STATUS_REASON or "")' in overview
+    assert 'if status ~= "" and status ~= "ok" then needsRepair = true end' in overview
+    assert 'setupStatus = (status ~= "" and status or "unknown")' in overview
+    for removed_normalizer in ("staleRunning", "staleGuardFailed", "staleFailedState"):
+        assert removed_normalizer not in overview
+
+    lua = shutil.which("lua5.4") or shutil.which("lua5.3") or shutil.which("lua") or shutil.which("luajit")
+    assert lua is not None, "Lua interpreter required for executable fail-closed Setup coverage"
+    result = subprocess.run(
+        [lua, "tests/support/run_setup_final_rows_headless.lua"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS windows-deps-failed-cannot-be-overridden-by-old-success-log" in result.stdout
+    assert "PASS windows-running-cannot-be-finalized-by-old-success-log" in result.stdout
+    assert "PASS windows-current-healthy-state-stays-healthy" in result.stdout
 
 
 def test_windows_setup_overview_labels_unchecked_deps_and_keeps_homebrew_ffmpeg_guidance_off_windows():
@@ -4977,6 +4987,7 @@ def test_windows_installers_remove_stemwerk_owned_runtime_and_reaper_scripts_on_
 
 
 def test_shipped_windows_docs_and_dialogs_do_not_advertise_stale_release_version():
+    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
     setup_guide = Path("installer/windows/STEMwerk_Windows_Setup_Guide.md").read_text(encoding="utf-8")
     setup_guide_de = Path("installer/windows/STEMwerk_Windows_Setup_Guide.de.md").read_text(encoding="utf-8")
     setup_guide_nl = Path("installer/windows/STEMwerk_Windows_Setup_Guide.nl.md").read_text(encoding="utf-8")
@@ -4987,15 +4998,23 @@ def test_shipped_windows_docs_and_dialogs_do_not_advertise_stale_release_version
     assert "STEMwerk 2.3.0.6" not in setup_guide
     assert "install `2.3.0.6` fresh" not in setup_guide
     assert "latest Windows setup/runtime fixes from `2.3.0.4`" not in setup_guide
-    assert "This guide is for the Windows installer build of STEMwerk 2.3.1.0." in setup_guide
+    assert f"This guide is for the Windows installer build of STEMwerk {target_version}." in setup_guide
+    assert f"install `{target_version}` fresh" in setup_guide
+    assert f"latest Windows setup/runtime fixes from `{target_version}`" in setup_guide
 
     assert "STEMwerk 2.3.0.6" not in setup_guide_de
     assert "STEMwerk 2.3.0.6" not in setup_guide_nl
+    assert f"Diese Anleitung gilt fuer den Windows-Installer von STEMwerk {target_version}." in setup_guide_de
+    assert f"Deze handleiding hoort bij de Windows-installer van STEMwerk {target_version}." in setup_guide_nl
 
     assert "Version: 2.3.0.6" not in license_agreement
-    assert "Version: 2.3.1.0" in license_agreement
+    assert f"Version: {target_version}" in license_agreement
 
-    assert "in STEMwerk 2.3.0.6." not in main_script
+    fallback_start = main_script.index("function showIntelMacDksPolicyBlock(")
+    fallback_end = main_script.index("\nlocal function clearDialogWorkflowSelection", fallback_start)
+    fallback = main_script[fallback_start:fallback_end]
+    assert "Drum Kit Split is not available on Intel Mac in this release." in fallback
+    assert re.search(r"\b2\.3\.\d+\.\d+\b", fallback) is None
 
     assert "bundled 2.3.0.6 dependency policy" not in macos_bootstrap
 
@@ -8263,9 +8282,10 @@ def test_windows_capabilities_write_failure_clears_stale_state_and_fails_bootstr
 
 
 def test_windows_installer_license_text_matches_23_release():
+    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
     text = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
 
-    assert "Version: 2.3.1.0" in text
+    assert f"Version: {target_version}" in text
     assert "Version: 2.2.2" not in text
 
 
