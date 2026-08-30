@@ -1,6 +1,6 @@
 ﻿# STEMwerk Windows Setup Guide
 
-This guide is for the Windows installer build of STEMwerk 2.3.1.0.
+This guide is for the Windows installer build of STEMwerk 2.3.1.1.
 
 ## What the installer just did
 
@@ -14,7 +14,7 @@ The Windows installer:
 
 The Windows installer remains the recommended fresh-install and repair route on Windows.
 
-If you are updating an older Windows STEMwerk install, uninstall the old version first and then install `2.3.1.0` fresh. This avoids stale runtime/backend state.
+If you are updating an older Windows STEMwerk install, uninstall the old version first and then install `2.3.1.1` fresh. This avoids stale runtime/backend state.
 
 ## Installer types
 
@@ -22,7 +22,7 @@ If you are updating an older Windows STEMwerk install, uninstall the old version
 - `bundled installer`: includes Python and FFmpeg
 - `offline-bundled ... allmodels installer`: includes the bundled runtime payloads needed for a fully offline install for its target backend
 
-The large offline allmodels installers remain on the `2.3.0.0` release line and are still valid unless you specifically need the latest Windows setup/runtime fixes from `2.3.1.0`.
+The large offline allmodels installers remain on the `2.3.0.0` release line and are still valid unless you specifically need the latest Windows setup/runtime fixes from `2.3.1.1`.
 
 ## Offline allmodels variants
 
