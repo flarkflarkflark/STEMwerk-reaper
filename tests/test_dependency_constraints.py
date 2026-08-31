@@ -5232,15 +5232,15 @@ def _assert_readme_release_contract(readme, target_version):
     assert len(asset_rows) == 6, asset_rows
 
     # Genuinely historical references remain valid and must be preserved.
-    assert "`2.3.0.0` remains the original 2.3 full-release baseline" in readme
+    assert "`2.3.0.0` is the original historical 2.3 full-release baseline" in readme
     assert "large offline/full installers deliberately remain on the `2.3.0.0` line" in readme
     assert "## What's new in 2.3.0.6 / 2.3.0.7" in readme
 
 
-def test_shipped_readme_identifies_current_public_2310_release_and_assets():
+def test_shipped_readme_identifies_current_public_2311_release_and_assets():
     repository_version = Path("VERSION").read_text(encoding="utf-8").strip()
     assert repository_version == "2.3.1.1"
-    target_version = "2.3.1.0"
+    target_version = repository_version
 
     readme = Path("README.md").read_text(encoding="utf-8")
     _assert_readme_release_contract(readme, target_version)
@@ -5256,7 +5256,7 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
     offline/allmodels pkg advertised as release assets, and dropped published
     rows."""
     assert Path("VERSION").read_text(encoding="utf-8").strip() == "2.3.1.1"
-    target_version = "2.3.1.0"
+    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
     real_readme = Path("README.md").read_text(encoding="utf-8")
 
     def mutate(anchor, inserted_line):
@@ -5290,7 +5290,7 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
             "",
         ),
         # F: a deliberately unpublished Linux native package advertised as a
-        # published 2.3.1.0 release asset.
+        # published current-release asset.
         "F": mutate(
             f"| `STEMwerk-{target_version}-x86_64.AppImage` | Linux AppImage |",
             f"| `stemwerk_{target_version}_amd64.deb` | Debian/Ubuntu package |",
