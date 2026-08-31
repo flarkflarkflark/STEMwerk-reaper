@@ -289,7 +289,7 @@ def test_final_package_audit_checks_payload_before_matching_inventory(
     assert caught.value.entry == entry
 
 
-def test_managed_python_bytecode_outside_wheels_remains_allowed(
+def test_bundled_payload_audit_rejects_managed_python_bytecode_outside_wheels(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _minimal_bundled_payload(tmp_path, CORE_WHEEL_ENTRIES)
@@ -304,8 +304,8 @@ def test_managed_python_bytecode_outside_wheels_remains_allowed(
         audit_payload, "validate_official_managed_python_provenance", lambda *_a, **_k: None
     )
 
-    audit_payload.audit_bundled_apple_silicon_payload(tmp_path)
-    assert managed_pyc.is_file()
+    with pytest.raises(RuntimeError, match="forbidden Python cache"):
+        audit_payload.audit_bundled_apple_silicon_payload(tmp_path)
 
 
 def _compile_arm64_dylib(tmp_path: Path, minimum_os: str) -> Path:

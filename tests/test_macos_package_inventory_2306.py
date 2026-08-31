@@ -108,6 +108,28 @@ def test_appledouble_injection_is_rejected(tmp_path):
     assert counts["appledouble"] == 1
 
 
+@pytest.mark.parametrize(
+    "relative,is_directory",
+    [
+        ("outside/runtime/__pycache__", True),
+        ("outside/runtime/compiled.pyc", False),
+        ("outside/runtime/optimized.pyo", False),
+    ],
+)
+def test_complete_payload_inventory_rejects_python_cache_entries(
+    tmp_path, relative, is_directory
+):
+    candidate = tmp_path / relative
+    if is_directory:
+        candidate.mkdir(parents=True)
+    else:
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_bytes(b"forbidden cache fixture")
+
+    with pytest.raises(RuntimeError, match="forbidden Python cache"):
+        load_auditor().inventory(tmp_path)
+
+
 @pytest.mark.parametrize("variant", ["online", "bundled-apple-silicon"])
 def test_clean_staged_inventory_contract(variant):
     inventory = ROOT / f"installer/macos/build/{variant}/payload-inventory.json"

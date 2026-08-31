@@ -22,6 +22,11 @@ EXPECTED_RUNTIME = {
     "sys_platform": "darwin",
     "architecture": "arm64",
 }
+FIXTURE_CACHE_PATHS = (
+    "lib/python3.12/foo/__pycache__",
+    "lib/python3.12/foo/__pycache__/example.cpython-312.pyc",
+    "lib/python3.12/foo/legacy.pyo",
+)
 
 
 def _artifact_fixture(tmp_path: Path) -> Path:
@@ -36,6 +41,28 @@ def _artifact_fixture(tmp_path: Path) -> Path:
         executable.mode = 0o755
         executable.size = len(data)
         archive.addfile(executable, io.BytesIO(data))
+        for name in (
+            "python/lib",
+            "python/lib/python3.12",
+            "python/lib/python3.12/foo",
+            "python/lib/python3.12/foo/__pycache__",
+        ):
+            directory = tarfile.TarInfo(name)
+            directory.type = tarfile.DIRTYPE
+            directory.mode = 0o755
+            archive.addfile(directory)
+        for name, contents in (
+            ("python/lib/python3.12/example.py", b"VALUE = 1\n"),
+            (
+                "python/lib/python3.12/foo/__pycache__/example.cpython-312.pyc",
+                b"fixture bytecode",
+            ),
+            ("python/lib/python3.12/foo/legacy.pyo", b"fixture optimized bytecode"),
+        ):
+            entry = tarfile.TarInfo(name)
+            entry.mode = 0o644
+            entry.size = len(contents)
+            archive.addfile(entry, io.BytesIO(contents))
     return artifact
 
 
@@ -55,12 +82,25 @@ def _official_fixture(
     (fixture_root / "bin").mkdir(parents=True)
     (fixture_root / "bin/python3.12").write_bytes(b"#!/bin/sh\n")
     (fixture_root / "bin/python3.12").chmod(0o755)
+    (fixture_root / "lib/python3.12/foo/__pycache__").mkdir(parents=True)
+    (fixture_root / "lib/python3.12/example.py").write_bytes(b"VALUE = 1\n")
+    (fixture_root / "lib/python3.12/foo/__pycache__/example.cpython-312.pyc").write_bytes(
+        b"fixture bytecode"
+    )
+    (fixture_root / "lib/python3.12/foo/legacy.pyo").write_bytes(
+        b"fixture optimized bytecode"
+    )
     monkeypatch.setattr(
         macos_managed_python,
         "MANAGED_PYTHON_ARTIFACT_TREE_IDENTITY",
         macos_managed_python.payload_tree_identity(fixture_root),
     )
     monkeypatch.setattr(macos_managed_python, "MANAGED_PYTHON_EXCLUDED_NON_MACOS_PATHS", ())
+    monkeypatch.setattr(
+        macos_managed_python,
+        "MANAGED_PYTHON_EXCLUDED_CACHE_PATHS",
+        FIXTURE_CACHE_PATHS,
+    )
     monkeypatch.setattr(
         macos_managed_python,
         "inspect_managed_python_runtime",
@@ -89,10 +129,36 @@ def test_official_managed_python_artifact_is_verified_extracted_and_bound_to_pay
     assert provenance["runtime_validation"] == EXPECTED_RUNTIME
     assert provenance["artifact_payload_tree"] == macos_managed_python.MANAGED_PYTHON_ARTIFACT_TREE_IDENTITY
     assert provenance["excluded_non_macos_paths"] == []
+    assert provenance["excluded_python_cache_paths"] == list(FIXTURE_CACHE_PATHS)
     assert provenance["payload_tree"] == macos_managed_python.payload_tree_identity(destination)
     assert provenance["release_eligible"] is True
     assert (destination / "bin/python3.12").is_file()
     macos_managed_python.validate_official_managed_python_provenance(destination, manifest)
+
+
+def test_official_input_identity_includes_caches_but_final_payload_is_sanitized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination, provenance, _manifest = _official_fixture(tmp_path, monkeypatch)
+
+    raw_identity = provenance["artifact_payload_tree"]
+    assert raw_identity == macos_managed_python.MANAGED_PYTHON_ARTIFACT_TREE_IDENTITY
+    assert raw_identity["entry_count"] > provenance["payload_tree"]["entry_count"]
+    assert not any(path.name == "__pycache__" for path in destination.rglob("*"))
+    assert not any(path.is_file() for path in destination.rglob("*.pyc"))
+    assert not any(path.is_file() for path in destination.rglob("*.pyo"))
+
+
+def test_official_validator_explicitly_rejects_reintroduced_cache_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination, _provenance, manifest = _official_fixture(tmp_path, monkeypatch)
+    tampered = destination / "lib/python3.12/foo/__pycache__/evil.cpython-312.pyc"
+    tampered.parent.mkdir(parents=True, exist_ok=True)
+    tampered.write_bytes(b"tampered bytecode")
+
+    with pytest.raises(RuntimeError, match="forbidden Python cache"):
+        macos_managed_python.validate_official_managed_python_provenance(destination, manifest)
 
 
 @pytest.mark.parametrize(
@@ -108,6 +174,7 @@ def test_official_managed_python_artifact_is_verified_extracted_and_bound_to_pay
         ("managed_python_architecture", "wrong"),
         ("artifact_payload_tree", "wrong"),
         ("excluded_non_macos_paths", "wrong"),
+        ("excluded_python_cache_paths", "wrong"),
     ],
 )
 def test_official_managed_python_provenance_rejects_missing_or_tampered_identity(

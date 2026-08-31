@@ -21,7 +21,10 @@ from tools.macos_ffmpeg import (
     validate_macho_wheel_release_contract,
     validate_official_provenance,
 )
-from tools.macos_managed_python import validate_official_managed_python_provenance
+from tools.macos_managed_python import (
+    find_forbidden_python_cache_paths,
+    validate_official_managed_python_provenance,
+)
 from tools.macos_release_hygiene import validate_macos_release_wheelhouse
 
 
@@ -29,6 +32,15 @@ WINDOWS_SUFFIXES = {".exe", ".dll", ".bat", ".cmd", ".ps1"}
 WINDOWS_WHEEL_MARKERS = ("win32", "win_amd64", "win_arm64")
 LINUX_WHEEL_MARKERS = ("linux_", "manylinux", "musllinux")
 FORBIDDEN_NAMES = {"STEMwerk_Bootstrap_Linux.sh", "STEMwerk_Bootstrap_Linux_Launcher.sh"}
+
+
+def validate_payload_cache_hygiene(root: Path) -> None:
+    forbidden = find_forbidden_python_cache_paths(root)
+    if forbidden:
+        raise RuntimeError(
+            "macOS payload contains forbidden Python cache entries: "
+            + ", ".join(forbidden)
+        )
 
 
 def wheel_platform(name: str) -> str:
@@ -72,6 +84,7 @@ def classify(relative: str, description: str) -> str:
 
 
 def inventory(root: Path) -> tuple[list[dict[str, object]], dict[str, int]]:
+    validate_payload_cache_hygiene(root)
     records: list[dict[str, object]] = []
     counts = {key: 0 for key in ("windows", "linux", "linux_wheels", "windows_wheels", "elf", "unknown_native", "appledouble")}
     seen: set[str] = set()
@@ -126,6 +139,7 @@ def inventory(root: Path) -> tuple[list[dict[str, object]], dict[str, int]]:
 
 
 def audit_bundled_apple_silicon_payload(root: Path) -> None:
+    validate_payload_cache_hygiene(root)
     bundled = root / "_bundled/macos/apple-silicon"
     ffmpeg_dir = bundled / "ffmpeg"
     manifest_path = bundled / "manifest.json"

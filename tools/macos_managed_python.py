@@ -48,6 +48,12 @@ MANAGED_PYTHON_EXCLUDED_NON_MACOS_PATHS = (
     "lib/python3.12/site-packages/pip/_vendor/distlib/w64.exe",
     "lib/python3.12/venv/scripts/common/Activate.ps1",
 )
+MANAGED_PYTHON_EXCLUDED_CACHE_PATHS = (
+    "lib/python3.12/encodings/__pycache__",
+    "lib/python3.12/encodings/__pycache__/__init__.cpython-312.pyc",
+    "lib/python3.12/encodings/__pycache__/aliases.cpython-312.pyc",
+    "lib/python3.12/encodings/__pycache__/utf_8.cpython-312.pyc",
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -195,6 +201,33 @@ def prune_non_macos_runtime_files(root: Path) -> list[str]:
     return removed
 
 
+def find_forbidden_python_cache_paths(root: Path) -> list[str]:
+    """Return forbidden cache directories and regular bytecode files."""
+    if not root.is_dir():
+        raise RuntimeError(f"Python payload directory is missing: {root}")
+    forbidden: list[str] = []
+    for candidate in sorted(root.rglob("*")):
+        mode = candidate.lstat().st_mode
+        if stat.S_ISDIR(mode) and candidate.name == "__pycache__":
+            forbidden.append(candidate.relative_to(root).as_posix())
+        elif stat.S_ISREG(mode) and candidate.suffix.lower() in {".pyc", ".pyo"}:
+            forbidden.append(candidate.relative_to(root).as_posix())
+    return forbidden
+
+
+def prune_python_cache_entries(root: Path) -> list[str]:
+    """Remove cache entries only after the unmodified artifact was verified."""
+    removed = find_forbidden_python_cache_paths(root)
+    directories = [root / relative for relative in removed if (root / relative).is_dir()]
+    for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+        shutil.rmtree(directory)
+    for relative in removed:
+        candidate = root / relative
+        if candidate.is_file() and not candidate.is_symlink():
+            candidate.unlink()
+    return removed
+
+
 def prepare_managed_python_payload(
     destination: Path,
     *,
@@ -221,6 +254,7 @@ def prepare_managed_python_payload(
                     f"{artifact_tree}, expected {MANAGED_PYTHON_ARTIFACT_TREE_IDENTITY}"
                 )
             excluded_non_macos_paths = prune_non_macos_runtime_files(source)
+            excluded_python_cache_paths = prune_python_cache_entries(source)
             runtime_identity = inspect_managed_python_runtime(source)
             shutil.copytree(source, destination, symlinks=True, copy_function=shutil.copy2)
         provenance: dict[str, object] = {
@@ -231,6 +265,7 @@ def prepare_managed_python_payload(
             "release_eligible": True,
             "artifact_payload_tree": artifact_tree,
             "excluded_non_macos_paths": excluded_non_macos_paths,
+            "excluded_python_cache_paths": excluded_python_cache_paths,
             "runtime_validation": runtime_identity,
             "payload_tree": payload_tree_identity(destination),
         }
@@ -254,6 +289,7 @@ def prepare_managed_python_payload(
             "release_eligible": False,
             "artifact_payload_tree": None,
             "excluded_non_macos_paths": [],
+            "excluded_python_cache_paths": [],
             "runtime_validation": runtime_identity,
             "payload_tree": payload_tree_identity(destination),
         }
@@ -284,6 +320,14 @@ def validate_official_managed_python_provenance(
         raise RuntimeError("Invalid managed-Python provenance field artifact_payload_tree")
     if provenance.get("excluded_non_macos_paths") != list(MANAGED_PYTHON_EXCLUDED_NON_MACOS_PATHS):
         raise RuntimeError("Invalid managed-Python provenance field excluded_non_macos_paths")
+    if provenance.get("excluded_python_cache_paths") != list(MANAGED_PYTHON_EXCLUDED_CACHE_PATHS):
+        raise RuntimeError("Invalid managed-Python provenance field excluded_python_cache_paths")
+    forbidden_cache_paths = find_forbidden_python_cache_paths(python_root)
+    if forbidden_cache_paths:
+        raise RuntimeError(
+            "Managed-Python payload contains forbidden Python cache entries: "
+            + ", ".join(forbidden_cache_paths)
+        )
     runtime_identity = inspect_managed_python_runtime(python_root)
     if provenance.get("runtime_validation") != runtime_identity:
         raise RuntimeError("Managed-Python runtime identity differs from manifest provenance")
