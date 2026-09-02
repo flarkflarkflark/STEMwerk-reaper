@@ -439,7 +439,10 @@ end
 local SCEN = {}
 
 function SCEN.createPresentScenario(baseRoot)
-    local resourcePath = joinPath(baseRoot, "resource-present")
+    -- Keep this segment short ("rp"): bundle-internal copies of run evidence
+    -- live many levels below the resource path and Windows MAX_PATH (260) is
+    -- otherwise exceeded for the deeper scenarios.
+    local resourcePath = joinPath(baseRoot, "rp")
     local tempRoot = joinPath(baseRoot, "tmp-present")
     local env = makeCommonEnv(baseRoot, tempRoot)
     local runtimeBase = joinPath(baseRoot, "runtime-present")
@@ -3391,8 +3394,10 @@ function SCEN.createReducedExpectedStemsScenario(baseRoot, source, fixtureName)
     -- RunContext authority hardening migration: structured identity is
     -- required for this run to be evaluated CURRENT at all, so its own
     -- missing-stems reason (rather than a generic non-current reason)
-    -- keeps being reported.
-    context.runId = "guid-" .. fixtureName .. "-" .. tostring(os.time())
+    -- keeps being reported. Keep the run id short: it lands in the bundle
+    -- under current_processing/guid-<id>.json and a long fixtureName would
+    -- push that path over Windows MAX_PATH (260). fixtureName stays the label.
+    context.runId = "guid-reduced-expected-" .. source .. "-" .. tostring(os.time())
     EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
     EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
@@ -5770,7 +5775,11 @@ end
 
 local function main()
     math.randomseed(os.time())
-    local baseRoot = joinPath(currentTempBase(), "stemwerk-support-bundle-headless-" .. tostring(os.time()) .. "-" .. tostring(math.random(100000, 999999)))
+    -- Keep the temp root as short as the product ignore-list allows: the
+    -- prefix "support-bundle-headless-" is required (the collector skips
+    -- temp dirs matching it), but any longer suffix pushes deep
+    -- bundle-internal copy paths over Windows MAX_PATH (260).
+    local baseRoot = joinPath(currentTempBase(), "support-bundle-headless-" .. tostring(math.random(100000, 999999)))
     removeTree(baseRoot)
     mkdirP(baseRoot)
 
@@ -5912,7 +5921,7 @@ local function main()
 
     waitNextSecond()
 
-    local currentFailureDespiteHistoricalSuccess = SCEN.createCurrentFailureDespiteHistoricalSuccessScenario(joinPath(baseRoot, "current-failure-despite-historical-success"))
+    local currentFailureDespiteHistoricalSuccess = SCEN.createCurrentFailureDespiteHistoricalSuccessScenario(joinPath(baseRoot, "current-fail-vs-history"))
     local currentFailureDespiteHistoricalSuccessBundle = runScenario(currentFailureDespiteHistoricalSuccess, SCEN.assertCurrentFailureDespiteHistoricalSuccessScenario)
     print("PASS current-failure-despite-historical-success -> " .. currentFailureDespiteHistoricalSuccessBundle)
 
@@ -5930,7 +5939,7 @@ local function main()
 
     waitNextSecond()
 
-    local tokenlessLaunch = SCEN.createTokenlessLaunchAfterValidRunScenario(joinPath(baseRoot, "tokenless-launch-after-valid-run"))
+    local tokenlessLaunch = SCEN.createTokenlessLaunchAfterValidRunScenario(joinPath(baseRoot, "tokenless-after-valid"))
     local tokenlessLaunchBundle = runScenario(tokenlessLaunch, SCEN.assertTokenlessLaunchAfterValidRunScenario)
     print("PASS tokenless-launch-after-valid-run -> " .. tokenlessLaunchBundle)
 
@@ -5948,13 +5957,13 @@ local function main()
 
     waitNextSecond()
 
-    local heteroKitSplit = SCEN.createHeterogeneousKitSplitSameRunScenario(joinPath(baseRoot, "heterogeneous-kit-split-same-run"))
+    local heteroKitSplit = SCEN.createHeterogeneousKitSplitSameRunScenario(joinPath(baseRoot, "hetero-ks-same-run"))
     local heteroKitSplitBundle = runScenario(heteroKitSplit, SCEN.assertHeterogeneousKitSplitSameRunScenario)
     print("PASS heterogeneous-kit-split-stages-same-run -> " .. heteroKitSplitBundle)
 
     waitNextSecond()
 
-    local directKitLeak = SCEN.createDirectKitGenericModelLeakageScenario(joinPath(baseRoot, "direct-kit-generic-model-leakage"))
+    local directKitLeak = SCEN.createDirectKitGenericModelLeakageScenario(joinPath(baseRoot, "dk-generic-model-leak"))
     local directKitLeakBundle = runScenario(directKitLeak, SCEN.assertDirectKitGenericModelLeakageScenario)
     print("PASS direct-kit-generic-model-leakage -> " .. directKitLeakBundle)
 
@@ -5966,7 +5975,7 @@ local function main()
 
     waitNextSecond()
 
-    local staleBootstrapCurrentFail = SCEN.createStaleBootstrapCurrentFailedPhaseScenario(joinPath(baseRoot, "stale-bootstrap-current-failed-phase"))
+    local staleBootstrapCurrentFail = SCEN.createStaleBootstrapCurrentFailedPhaseScenario(joinPath(baseRoot, "stale-boot-cur-failed"))
     local staleBootstrapCurrentFailBundle = runScenario(staleBootstrapCurrentFail, SCEN.assertStaleBootstrapCurrentFailedPhaseScenario)
     print("PASS stale-healthy-bootstrap-current-failed-phase -> " .. staleBootstrapCurrentFailBundle)
 
@@ -5984,8 +5993,8 @@ local function main()
 
     waitNextSecond()
 
-    -- Keep this scenario dir short: on Windows the bundle-internal copy
-    -- path (<dir>/resource-present/.../runtime_runs/<run>/single/stdout.txt)
+    -- Keep scenario dir names short: on Windows the bundle-internal copy
+    -- path (<dir>/rp/STEMwerk-support-bundles/<bundle>/runtime_runs/<run>/...)
     -- otherwise exceeds the 260-char MAX_PATH limit and the run evidence
     -- silently fails to copy, making every run field "unknown".
     local drumsepHelperArgCpu = SCEN.createDrumsepHelperArgCpuEffectiveScenario(joinPath(baseRoot, "drumsep-arg-cpu"))
@@ -6006,7 +6015,7 @@ local function main()
 
     waitNextSecond()
 
-    local tempNamePatternOnly = SCEN.createTempNameMatchesButNoRunIdentityScenario(joinPath(baseRoot, "temp-name-pattern-without-run-identity"))
+    local tempNamePatternOnly = SCEN.createTempNameMatchesButNoRunIdentityScenario(joinPath(baseRoot, "temp-name-no-identity"))
     local tempNamePatternOnlyBundle = runScenario(tempNamePatternOnly, SCEN.assertTempNameMatchesButNoRunIdentityScenario)
     print("PASS temp-name-pattern-without-run-identity -> " .. tempNamePatternOnlyBundle)
 
@@ -6066,7 +6075,7 @@ local function main()
 
     waitNextSecond()
 
-    local workerVsFatalPhase = SCEN.createCurrentWorkerCurrentFatalPhaseScenario(joinPath(baseRoot, "current-worker-current-fatal-phase"))
+    local workerVsFatalPhase = SCEN.createCurrentWorkerCurrentFatalPhaseScenario(joinPath(baseRoot, "worker-vs-fatal-phase"))
     local workerVsFatalPhaseBundle = runScenario(workerVsFatalPhase, SCEN.assertCurrentWorkerCurrentFatalPhaseScenario)
     print("PASS current-worker-current-fatal-phase-failure-wins -> " .. workerVsFatalPhaseBundle)
 
@@ -6306,7 +6315,7 @@ local function main()
     waitNextSecond()
 
     do
-        local ctx = EIGHTHFU.createStructuredIdentityBeatsTimestampScenario(joinPath(baseRoot, "structured-identity-beats-timestamp"))
+        local ctx = EIGHTHFU.createStructuredIdentityBeatsTimestampScenario(joinPath(baseRoot, "struct-beats-timestamp"))
         print("PASS structured-identity-beats-timestamp-ordering -> " .. runScenario(ctx, EIGHTHFU.assertStructuredIdentityBeatsTimestampScenario))
     end
 
@@ -6455,12 +6464,12 @@ local function main()
     end
 
     do
-        local ctx = TENTHFU.createKitSplitRealNestedHelperSuccessScenario(joinPath(baseRoot, "kit-split-real-nested-helper-success"))
+        local ctx = TENTHFU.createKitSplitRealNestedHelperSuccessScenario(joinPath(baseRoot, "ks-real-nested-success"))
         print("PASS kit-split-real-nested-helper-success -> " .. runScenario(ctx, TENTHFU.assertKitSplitRealNestedHelperSuccessScenario))
     end
 
     do
-        local ctx = TENTHFU.createKitSplitRealNestedHelperConflictScenario(joinPath(baseRoot, "kit-split-real-nested-helper-conflict"))
+        local ctx = TENTHFU.createKitSplitRealNestedHelperConflictScenario(joinPath(baseRoot, "ks-real-nested-conflict"))
         print("PASS kit-split-real-nested-helper-conflict -> " .. runScenario(ctx, TENTHFU.assertKitSplitRealNestedHelperConflictScenario))
     end
 
@@ -6470,12 +6479,12 @@ local function main()
     end
 
     do
-        local ctx = TENTHFU.createDirectKitPersistedHelperConflictScenario(joinPath(baseRoot, "direct-kit-persisted-helper-conflict"))
+        local ctx = TENTHFU.createDirectKitPersistedHelperConflictScenario(joinPath(baseRoot, "dk-persisted-conflict"))
         print("PASS direct-kit-persisted-helper-conflict-via-real-persistence -> " .. runScenario(ctx, TENTHFU.assertDirectKitPersistedHelperConflictScenario))
     end
 
     do
-        local ctx = TENTHFU.createDirectKitPersistedHelperMatchScenario(joinPath(baseRoot, "direct-kit-persisted-helper-match"))
+        local ctx = TENTHFU.createDirectKitPersistedHelperMatchScenario(joinPath(baseRoot, "dk-persisted-match"))
         print("PASS direct-kit-persisted-helper-match-via-real-persistence -> " .. runScenario(ctx, TENTHFU.assertDirectKitPersistedHelperMatchScenario))
     end
 
