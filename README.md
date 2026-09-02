@@ -11,15 +11,16 @@ STEMwerk-reaper is a REAPER script package that runs high-quality stem separatio
 ## Release status
 This README describes STEMwerk `2.3.1.1`, the current release.
 
-- `2.3.1.1` is the current release for the 2.3 line.
-- It carries forward the macOS online Repair introduced in the previous `2.3.1.0` release and adds the pinned, self-contained Apple Silicon FFmpeg/ffprobe payload and fail-closed package audits.
+- `2.3.1.1` is the current release for the 2.3 line and is published as a tagged GitHub Release.
+- It carries forward the macOS online Repair introduced in the previous `2.3.1.0` release and adds the macOS Apple Silicon FFmpeg hotfix (issue #111): the bundled Apple Silicon package ships a portable arm64 FFmpeg/ffprobe, Setup no longer depends on Homebrew/MacPorts, and FFmpeg validation in Setup/Repair is fail-closed.
 - The current official macOS artifacts are `STEMwerk-2.3.1.1.pkg` and `STEMwerk-2.3.1.1-bundled-apple-silicon.pkg`. The bundled artifact is runtime-only and contains no models.
-- `2.3.1.1` has not yet been published as a tagged GitHub Release. Previous release artifacts must not be treated as the current `2.3.1.1` macOS artifacts.
+- Previous release artifacts must not be treated as the current `2.3.1.1` macOS artifacts.
 - `2.3.1.0` introduced macOS online Repair and moved required model installation into Setup/Repair; it is now the previous 2.3 release baseline.
 - `2.3.0.7` was a ReaPack distribution hotfix on top of `2.3.0.6` (Linux ReaPack fix for the missing managed diffq wheel).
 - `2.3.0.6` was a previous installer release before `2.3.1.0`.
 - `2.3.0.0` is the original historical 2.3 full-release baseline.
-- The ReaPack index declares `2.3.1.1`; check the published release pages for currently downloadable assets.
+- The ReaPack index declares `2.3.1.1`; the currently downloadable assets are on the published release page.
+- GitHub Release (current): <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.1.1>
 - GitHub Release (previous scripts / ReaPack hotfix): <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.7>
 - GitHub Release (previous installer assets): <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.6>
 - ReaPack index: <https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml>
@@ -28,7 +29,7 @@ For full release notes, asset checksums, and current download details, use the p
 
 ![STEMwerk in action](docs/assets/stemwerk_fullscreen.gif)
 
-## What's new in 2.3.0.6 / 2.3.0.7
+## Historical: what was new in 2.3.0.6 / 2.3.0.7
 2.3.0.6 (narrow corrective release on the official 2.3.0.4 line):
 - Intel Mac Drum Kit Split crash fixed; when a kit split genuinely cannot run, STEMwerk now fails with a safe, explicit message instead of crashing.
 - DrumSep / Direct Kit checkpoint resolution fixed: the audio-separator catalog checkpoint resolves to the managed canonical checkpoint and configuration; no more processing-time checkpoint alias copies.
@@ -44,14 +45,16 @@ For full release notes, asset checksums, and current download details, use the p
 - Recovery on Linux: update via ReaPack, then run `STEMwerk: Setup` → Repair once.
 - No new installer assets — the `2.3.0.6` packages and checksums remain current; scripts update via ReaPack.
 
-## Known issue: Apple Silicon Repair (2.3.0.6/2.3.0.7)
-On Apple Silicon, Setup → Repair currently requires the bundled payload. If Repair fails with `apple_silicon_requires_bundled_payload` (or you hit a numpy/numba conflict):
+## Historical known issue: Apple Silicon Repair (2.3.0.6/2.3.0.7)
+This issue applied to the old `2.3.0.6`/`2.3.0.7` releases and is fixed in current versions (`2.3.1.0` introduced a proper online Repair; `2.3.1.1` ships the portable arm64 FFmpeg/ffprobe payload in the bundled Apple Silicon package).
+
+On those old releases, Setup → Repair on Apple Silicon required the bundled payload. If Repair failed with `apple_silicon_requires_bundled_payload` (or a numpy/numba conflict), the workaround was:
 1. Download `STEMwerk-2.3.0.6-bundled-apple-silicon.pkg` from the [2.3.0.6 release page](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.6).
 2. Install that pkg FIRST.
 3. Then run `STEMwerk: Setup` → Repair in REAPER.
 4. Afterwards, let ReaPack update you to `2.3.0.7`.
 
-Never install the small `STEMwerk-2.3.0.6.pkg` over a bundled install — it removes the bundled payload. A proper online Repair (no bundled payload needed) ships in `2.3.1.0`.
+On `2.3.0.6`/`2.3.0.7`, installing the small `STEMwerk-2.3.0.6.pkg` over a bundled install removed the bundled payload. A proper online Repair (no bundled payload needed) shipped in `2.3.1.0`.
 
 ## Platform screenshots
 ### Windows
@@ -106,13 +109,14 @@ Recommended free space:
 - AMD DirectML: validated for the installer/runtime path
 
 ### Linux GPU
-- Linux is supported via ReaPack and package-based installs (`AppImage`, `.deb`, `.rpm`, Arch package).
+- Linux is supported via ReaPack and the `AppImage` release asset.
 - GPU acceleration depends on a compatible CUDA or ROCm environment.
 - ROCm support remains hardware and driver dependent.
 
 ### Apple Silicon and macOS
 - macOS Intel and Apple Silicon are supported through the setup flow.
-- Apple Silicon MPS passed smoke for this release, but remains hardware and runtime dependent.
+- Apple Silicon MPS (GPU-accelerated) is validated for this release; it remains hardware and runtime dependent.
+- macOS Intel: CPU Normal Stems are supported and validated; Direct Kit / Kit Split are unsupported by design on Intel Macs.
 - CPU remains a supported fallback path when GPU acceleration is unavailable.
 
 ## Downloads
@@ -121,14 +125,14 @@ Recommended free space:
 - Existing users: ReaPack remains the preferred update path for scripts and actions.
 - New Windows users: use the Windows installer.
 - macOS users: use the `.pkg` installer or ReaPack/script setup.
-- Linux users: use ReaPack or one of the package-based release assets.
+- Linux users: use ReaPack or the `STEMwerk-2.3.1.1-x86_64.AppImage` release asset.
 
 After install or update, use `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) when runtime verification or repair is needed, then launch `STEMwerk: Main` (`STEMwerk.lua`).
 
 Windows installer note: the installer copies the REAPER script payload to `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`, but REAPER action entries may still need to be registered from inside REAPER. If `STEMwerk:` actions are missing, open `Actions -> Show action list -> ReaScript: Load...`, load `STEMwerk_Setup_Toolbar.lua`, and cancel the toolbar prompt if you only need action registration.
 
 ### GitHub release assets for 2.3.1.1
-`2.3.1.1` has not yet been published as a tagged GitHub Release. Once published, the release will provide these five installer assets and the checksum manifest:
+`2.3.1.1` is published at the [current GitHub Release](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.1.1) with these five platform assets and the checksum manifest:
 
 | File | Description |
 |---|---|
@@ -162,7 +166,7 @@ The large Windows offline allmodels installers remain at [`2.3.0.0`](https://git
 No current public Linux large offline allmodels download URLs are listed here because those larger Linux offline builds were not part of the public lightweight `2.3` release set.
 
 ### Runtime and model downloads
-STEMwerk downloads the required separation models during setup/runtime preparation when possible, or automatically on first use if a model is not cached yet. As of `2.3.1.0`, models are installed during Setup/Repair rather than during processing.
+Setup/Repair installs or downloads the required runtime, models and other assets during runtime preparation. Processing never automatically downloads a required model or asset: if one is missing when processing starts, STEMwerk fails closed before doing work and directs the user back to Setup/Repair.
 
 Approximate model-cache downloads:
 - `Fast` (`htdemucs`): about 84 MB
@@ -189,7 +193,7 @@ STEMwerk processes audio locally. It only connects to network services when requ
 ### Recommended
 1. Windows: use the current Windows installer release asset.
 2. macOS: use the current `.pkg` installer or install through ReaPack.
-3. Linux: use ReaPack, AppImage, `.deb`, `.rpm`, or the Arch package.
+3. Linux: use ReaPack or the current `STEMwerk-2.3.1.1-x86_64.AppImage` release asset.
 4. In REAPER, run `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) when prompted or when runtime verification or repair is needed.
 5. Start the main UI with `STEMwerk: Main` (`STEMwerk.lua`).
 
@@ -197,7 +201,6 @@ Notes:
 - On Windows, the installer is the preferred first-time setup path.
 - On macOS and Linux, `STEMwerk: Setup` is the normal in-REAPER setup and repair entry point.
 - ReaPack installs scripts and actions; runtime validation still happens through `STEMwerk: Setup`.
-- After installing a native Linux `.deb`, `.rpm`, or Arch package, run `stemwerk-integrate-reaper` as your normal desktop user. Then open `Actions -> Show action list -> ReaScript: Load...`, select `STEMwerk_Setup_Toolbar.lua` from `Scripts/STEMwerk-reaper`, and run `STEMwerk: Setup`.
 
 ### Manual or developer install
 1. Install a supported 64-bit Python 3 version and ensure it is on your `PATH`.

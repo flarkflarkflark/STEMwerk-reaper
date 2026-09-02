@@ -5175,15 +5175,28 @@ def _assert_no_stale_current_version_semantics(section_text, target_version, sec
 
 def _assert_readme_release_contract(readme, target_version):
     release_status = _readme_section(readme, "## Release status")
+    recommended_install = _readme_section(readme, "### Recommended install path")
     assets_table = _readme_section(readme, f"### GitHub release assets for {target_version}")
     windows_notes = _readme_section(readme, "## Windows Notes")
 
     # --- release status section must identify target_version as current,
     # not as something still forthcoming.
     assert f"STEMwerk `{target_version}`, the current release" in release_status
-    for stale_future_phrase in ("upcoming", "forthcoming", "will ship", "will be installed"):
+    for stale_future_phrase in (
+        "upcoming",
+        "forthcoming",
+        "will ship",
+        "will be installed",
+        "has not yet been published",
+        "once published",
+    ):
         assert stale_future_phrase not in release_status.lower()
-    assert "has not yet been published as a tagged GitHub Release" in release_status
+    release_url = (
+        "https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/"
+        f"v{target_version}"
+    )
+    assert release_url in release_status
+    assert release_url in assets_table
 
     # --- Windows guidance must target the current version, not an older one.
     assert f"The current stable Windows target is `{target_version}`" in windows_notes
@@ -5222,6 +5235,12 @@ def _assert_readme_release_contract(readme, target_version):
     assert f"stemwerk-{target_version}-1-x86_64.pkg.tar.zst" not in assets_table
     assert "noarch" not in assets_table
     assert "-any.pkg.tar.zst" not in assets_table
+    assert (
+        f"Linux users: use ReaPack or the `STEMwerk-{target_version}-x86_64.AppImage` "
+        "release asset."
+    ) in recommended_install
+    assert "package-based release assets" not in recommended_install
+    assert "After installing a native Linux `.deb`, `.rpm`, or Arch package" not in readme
 
     # --- the large offline/allmodels macOS pkg is a separate-channel product and
     # is not a normal GitHub release asset for this line.
@@ -5235,7 +5254,12 @@ def _assert_readme_release_contract(readme, target_version):
     # Genuinely historical references remain valid and must be preserved.
     assert "`2.3.0.0` is the original historical 2.3 full-release baseline" in readme
     assert "large offline/full installers deliberately remain on the `2.3.0.0` line" in readme
-    assert "## What's new in 2.3.0.6 / 2.3.0.7" in readme
+    assert "## Historical: what was new in 2.3.0.6 / 2.3.0.7" in readme
+    assert "Apple Silicon MPS (GPU-accelerated) is validated for this release" in readme
+    assert "CPU Normal Stems are supported and validated" in readme
+    assert "Direct Kit / Kit Split are unsupported by design on Intel Macs" in readme
+    assert "Processing never automatically downloads a required model or asset" in readme
+    assert "fails closed before doing work and directs the user back to Setup/Repair" in readme
 
 
 def test_shipped_readme_identifies_current_public_2311_release_and_assets():
@@ -5334,6 +5358,10 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
             "## Release status",
             f"`{target_version}` is upcoming and not yet ready for general use.",
         ),
+        "S": mutate(
+            "## Release status",
+            f"`{target_version}` has not yet been published; use it once published.",
+        ),
         # J: historical-exemption abuse #1 -- "previously published" framing
         # reused to smuggle in an unconditional "current" claim for a stale
         # version, in the same sentence.
@@ -5379,7 +5407,7 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
     # guidance for the stale version and must remain historically valid.
     historical_present_fact = mutate(
         "## Release status",
-        f"ReaPack currently serves 2.3.0.7; it will be updated to {target_version} once published.",
+        f"Before {target_version} was published, ReaPack served 2.3.0.7.",
     )
     _assert_readme_release_contract(historical_present_fact, target_version)
 
