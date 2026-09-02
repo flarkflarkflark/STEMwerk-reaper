@@ -5984,7 +5984,11 @@ local function main()
 
     waitNextSecond()
 
-    local drumsepHelperArgCpu = SCEN.createDrumsepHelperArgCpuEffectiveScenario(joinPath(baseRoot, "drumsep-helper-arg-mps-cpu-effective"))
+    -- Keep this scenario dir short: on Windows the bundle-internal copy
+    -- path (<dir>/resource-present/.../runtime_runs/<run>/single/stdout.txt)
+    -- otherwise exceeds the 260-char MAX_PATH limit and the run evidence
+    -- silently fails to copy, making every run field "unknown".
+    local drumsepHelperArgCpu = SCEN.createDrumsepHelperArgCpuEffectiveScenario(joinPath(baseRoot, "drumsep-arg-cpu"))
     local drumsepHelperArgCpuBundle = runScenario(drumsepHelperArgCpu, SCEN.assertDrumsepHelperArgCpuEffectiveScenario)
     print("PASS drumsep-helper-arg-mps-cpu-effective -> " .. drumsepHelperArgCpuBundle)
 
