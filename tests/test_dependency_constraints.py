@@ -1,5 +1,6 @@
 """Regression smoke for the v2.2.2.1 macOS/Linux torch pin hotfix."""
 
+import hashlib
 import importlib.util
 import json
 import ntpath
@@ -5404,6 +5405,10 @@ def _make_fixture_file(tmp_path, name, content):
     return path
 
 
+def _sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def test_windows_fetch_runtime_assets_declares_pinned_checksums_and_immutable_ffmpeg_source():
     script = Path("installer/windows/fetch_runtime_assets.sh").read_text(encoding="utf-8")
     ps1 = Path("installer/windows/fetch_runtime_assets.ps1").read_text(encoding="utf-8")
@@ -5428,9 +5433,7 @@ def test_windows_fetch_runtime_assets_declares_pinned_checksums_and_immutable_ff
 
 def test_windows_fetch_runtime_assets_accepts_bytes_matching_expected_checksum(tmp_path):
     good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
-    good_sha256 = subprocess.run(
-        ["sha256sum", str(good)], text=True, capture_output=True
-    ).stdout.split()[0]
+    good_sha256 = _sha256(good)
     out = tmp_path / "out.bin"
 
     result = _run_fetch_runtime_assets_helper(
@@ -5461,9 +5464,7 @@ def test_windows_fetch_runtime_assets_rejects_downloaded_bytes_with_wrong_checks
 
 def test_windows_fetch_runtime_assets_rejects_and_replaces_corrupted_cache(tmp_path):
     good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
-    good_sha256 = subprocess.run(
-        ["sha256sum", str(good)], text=True, capture_output=True
-    ).stdout.split()[0]
+    good_sha256 = _sha256(good)
     out = _make_fixture_file(tmp_path, "out.bin", b"stale corrupted cache contents")
 
     result = _run_fetch_runtime_assets_helper(
@@ -5479,9 +5480,7 @@ def test_windows_fetch_runtime_assets_rejects_and_replaces_corrupted_cache(tmp_p
 
 def test_windows_fetch_runtime_assets_accepts_already_verified_cache_without_redownload(tmp_path):
     good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
-    good_sha256 = subprocess.run(
-        ["sha256sum", str(good)], text=True, capture_output=True
-    ).stdout.split()[0]
+    good_sha256 = _sha256(good)
     out = _make_fixture_file(tmp_path, "out.bin", b"correct bytes")
 
     result = _run_fetch_runtime_assets_helper(
