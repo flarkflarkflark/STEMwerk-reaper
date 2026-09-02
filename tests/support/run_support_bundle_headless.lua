@@ -4934,6 +4934,13 @@ local TENTHFU = {}
 -- Direct Kit (top-level path) and Kit Split (stage2_drumsep path) fixtures
 -- since both flows share the exact same writer.
 local function realDrumsepResultJson(runId, jobId, outputDir)
+    -- outputDir is a real filesystem path -- on Windows that means literal
+    -- backslashes, which are the JSON escape character. A real JSON encoder
+    -- (as the actual DrumSep helper uses) always escapes them; embedding the
+    -- raw path here without escaping produces invalid escape sequences (e.g.
+    -- "\U", "\s") that SW_RUNCTX.strictParseJson correctly rejects, so this
+    -- fixture must escape backslashes the same way a genuine encoder would.
+    outputDir = tostring(outputDir or ""):gsub("\\", "\\\\")
     return table.concat({
         "{",
         '  "ok": true,',
