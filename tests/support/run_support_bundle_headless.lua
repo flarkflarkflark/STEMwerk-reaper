@@ -934,7 +934,7 @@ end
 -- runtime_runs, so a scenario can lay down its own run/job structure
 -- instead.
 local function clearRuns(context)
-    local cacheRunsRoot = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs")
+    local cacheRunsRoot = joinPath(fixtureCacheLogDir(context.env), "runs")
     removeTree(cacheRunsRoot)
 end
 
@@ -942,7 +942,7 @@ function SCEN.createAmdRocmScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "amd-rocm-device-classification"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_amd_rocm", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_amd_rocm", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
         "model: htdemucs",
@@ -993,7 +993,7 @@ function SCEN.createNvidiaCudaScenario(baseRoot)
         "BOOTSTRAP_STATUS=ok",
         "",
     }, "\n"))
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_nvidia_cuda", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_nvidia_cuda", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
         "model: htdemucs",
@@ -1025,7 +1025,7 @@ function SCEN.createShuffledRunAssociationScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "shuffled-run-id-association"
     clearRuns(context)
-    local runsRoot = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs")
+    local runsRoot = joinPath(fixtureCacheLogDir(context.env), "runs")
 
     -- "STEMwerk_run_zzz_last" sorts after "STEMwerk_run_alpha", so
     -- directory-descending order is [zzz_last, alpha] -- the reverse of the
@@ -1071,7 +1071,7 @@ function SCEN.createParallelAggregationScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "parallel-output-aggregation"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_parallel_three")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_parallel_three")
     for i = 1, 3 do
         local jobDir = joinPath(runDir, "job" .. tostring(i))
         mkdirP(jobDir)
@@ -1099,7 +1099,7 @@ function SCEN.createDirectKitScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "direct-kit-semantic-model"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_direct_kit", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_direct_kit", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
         "workflow_source: dks_direct",
@@ -1131,7 +1131,7 @@ function SCEN.createKitSplitScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "kit-split-two-stage-model"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_kit_split", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_kit_split", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
         "workflow_source: dks_extract",
@@ -1226,7 +1226,7 @@ function SCEN.createSingleRunUnrelatedSessionScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "single-run-unrelated-session"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_solo_run", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_solo_run", "single")
     mkdirP(jobDir)
     -- Deliberately no model/device evidence of its own and no run-ID token
     -- shared with run_stemwerk.log below, so any model shown for this run
@@ -1257,7 +1257,7 @@ function SCEN.createMissingTokenSessionScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "missing-token-session"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_no_token", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_no_token", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "done.txt"), "done\n")
     writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
@@ -1287,7 +1287,7 @@ function SCEN.createReplayedRunIdScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "replayed-duplicate-run-id"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_dup_run", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_dup_run", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "done.txt"), "done\n")
     writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
@@ -1325,7 +1325,7 @@ function SCEN.createCurrentNvidiaVsStaleAmdScenario(baseRoot)
     -- Leave bootstrap.env/capabilities.env exactly as the present-runtime
     -- fixture wrote them: BACKEND=rocm, a stale global ROCm profile. This
     -- run's own evidence is unambiguously NVIDIA and must win.
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_current_nvidia", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_current_nvidia", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
         "model: htdemucs",
@@ -1374,7 +1374,7 @@ function SCEN.createAmbiguousCudaDeviceScenario(baseRoot)
         "BOOTSTRAP_STATUS=ok",
         "",
     }, "\n"))
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_ambiguous_cuda", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_ambiguous_cuda", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
         "model: htdemucs",
@@ -1404,7 +1404,7 @@ function SCEN.createUnknownTruthinessScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "unknown-truthiness-does-not-suppress-real-evidence"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_unknown_truthiness", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_unknown_truthiness", "single")
     mkdirP(jobDir)
     -- Only backend_runtime carries real ROCm evidence; runtime_selected is
     -- never mentioned, so it stays at its literal "unknown" default.
@@ -1435,7 +1435,7 @@ function SCEN.createMixedSuccessParallelScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "mixed-success-parallel-jobs"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_mixed_result")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_mixed_result")
     local job1 = joinPath(runDir, "job1")
     mkdirP(job1)
     writeFile(joinPath(job1, "phase_events.jsonl"),
@@ -1463,7 +1463,7 @@ function SCEN.createPartialValidationScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "partial-validation-not-ok"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_partial_validation")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_partial_validation")
     local job1 = joinPath(runDir, "job1")
     mkdirP(job1)
     writeFile(joinPath(job1, "phase_events.jsonl"),
@@ -1492,7 +1492,7 @@ function SCEN.createUnequalOutputCountsScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "unequal-output-counts"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_unequal_outputs")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_unequal_outputs")
     local job1 = joinPath(runDir, "job1")
     mkdirP(job1)
     writeFile(joinPath(job1, "phase_events.jsonl"),
@@ -1522,7 +1522,7 @@ function SCEN.createLateModelResolutionScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "late-model-resolution-6stem-parallel"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_late_model")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_late_model")
     -- job1 has output evidence but no model field of its own.
     local job1 = joinPath(runDir, "job1")
     mkdirP(job1)
@@ -1555,7 +1555,7 @@ function SCEN.createCrossRunKitSplitScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "cross-run-kit-split-no-leakage"
     clearRuns(context)
-    local runsRoot = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs")
+    local runsRoot = joinPath(fixtureCacheLogDir(context.env), "runs")
 
     local jobA = joinPath(runsRoot, "STEMwerk_kitsplit_run_a", "single")
     mkdirP(jobA)
@@ -1703,7 +1703,7 @@ function SCEN.createAdditionalModelMarkersScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "additional-model-markers-parsed"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_extra_markers", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_extra_markers", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
         "workflow_source: dks_direct",
@@ -1743,7 +1743,7 @@ function SCEN.createTokenlessLaunchAfterValidRunScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "tokenless-launch-after-valid-run"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_run_a", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_run_a", "single")
     mkdirP(jobDir)
     -- No model/device evidence of its own, so any model shown for this run
     -- can only have come from run_stemwerk.log association.
@@ -1782,7 +1782,7 @@ function SCEN.createHeterogeneousJobsSameRunScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "heterogeneous-jobs-same-run-no-fabricated-combo"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_hetero_run")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_hetero_run")
     local jobA = joinPath(runDir, "jobA")
     mkdirP(jobA)
     writeFile(joinPath(jobA, "stdout.txt"), table.concat({
@@ -1829,7 +1829,7 @@ function SCEN.createHeterogeneousDrumsepSameRunScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "heterogeneous-drumsep-fields-same-run"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_hetero_drumsep")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_hetero_drumsep")
     local jobA = joinPath(runDir, "jobA")
     mkdirP(jobA)
     writeFile(joinPath(jobA, "stdout.txt"), table.concat({
@@ -1874,7 +1874,7 @@ function SCEN.createHeterogeneousKitSplitSameRunScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "heterogeneous-kit-split-stages-same-run"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_hetero_kitsplit")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_hetero_kitsplit")
     local jobA = joinPath(runDir, "jobA")
     mkdirP(jobA)
     writeFile(joinPath(jobA, "stdout.txt"), table.concat({
@@ -1931,7 +1931,7 @@ function SCEN.createDirectKitGenericModelLeakageScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "direct-kit-generic-model-leakage"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_direct_kit_leak", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_direct_kit_leak", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
         "workflow_source: dks_direct",
@@ -1969,7 +1969,7 @@ function SCEN.createMpsRequestedCpuEffectiveScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "mps-requested-cpu-effective-fallback"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_mps_cpu_fallback", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_mps_cpu_fallback", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
         "model: htdemucs",
@@ -2129,7 +2129,7 @@ function SCEN.createDrumsepHelperArgCpuEffectiveScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "drumsep-helper-arg-mps-cpu-effective"
     clearRuns(context)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_drumsep_arg_cpu", "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_drumsep_arg_cpu", "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
         "model: htdemucs",
@@ -2438,7 +2438,7 @@ end
 -- phaseEvidence=false writes no phase/timing jsonl at all (a job that
 -- never reported completion evidence of its own).
 local function writeCurrentWorkerRun(context, runName, jobs)
-    local runsRoot = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs")
+    local runsRoot = joinPath(fixtureCacheLogDir(context.env), "runs")
     for _, job in ipairs(jobs) do
         local jobDir = joinPath(runsRoot, runName, job.name)
         mkdirP(jobDir)
@@ -2832,7 +2832,7 @@ end
 -- found (found_stems= value), validation (output_validation_reason value
 -- or nil to omit), identityMarker (false to omit all identity markers).
 local function writeRealDrumkitJob(context, runName, jobName, opts)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", runName, jobName)
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", runName, jobName)
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "exit_code.txt"), tostring(opts.exit or 0) .. "\n")
     if opts.done ~= false then
@@ -3190,7 +3190,7 @@ function SCEN.createArbitrarySubstringIdentityScenario(baseRoot)
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
     context.workerRunName = currentWorkerRunName()
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
     writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
@@ -3224,7 +3224,7 @@ function SCEN.createExplicitRunIdMarkerScenario(baseRoot)
     clearRuns(context)
     writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
     writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
@@ -3421,7 +3421,7 @@ function SCEN.createPerJobIdentityScenario(baseRoot)
     writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("jobA") })
-    local jobB = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "jobB")
+    local jobB = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "jobB")
     mkdirP(jobB)
     writeFile(joinPath(jobB, "exit_code.txt"), "0\n")
     writeFile(joinPath(jobB, "done.txt"), "DONE\n")
@@ -3483,7 +3483,7 @@ function SCEN.createConflictingIdentityScenario(baseRoot)
     -- drumsep_result.json) disagrees with worker_context.json's run_id --
     -- a genuine worker/helper conflict, never resolved by trusting
     -- whichever one is "structured".
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(joinPath(jobDir, "stage2_drumsep"))
     writeFile(joinPath(jobDir, "stage2_drumsep", "drumsep_result.json"), table.concat({
         "{",
@@ -3517,7 +3517,7 @@ function SCEN.createCopiedJobEvidenceScenario(baseRoot)
     writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     local foreignRun = "STEMwerk_" .. tostring(os.time() - 10) .. "_500_1"
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
     writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
@@ -3550,7 +3550,7 @@ function SCEN.createNewerUnprovenSupersedesScenario(baseRoot)
     local epoch = os.time()
     writeCurrentWorkerRun(context, "STEMwerk_" .. tostring(epoch - 5) .. "_001_1", { successfulWorkerJob("single") })
     context.workerRunName = "STEMwerk_" .. tostring(epoch) .. "_001_1"
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
     writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
@@ -3625,7 +3625,7 @@ function SCEN.createSameSecondNewerUnprovenScenario(baseRoot)
     local epoch = os.time()
     writeCurrentWorkerRun(context, "STEMwerk_" .. tostring(epoch) .. "_001_1", { successfulWorkerJob("single") })
     context.workerRunName = "STEMwerk_" .. tostring(epoch) .. "_002_2"
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
     writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
@@ -3724,7 +3724,7 @@ end
 -- runs is the full normal-flow output set. These fixtures use the exact
 -- real production evidence shape of such runs.
 local function writeRealNormalFlowJob(context, runName, jobName, modelName, stemNames)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", runName, jobName)
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", runName, jobName)
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
     writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
@@ -4057,7 +4057,7 @@ function EIGHTHFU.createSessionIdMismatchScenario(baseRoot)
         "",
     }, "\n"))
     context.workerRunName = currentWorkerRunName()
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
     writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
@@ -4097,7 +4097,7 @@ end
 -- ---------------------------------------------------------------------
 
 function EIGHTHFU.writeWorkerContextFile(context, runName, jobName, runId, jobId)
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", runName, jobName)
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", runName, jobName)
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "worker_context.json"), table.concat({
         "{",
@@ -4120,7 +4120,7 @@ end
 -- (see EIGHTHFU.writeStaleCurrentProcessingRecord below) use a separate
 -- helper rather than overloading this one's default.
 function EIGHTHFU.writeCurrentProcessingRecord(context, runId, status, runDirName)
-    local dir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "current_processing")
+    local dir = joinPath(fixtureCacheLogDir(context.env), "current_processing")
     mkdirP(dir)
     local nowIso = os.date("!%Y-%m-%dT%H:%M:%SZ")
     writeFile(joinPath(dir, tostring(runId) .. ".json"), table.concat({
@@ -4145,7 +4145,7 @@ end
 -- itself too old to anchor current identity must not be selectable at
 -- all).
 function EIGHTHFU.writeStaleCurrentProcessingRecord(context, runId, status, runDirName)
-    local dir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "current_processing")
+    local dir = joinPath(fixtureCacheLogDir(context.env), "current_processing")
     mkdirP(dir)
     local staleIso = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - 7200)
     writeFile(joinPath(dir, tostring(runId) .. ".json"), table.concat({
@@ -4291,7 +4291,7 @@ function EIGHTHFU.createMissingJobIdentityScenario(baseRoot)
     EIGHTHFU.writeCurrentProcessingRecord(context, runId, "running", context.workerRunName)
     -- jobB: no worker_context.json, no timing/phase evidence, no exit
     -- code, no done marker -- a job that never reported anything at all.
-    local jobBDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "jobB")
+    local jobBDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "jobB")
     mkdirP(jobBDir)
     return context
 end
@@ -4367,7 +4367,7 @@ function NINTHFU.createMalformedWorkerContextScenario(baseRoot)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
     context.runId = "guid-malformed-worker-context-" .. tostring(os.time())
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "worker_context.json"), 'this is not { valid json at all\n')
     EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
@@ -4401,7 +4401,7 @@ function NINTHFU.createTruncatedWorkerContextScenario(baseRoot)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
     context.runId = "guid-truncated-worker-context-" .. tostring(os.time())
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "worker_context.json"),
         '{\n  "schema": 1,\n  "run_id": "' .. context.runId .. '"')
@@ -4431,7 +4431,7 @@ function NINTHFU.createWrongSchemaWorkerContextScenario(baseRoot)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
     context.runId = "guid-wrong-schema-" .. tostring(os.time())
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "worker_context.json"), table.concat({
         "{",
@@ -4468,7 +4468,7 @@ function NINTHFU.createMissingJobIdScenario(baseRoot)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
     context.runId = "guid-missing-job-id-" .. tostring(os.time())
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "worker_context.json"), table.concat({
         "{",
@@ -4563,7 +4563,7 @@ function NINTHFU.createMalformedCurrentStateScenario(baseRoot)
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
     context.runId = "guid-malformed-current-state-" .. tostring(os.time())
     EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
-    local dir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "current_processing")
+    local dir = joinPath(fixtureCacheLogDir(context.env), "current_processing")
     mkdirP(dir)
     writeFile(joinPath(dir, context.runId .. ".json"), 'not { valid json\n')
     return context
@@ -4590,7 +4590,7 @@ function NINTHFU.createTruncatedCurrentStateScenario(baseRoot)
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
     context.runId = "guid-truncated-current-state-" .. tostring(os.time())
     EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
-    local dir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "current_processing")
+    local dir = joinPath(fixtureCacheLogDir(context.env), "current_processing")
     mkdirP(dir)
     writeFile(joinPath(dir, context.runId .. ".json"),
         '{\n  "schema": 1,\n  "run_id": "' .. context.runId .. '"')
@@ -4620,7 +4620,7 @@ function NINTHFU.createStateFilenameMismatchScenario(baseRoot)
     local filenameRunId = "guid-filename-run-id-" .. tostring(os.time())
     local bodyRunId = "guid-body-run-id-" .. tostring(os.time())
     EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", bodyRunId, "single")
-    local dir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "current_processing")
+    local dir = joinPath(fixtureCacheLogDir(context.env), "current_processing")
     mkdirP(dir)
     writeFile(joinPath(dir, filenameRunId .. ".json"), table.concat({
         "{",
@@ -4876,7 +4876,7 @@ function NINTHFU.createSelectedRunAIncompleteRunBScenario(baseRoot)
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
     context.workerRunName = "STEMwerk_" .. tostring(os.time()) .. "_001_1"
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
     writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
@@ -5023,7 +5023,7 @@ function TENTHFU.createHelperOnlyIdentityScenario(baseRoot)
         validation = "ok",
     })
     context.runId = "guid-helper-only-" .. tostring(os.time())
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     local stage2Dir = joinPath(jobDir, "stage2_drumsep")
     mkdirP(stage2Dir)
     -- Helper identity ONLY -- deliberately no worker_context.json.
@@ -5061,7 +5061,7 @@ function TENTHFU.createDuplicateJsonKeyScenario(baseRoot)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
     context.runId = "guid-duplicate-key-" .. tostring(os.time())
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "worker_context.json"), table.concat({
         "{",
@@ -5103,7 +5103,7 @@ function TENTHFU.createControlCharacterJsonScenario(baseRoot)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
     context.runId = "guid-control-char-" .. tostring(os.time())
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     writeFile(joinPath(jobDir, "worker_context.json"), table.concat({
         "{",
@@ -5142,7 +5142,7 @@ function TENTHFU.createDirectKitRealHelperSuccessScenario(baseRoot)
         validation = "ok",
     })
     context.runId = "guid-direct-kit-real-helper-" .. tostring(os.time())
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
     -- Direct Kit's real result path: <job dir>/drumsep_result.json, NO
@@ -5174,7 +5174,7 @@ function TENTHFU.createDirectKitRealHelperConflictScenario(baseRoot)
         validation = "ok",
     })
     context.runId = "guid-direct-kit-conflict-" .. tostring(os.time())
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     mkdirP(jobDir)
     EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
     writeFile(joinPath(jobDir, "drumsep_result.json"),
@@ -5212,7 +5212,7 @@ function TENTHFU.createKitSplitRealNestedHelperSuccessScenario(baseRoot)
         validation = "ok",
     })
     context.runId = "guid-kit-split-real-helper-" .. tostring(os.time())
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     local stage2Dir = joinPath(jobDir, "stage2_drumsep")
     mkdirP(stage2Dir)
     EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
@@ -5243,7 +5243,7 @@ function TENTHFU.createKitSplitRealNestedHelperConflictScenario(baseRoot)
         validation = "ok",
     })
     context.runId = "guid-kit-split-conflict-" .. tostring(os.time())
-    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local jobDir = joinPath(fixtureCacheLogDir(context.env), "runs", context.workerRunName, "single")
     local stage2Dir = joinPath(jobDir, "stage2_drumsep")
     mkdirP(stage2Dir)
     EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
@@ -5300,7 +5300,7 @@ function TENTHFU.createPhysicalRunDirBindingScenario(baseRoot)
     context.runNameA = "STEMwerk_" .. tostring(os.time() - 5) .. "_001_1"
     -- Directory A physically exists (it is what the selected state is
     -- bound to) but carries no worker evidence of its own at all.
-    mkdirP(joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.runNameA))
+    mkdirP(joinPath(fixtureCacheLogDir(context.env), "runs", context.runNameA))
     EIGHTHFU.writeCurrentProcessingRecord(context, sharedRunId, "completed", context.runNameA)
 
     waitNextSecond()
@@ -5400,7 +5400,7 @@ end
 
 function TENTHFU.assertDirectKitPersistedHelperConflictScenario(bundleDir, context)
     local manifest = readManifest(bundleDir)
-    local persistedResultPath = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs",
+    local persistedResultPath = joinPath(fixtureCacheLogDir(context.env), "runs",
         context.workerRunName, "single", "drumsep_result.json")
     assertf(fileExists(persistedResultPath),
         "SW_LOG.persistRunDiagnostics did not copy Direct Kit's top-level drumsep_result.json into persisted diagnostics:\n" .. persistedResultPath)
@@ -5432,7 +5432,7 @@ function TENTHFU.createDirectKitPersistedHelperMatchScenario(baseRoot)
 end
 
 function TENTHFU.assertDirectKitPersistedHelperMatchScenario(bundleDir, context)
-    local persistedResultPath = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs",
+    local persistedResultPath = joinPath(fixtureCacheLogDir(context.env), "runs",
         context.workerRunName, "single", "drumsep_result.json")
     assertf(fileExists(persistedResultPath),
         "SW_LOG.persistRunDiagnostics did not copy Direct Kit's top-level drumsep_result.json into persisted diagnostics:\n" .. persistedResultPath)
@@ -5470,7 +5470,7 @@ function TENTHFU.createHealthySeparationLogParallelScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "separation-log-only-parallel-healthy"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_seplog_healthy")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_seplog_healthy")
     for _, item in ipairs({ "item_1", "item_2" }) do
         TENTHFU.makeItemJob(runDir, item, {
             "model=htdemucs",
@@ -5504,7 +5504,7 @@ function TENTHFU.createMixedRuntimeSeparationLogParallelScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "separation-log-only-parallel-mixed-runtime"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_seplog_mixed_runtime")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_seplog_mixed_runtime")
     TENTHFU.makeItemJob(runDir, "item_1", {
         "model=htdemucs", "output_validation_reason=ok", "found_stems=4", "expected_stems=4",
         "runtime_selected=mps", "backend_runtime=metal",
@@ -5533,7 +5533,7 @@ function TENTHFU.createValidationFailureSeparationLogParallelScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "separation-log-only-parallel-validation-failure"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_seplog_validation_failure")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_seplog_validation_failure")
     TENTHFU.makeItemJob(runDir, "item_1", {
         "model=htdemucs", "output_validation_reason=ok", "found_stems=4", "expected_stems=4",
         "runtime_selected=mps", "backend_runtime=metal",
@@ -5558,7 +5558,7 @@ function TENTHFU.createPartialValidationSeparationLogParallelScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "separation-log-only-parallel-partial-validation-field"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_seplog_partial_validation")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_seplog_partial_validation")
     TENTHFU.makeItemJob(runDir, "item_1", {
         "model=htdemucs", "output_validation_reason=ok", "found_stems=4", "expected_stems=4",
         "runtime_selected=mps", "backend_runtime=metal",
@@ -5590,7 +5590,7 @@ function TENTHFU.createKitSplitTwoItemParallelScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "dks-kit-split-two-item-parallel"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_dks_two_item")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_dks_two_item")
     for _, item in ipairs({ "item_1", "item_2" }) do
         TENTHFU.makeItemJob(runDir, item, {
             "workflow_source=dks_extract",
@@ -5619,7 +5619,7 @@ function TENTHFU.createKitSplitFourItemParallelScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "dks-kit-split-four-item-parallel"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_dks_four_item")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_dks_four_item")
     for _, item in ipairs({ "item_1", "item_2", "item_3", "item_4" }) do
         TENTHFU.makeItemJob(runDir, item, {
             "workflow_source=dks_extract",
@@ -5646,7 +5646,7 @@ function TENTHFU.createDirectKitTwoItemParallelScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "dks-direct-kit-two-item-parallel"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_dks_direct_two_item")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_dks_direct_two_item")
     for _, item in ipairs({ "item_1", "item_2" }) do
         TENTHFU.makeItemJob(runDir, item, {
             "workflow_source=dks_direct",
@@ -5677,7 +5677,7 @@ function TENTHFU.createKitSplitPartialTwoItemParallelScenario(baseRoot)
     local context = SCEN.createPresentScenario(baseRoot)
     context.name = "dks-kit-split-partial-two-item-parallel"
     clearRuns(context)
-    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_dks_partial_two_item")
+    local runDir = joinPath(fixtureCacheLogDir(context.env), "runs", "STEMwerk_dks_partial_two_item")
     TENTHFU.makeItemJob(runDir, "item_1", {
         "workflow_source=dks_extract",
         "workflow_mode=drumkit",
