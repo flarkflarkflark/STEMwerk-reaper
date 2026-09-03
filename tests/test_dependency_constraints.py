@@ -2446,7 +2446,8 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "other_network_list_new" in script
     assert "def _ensure_runtime_download_checks_has_drumsep(" in script
     assert "mdx23c_download_list" in script
-    assert "checks_data = {}" in script
+    assert "def _fetch_authoritative_audio_separator_catalog(" in script
+    assert "AUDIO_SEPARATOR_REQUIRED_CATALOG_SECTIONS" in script
     assert "DIRECT_DKS_MODEL_DEAD_CKPT_URL" in script
     assert "DIRECT_DKS_MODEL_MIRROR_CKPT_URL" in script
     assert "def _preferred_direct_dks_asset_url(" in script
@@ -3734,6 +3735,13 @@ def test_direct_dks_preflight_rewrites_dead_ckpt_url_and_downloads_assets(tmp_pa
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
@@ -3793,7 +3801,7 @@ def test_direct_dks_preflight_rewrites_dead_ckpt_url_and_downloads_assets(tmp_pa
     assert persisted_sources[yaml_name] == yaml_url
 
 
-def test_direct_dks_preflight_uses_builtin_catalog_fallback_when_download_checks_are_missing(tmp_path, monkeypatch):
+def test_direct_dks_preflight_fetches_authoritative_catalog_when_download_checks_are_missing(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     model_cache_dir = tmp_path / "fresh model cache"
     monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: None)
@@ -3813,7 +3821,11 @@ def test_direct_dks_preflight_uses_builtin_catalog_fallback_when_download_checks
         def __exit__(self, exc_type, exc, tb):
             return False
 
+    authoritative_catalog = json.dumps(
+        {section: {} for section in module.AUDIO_SEPARATOR_REQUIRED_CATALOG_SECTIONS}
+    ).encode("utf-8")
     payloads = {
+        module.AUDIO_SEPARATOR_CANONICAL_DOWNLOAD_CHECKS_URL: authoritative_catalog,
         module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL: b"fresh-ckpt-bytes",
         module.DIRECT_DKS_MODEL_YAML_URL: b"audio:\n  dim_f: 1024\nmodel:\n  act: gelu\ntraining:\n  instruments:\n    - Kick\n",
     }
@@ -3833,8 +3845,14 @@ def test_direct_dks_preflight_uses_builtin_catalog_fallback_when_download_checks
     assert requested_model == module.DIRECT_DKS_MODEL_ALIAS
     assert resolved_model == module.DIRECT_DKS_MODEL_FILENAME
     assert detail is None
-    assert [url for url, _timeout in requests] == [module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL, module.DIRECT_DKS_MODEL_YAML_URL]
+    assert [url for url, _timeout in requests] == [
+        module.AUDIO_SEPARATOR_CANONICAL_DOWNLOAD_CHECKS_URL,
+        module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL,
+        module.DIRECT_DKS_MODEL_YAML_URL,
+    ]
     runtime_checks = json.loads((model_cache_dir / "download_checks.json").read_text(encoding="utf-8"))
+    for section in module.AUDIO_SEPARATOR_REQUIRED_CATALOG_SECTIONS:
+        assert isinstance(runtime_checks[section], dict)
     written_entry = runtime_checks["mdx23c_download_list"][module.DIRECT_DKS_MODEL_ENTRY_NAME]
     assert written_entry == {module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_YAML}
     persisted_sources = runtime_checks["other_network_list_new"][module.DIRECT_DKS_MODEL_ENTRY_NAME]
@@ -3855,6 +3873,13 @@ def test_direct_dks_preflight_skips_download_when_assets_already_exist(tmp_path,
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
@@ -3900,6 +3925,13 @@ def test_direct_dks_preflight_flags_audio_separator_0230_runtime_as_backend_limi
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
@@ -3949,6 +3981,13 @@ def test_direct_dks_preflight_allows_linux_rocm_runtime_with_six_output_capable_
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
@@ -3997,6 +4036,13 @@ def test_direct_dks_preflight_reports_source_and_target_on_download_failure(tmp_
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
@@ -4042,6 +4088,13 @@ def test_direct_dks_preflight_reports_yaml_schema_details_on_invalid_yaml(tmp_pa
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
