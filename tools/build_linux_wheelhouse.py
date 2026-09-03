@@ -32,6 +32,14 @@ TORCH_INDEX_DEPENDENCY_PREFIXES = (
     "pytorch-triton",
 )
 
+# audio-separator exposes several model families, but STEMwerk's Linux
+# DrumSep runtimes load only the managed MDX23C model. diffq is imported only
+# by audio-separator's Demucs implementation and has no CPython 3.12 Linux
+# wheel on PyPI, so following that broad metadata edge would require a compiler.
+DRUMSEP_UNUSED_DEPENDENCIES = (
+    "diffq",
+)
+
 TARGET_ENV = {
     "sys_platform": "linux",
     "platform_system": "Linux",
@@ -134,6 +142,7 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
             "numba==0.65.1",
         ),
         index_url="https://download.pytorch.org/whl/cpu",
+        skipped_dependency_names=DRUMSEP_UNUSED_DEPENDENCIES,
     ),
     ("drumsep", "cuda"): WheelhouseSpec(
         requirements=(
@@ -148,6 +157,7 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
             "numba==0.65.1",
         ),
         index_url="https://download.pytorch.org/whl/cu121",
+        skipped_dependency_names=DRUMSEP_UNUSED_DEPENDENCIES,
     ),
     ("drumsep", "rocm"): WheelhouseSpec(
         requirements=(
@@ -163,6 +173,7 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
             "numba==0.65.1",
         ),
         index_url="https://download.pytorch.org/whl/rocm6.4",
+        skipped_dependency_names=DRUMSEP_UNUSED_DEPENDENCIES,
     ),
 }
 

@@ -1410,6 +1410,24 @@ def _ensure_runtime_download_checks_has_drumsep(model_cache_dir: Path, entry_nam
         return False, "drumsep_yaml_filename_missing"
 
     changed = False
+    # audio-separator indexes every supported architecture when load_model()
+    # runs, even though STEMwerk adds only its managed MDX23C entry here.
+    for section_name in (
+        "demucs_download_list",
+        "vr_download_list",
+        "mdx_download_list",
+        "mdx_download_vip_list",
+        "mdx23c_download_list",
+        "mdx23c_download_vip_list",
+        "roformer_download_list",
+        "other_network_list_new",
+    ):
+        if section_name not in checks_data:
+            checks_data[section_name] = {}
+            changed = True
+        elif not isinstance(checks_data[section_name], dict):
+            return False, f"{section_name}_invalid"
+
     mdx23c = checks_data.setdefault("mdx23c_download_list", {})
     if not isinstance(mdx23c, dict):
         return False, "mdx23c_download_list_invalid"
