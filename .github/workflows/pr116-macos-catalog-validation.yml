@@ -1,14 +1,22 @@
 name: PR116 macOS Catalog Validation
 
-# Temporary, manual-only validation workflow for the PR #116 audit.
+# Temporary validation workflow for the PR #116 audit.
 # Proves or disproves the Apple Silicon clean-cache download_checks.json
 # regression on real GitHub-hosted macOS runners, by calling the actual
 # production _direct_dks_preflight_check()/_ensure_runtime_download_checks_has_drumsep()
 # code from scripts/reaper/audio_separator_process.py against the real,
-# pinned audio-separator==0.23.0 package. Not wired to any automatic trigger.
-# Not part of the release/merge gate.
+# pinned audio-separator==0.23.0 package. Not part of the release/merge gate.
+#
+# workflow_dispatch only becomes callable via API/CLI once a workflow file
+# exists on the repository default branch, which this intentionally does
+# not touch -- so this also triggers on push to this branch, scoped to
+# this branch only. workflow_dispatch is kept for later, once this file
+# (or an equivalent) lands on main.
 
 on:
+  push:
+    branches:
+      - hotfix/linux-cpu-dks-runtime
   workflow_dispatch:
 
 jobs:
