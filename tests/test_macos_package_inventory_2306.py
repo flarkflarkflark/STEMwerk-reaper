@@ -103,8 +103,31 @@ def test_windows_launcher_injection_is_rejected(tmp_path):
 def test_appledouble_injection_is_rejected(tmp_path):
     (tmp_path / "._payload").write_bytes(b"bad")
     records, counts = load_auditor().inventory(tmp_path)
-    assert records[0]["classification"] == "unknown"
+    appledouble = next(record for record in records if record["path"] == "._payload")
+    assert appledouble["classification"] == "unknown"
     assert counts["appledouble"] == 1
+
+
+@pytest.mark.parametrize(
+    "relative,is_directory",
+    [
+        ("outside/runtime/__pycache__", True),
+        ("outside/runtime/compiled.pyc", False),
+        ("outside/runtime/optimized.pyo", False),
+    ],
+)
+def test_complete_payload_inventory_rejects_python_cache_entries(
+    tmp_path, relative, is_directory
+):
+    candidate = tmp_path / relative
+    if is_directory:
+        candidate.mkdir(parents=True)
+    else:
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_bytes(b"forbidden cache fixture")
+
+    with pytest.raises(RuntimeError, match="forbidden Python cache"):
+        load_auditor().inventory(tmp_path)
 
 
 @pytest.mark.parametrize("variant", ["online", "bundled-apple-silicon"])

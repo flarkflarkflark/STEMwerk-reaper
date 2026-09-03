@@ -73,6 +73,31 @@ trim = function(s)
     return tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+local function isWindowsPlatform()
+    return C.OS == "Windows"
+end
+
+local function supportsInReaperSetup()
+    return C.OS == "Linux" or C.OS == "macOS"
+end
+
+local function showWindowsInstallerRequired(detail)
+    if type(C.showMessageBox) ~= "function" then return end
+    local message = "The STEMwerk runtime is not installed or is incomplete."
+    if detail and detail ~= "" then message = message .. "\n\n" .. tostring(detail) end
+    message = message .. "\n\nRe-run the STEMwerk installer before processing."
+    C.showMessageBox(message, "STEMwerk Setup", 0)
+end
+
+local function showUnsupportedSetupPlatform()
+    if type(C.showMessageBox) ~= "function" then return end
+    C.showMessageBox(
+        "In-REAPER runtime setup is unavailable because the host platform could not be identified.",
+        "STEMwerk Setup",
+        0
+    )
+end
+
 local function logExec(cmd, rc, out)
     if type(C.logExecResult) == "function" then
         C.logExecResult(cmd, rc, out)
@@ -128,7 +153,7 @@ local function commandPathLooksUsable(path)
 end
 
 local function isWindowsFfmpegShimPath(path)
-    if (C.OS or "Windows") ~= "Windows" then return false end
+    if not isWindowsPlatform() then return false end
     if not path or path == "" then return false end
     local p = tostring(path):lower()
     return p:find("\\microsoft\\winget\\links\\ffmpeg.exe", 1, true)
@@ -156,7 +181,7 @@ local function readBootstrapEnvFfmpeg(runtime)
 end
 
 local function isWindowsStorePythonPath(path)
-    if (C.OS or "Windows") ~= "Windows" then return false end
+    if not isWindowsPlatform() then return false end
     if not path or path == "" then return false end
     local p = tostring(path):lower()
     return p:find("\\microsoft\\windowsapps\\python", 1, true)
@@ -197,7 +222,7 @@ local function readBootstrapEnvPython(runtime)
 end
 
 local function resolveWindowsPythonPath(runtime)
-    local caps = M.readCapabilities and M.readCapabilities() or nil
+    local caps = M.readCapabilities and M.readCapabilities(true) or nil
     local capPy = caps and caps.kv and caps.kv.PYTHON_PATH or ""
     if isUsableWindowsPythonPath(capPy) then
         return capPy
@@ -217,10 +242,8 @@ local function resolveWindowsPythonPath(runtime)
         return extPath
     end
 
-    local h = io.popen("where python 2>nul")
-    if not h then return "" end
-    local out = h:read("*a") or ""
-    h:close()
+    local rc, out = execCommandWithOutput("where python", 8000)
+    if rc ~= 0 then return "" end
     for line in out:gmatch("[^\r\n]+") do
         local p = line:gsub("^%s+", ""):gsub("%s+$", "")
         if isUsableWindowsPythonPath(p) then
@@ -266,7 +289,7 @@ end
 -- M.verifyDependenciesReadyForProcessing() so the live/interactive verifier
 -- and the processing-time resolver agree.
 local function resolveVerifiedCapabilitiesPython()
-    local caps = M.readCapabilities()
+    local caps = M.readCapabilities(isWindowsPlatform())
     if not (caps and caps.kv) then return nil end
     local coherent = caps.kv.VERIFICATION == "ok"
         and (caps.kv.BOOTSTRAP_STATUS == nil or caps.kv.BOOTSTRAP_STATUS == "" or caps.kv.BOOTSTRAP_STATUS == "ok")
@@ -295,7 +318,7 @@ local function resolveRuntimeFfmpeg(runtime)
     return ""
 end
 
-local function resolveWindowsFfmpegPath(runtime)
+local function resolveWindowsFfmpegPath(runtime, readOnly)
     local runtimePath = resolveRuntimeFfmpeg(runtime)
     if runtimePath ~= "" then return runtimePath end
 
@@ -306,7 +329,7 @@ local function resolveWindowsFfmpegPath(runtime)
 
     local extPath = type(C.getExtStateValue) == "function" and C.getExtStateValue("ffmpegPath") or nil
     if extPath and isWindowsFfmpegShimPath(extPath) then
-        if type(C.setExtStateValue) == "function" then
+        if not readOnly and type(C.setExtStateValue) == "function" then
             C.setExtStateValue("ffmpegPath", "")
         end
         extPath = nil
@@ -314,11 +337,9 @@ local function resolveWindowsFfmpegPath(runtime)
     if extPath and extPath ~= "" and fileExists(extPath) then
         return extPath
     end
-    if (C.OS or "Windows") == "Windows" then
-        local h = io.popen("where ffmpeg 2>nul")
-        if h then
-            local out = h:read("*a") or ""
-            h:close()
+    if isWindowsPlatform() then
+        local rc, out = execCommandWithOutput("where ffmpeg", 8000)
+        if rc == 0 then
             for line in out:gmatch("[^\r\n]+") do
                 local p = line:gsub("^%s+", ""):gsub("%s+$", "")
                 if p ~= "" and fileExists(p) and not isWindowsFfmpegShimPath(p) then
@@ -407,10 +428,12 @@ function M.ensureWritableDir(path)
         C.SW_LOG.ensureDir(path)
     else
         local quoted = (type(C.quoteArg) == "function" and C.quoteArg(path)) or ('"' .. tostring(path) .. '"')
-        if (C.OS or "Windows") == "Windows" then
+        if isWindowsPlatform() then
             os.execute("mkdir " .. quoted .. " 2>nul")
-        else
+        elseif supportsInReaperSetup() then
             os.execute("mkdir -p " .. quoted .. " 2>/dev/null")
+        else
+            return false
         end
     end
 
@@ -423,7 +446,7 @@ function M.ensureWritableDir(path)
     return true
 end
 
-function M.getRuntimeBase()
+function M.getRuntimeBase(readOnly)
     local isAbsolutePath = C.isAbsolutePath
     local getExtStateValue = C.getExtStateValue
     local getHome = C.getHome
@@ -433,7 +456,7 @@ function M.getRuntimeBase()
         return override
     end
 
-    local OS = C.OS or "Linux"
+    local OS = C.OS
     local PATH_SEP = C.PATH_SEP or "/"
     local home = (type(getHome) == "function" and getHome()) or (os.getenv("HOME") or "/tmp")
     local candidates = {}
@@ -443,14 +466,16 @@ function M.getRuntimeBase()
         if localAppData ~= "" then table.insert(candidates, localAppData .. "\\STEMwerk") end
     elseif OS == "macOS" then
         table.insert(candidates, home .. "/Library/Application Support/STEMwerk")
-    else
+    elseif OS == "Linux" then
         local xdg = os.getenv("XDG_DATA_HOME") or ""
         if xdg ~= "" then table.insert(candidates, xdg .. "/STEMwerk") end
         table.insert(candidates, home .. "/.local/share/STEMwerk")
     end
 
     for _, base in ipairs(candidates) do
-        if M.ensureWritableDir(base) then
+        if readOnly then
+            return base
+        elseif M.ensureWritableDir(base) then
             if type(C.setExtStateValue) == "function" then
                 C.setExtStateValue("runtimeBase", tostring(base))
             end
@@ -461,10 +486,10 @@ function M.getRuntimeBase()
     return candidates[1] or (home .. PATH_SEP .. ".STEMwerk")
 end
 
-function M.getRuntimePaths()
-    local base = M.getRuntimeBase()
+function M.getRuntimePaths(readOnly)
+    local base = M.getRuntimeBase(readOnly)
     local PATH_SEP = C.PATH_SEP or "/"
-    local OS = C.OS or "Linux"
+    local OS = C.OS
     local runtimeRoot = base
     local runtimeState = base .. PATH_SEP .. "state"
     local runtimeLogs = base .. PATH_SEP .. "logs"
@@ -480,19 +505,20 @@ function M.getRuntimePaths()
         runtimeLogs = runtimeLogs,
         runtimeCache = runtimeCache,
         venvDir = venvDir,
-        venvPython = OS == "Windows" and (venvDir .. "\\Scripts\\python.exe") or (venvDir .. "/bin/python"),
+        venvPython = OS == "Windows" and (venvDir .. "\\Scripts\\python.exe")
+            or ((OS == "Linux" or OS == "macOS") and (venvDir .. "/bin/python") or ""),
     }
 end
 
-function M.getCapabilityPath()
-    local paths = M.getRuntimePaths()
+function M.getCapabilityPath(readOnly)
+    local paths = M.getRuntimePaths(readOnly)
     local PATH_SEP = C.PATH_SEP or "/"
     local stateDir = paths.runtimeState or (paths.runtimeRoot .. PATH_SEP .. "state")
     return stateDir .. PATH_SEP .. "capabilities.env"
 end
 
-function M.readCapabilities()
-    local capPath = M.getCapabilityPath()
+function M.readCapabilities(readOnly)
+    local capPath = M.getCapabilityPath(readOnly)
     local f = io.open(capPath, "r")
     if not f then return nil end
     local raw = f:read("*a") or ""
@@ -512,15 +538,15 @@ function M.readCapabilities()
     }
 end
 
-function M.getCapabilityPath()
-    local paths = M.getRuntimePaths()
+function M.getCapabilityPath(readOnly)
+    local paths = M.getRuntimePaths(readOnly)
     local PATH_SEP = C.PATH_SEP or "/"
     local stateDir = paths.runtimeState or (paths.runtimeRoot .. PATH_SEP .. "state")
     return stateDir .. PATH_SEP .. "capabilities.env"
 end
 
-function M.readCapabilities()
-    local capPath = M.getCapabilityPath()
+function M.readCapabilities(readOnly)
+    local capPath = M.getCapabilityPath(readOnly)
     local f = io.open(capPath, "r")
     if not f then return nil end
     local raw = f:read("*a") or ""
@@ -745,6 +771,14 @@ function M.isPythonAvailable(path)
 end
 
 function M.runSetup()
+    if isWindowsPlatform() then
+        showWindowsInstallerRequired("Windows runtime repair is performed by the external installer, not from REAPER.")
+        return false
+    end
+    if not supportsInReaperSetup() then
+        showUnsupportedSetupPlatform()
+        return false
+    end
     local install = resolveInstallRoot()
     if not install.ok then
         showInstallMismatch(install)
@@ -779,18 +813,21 @@ function M.runSetup()
 end
 
 function M.verifyRuntimeAfterBootstrap()
-    local runtime = M.getRuntimePaths()
+    local readOnly = isWindowsPlatform()
+    local runtime = M.getRuntimePaths(readOnly)
     local errors = {}
     local pythonPath = resolveVerifiedCapabilitiesPython()
     local pythonVerifiedByCapabilities = pythonPath ~= nil
     if not pythonPath then
-        if (C.OS or "Windows") == "Windows" then
+        if isWindowsPlatform() then
             pythonPath = resolveWindowsPythonPath(runtime)
-        else
+        elseif supportsInReaperSetup() then
             pythonPath = resolveNonWindowsPythonPath(runtime)
+        else
+            return false, { "unsupported_platform" }
         end
     end
-    if pythonPath and pythonPath ~= "" and type(C.setPythonPath) == "function" then
+    if not readOnly and pythonPath and pythonPath ~= "" and type(C.setPythonPath) == "function" then
         C.setPythonPath(pythonPath)
     end
     local canRunFfmpeg = C.canRunFfmpeg
@@ -813,7 +850,7 @@ function M.verifyRuntimeAfterBootstrap()
     local ffmpegPath = nil
     local ffmpegOk = false
     if type(canRunFfmpeg) == "function" then
-        ffmpegPath = resolveWindowsFfmpegPath(runtime)
+        ffmpegPath = resolveWindowsFfmpegPath(runtime, readOnly)
         if ffmpegPath and ffmpegPath ~= "" then
             ffmpegOk = canRunFfmpeg(ffmpegPath)
         else
@@ -852,50 +889,57 @@ end
 function M.resolveRuntimePythonPath()
     local verified = resolveVerifiedCapabilitiesPython()
     if verified then return verified end
-    local runtime = M.getRuntimePaths()
-    if (C.OS or "Windows") == "Windows" then
+    local runtime = M.getRuntimePaths(isWindowsPlatform())
+    if isWindowsPlatform() then
         return resolveWindowsPythonPath(runtime)
+    elseif supportsInReaperSetup() then
+        return resolveNonWindowsPythonPath(runtime)
     end
-    return resolveNonWindowsPythonPath(runtime)
+    return nil
 end
 
 function M.verifyDependenciesReadyForProcessing()
+    local windowsReadOnly = isWindowsPlatform()
+    if not windowsReadOnly and not supportsInReaperSetup() then
+        showUnsupportedSetupPlatform()
+        return false
+    end
     local state = getDepState()
     if state and state.state == "ok" then
         return true
     end
 
-    local caps = M.readCapabilities()
+    local caps = M.readCapabilities(windowsReadOnly)
     if caps and caps.kv and caps.kv.VERIFICATION == "ok" and (caps.kv.BOOTSTRAP_STATUS == "" or caps.kv.BOOTSTRAP_STATUS == "ok") then
         local pyOk = (caps.kv.PYTHON_PATH and caps.kv.PYTHON_PATH ~= "" and fileExists(caps.kv.PYTHON_PATH)) or false
         local ffOk = (caps.kv.FFMPEG_PATH and caps.kv.FFMPEG_PATH ~= "" and fileExists(caps.kv.FFMPEG_PATH)) or false
         if pyOk and ffOk then
-            if type(C.setPythonPath) == "function" then
+            if not windowsReadOnly and type(C.setPythonPath) == "function" then
                 C.setPythonPath(caps.kv.PYTHON_PATH)
             end
-            if type(C.setExtStateValue) == "function" then
+            if not windowsReadOnly and type(C.setExtStateValue) == "function" then
                 C.setExtStateValue("ffmpegPath", caps.kv.FFMPEG_PATH)
             end
-            setDepState("ok")
+            if not windowsReadOnly then setDepState("ok") end
             return true
         end
     end
 
-    local runtime = M.getRuntimePaths()
+    local runtime = M.getRuntimePaths(windowsReadOnly)
     local pythonPath
-    if (C.OS or "Windows") == "Windows" then
+    if windowsReadOnly then
         pythonPath = resolveWindowsPythonPath(runtime)
     else
         pythonPath = resolveNonWindowsPythonPath(runtime)
     end
-    if pythonPath and pythonPath ~= "" and type(C.setPythonPath) == "function" then
+    if not windowsReadOnly and pythonPath and pythonPath ~= "" and type(C.setPythonPath) == "function" then
         C.setPythonPath(pythonPath)
     end
 
     local pythonOk = M.isPythonAvailable(pythonPath)
     local ffmpegOk = false
     if type(C.canRunFfmpeg) == "function" then
-        local ffmpegPath = resolveWindowsFfmpegPath(runtime)
+        local ffmpegPath = resolveWindowsFfmpegPath(runtime, windowsReadOnly)
         if ffmpegPath and ffmpegPath ~= "" then
             ffmpegOk = C.canRunFfmpeg(ffmpegPath)
         else
@@ -914,12 +958,14 @@ function M.verifyDependenciesReadyForProcessing()
         runtimeOk = select(1, M.verifyRuntimeAfterBootstrap())
     end
     if pythonOk and ffmpegOk and audioOk and runtimeOk then
-        setDepState("ok")
+        if not windowsReadOnly then setDepState("ok") end
         return true
     end
 
-    setDepState("failed", "processing_runtime_not_ready")
-    if type(C.showMessageBox) == "function" then
+    if not windowsReadOnly then setDepState("failed", "processing_runtime_not_ready") end
+    if windowsReadOnly then
+        showWindowsInstallerRequired()
+    elseif type(C.showMessageBox) == "function" then
         C.showMessageBox(
             "The STEMwerk runtime is not installed or is incomplete.\n\nOpen STEMwerk Setup and run Repair before processing.",
             "STEMwerk Setup",
@@ -931,6 +977,13 @@ function M.verifyDependenciesReadyForProcessing()
 end
 
 function M.ensureDependenciesInteractive()
+    if isWindowsPlatform() then
+        return M.verifyDependenciesReadyForProcessing()
+    end
+    if not supportsInReaperSetup() then
+        showUnsupportedSetupPlatform()
+        return false
+    end
     local state = getDepState()
     if not state then return false end
 
@@ -978,11 +1031,7 @@ function M.ensureDependenciesInteractive()
     local runtime = M.getRuntimePaths()
     local canRunFfmpeg = C.canRunFfmpeg
     local pythonPath
-    if (C.OS or "Windows") == "Windows" then
-        pythonPath = resolveWindowsPythonPath(runtime)
-    else
-        pythonPath = resolveNonWindowsPythonPath(runtime)
-    end
+    pythonPath = resolveNonWindowsPythonPath(runtime)
     if pythonPath and pythonPath ~= "" and type(C.setPythonPath) == "function" then
         C.setPythonPath(pythonPath)
     end
@@ -1091,8 +1140,7 @@ function M.ensureDependenciesInteractive()
         C.showMessageBox(
             "Automatic setup could not fix everything.\n\n" ..
             "Status: " .. tostring(state.detail or "unknown") .. "\n\n" ..
-            "You can rerun repair via:\n" ..
-            "  STEMwerk-SETUP.lua\n\n" ..
+            "You can rerun repair via:\n  STEMwerk-SETUP.lua\n\n" ..
             "Please check again after that.",
             "STEMwerk Setup",
             0

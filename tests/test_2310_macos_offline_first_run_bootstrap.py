@@ -121,6 +121,7 @@ _FUNCTIONS = (
     "repair_samplerate_if_arch_mismatch",
     "verify_venv_arch",
     "verify_audio_separator_runtime_deps",
+    "validate_ffmpeg_pair",
 )
 
 
@@ -144,10 +145,23 @@ def _driver_segment(text: str) -> str:
     start = text.index('  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then\n')
     end = text.index("\nREADY_RUNTIME_KIND=", start)
     segment = text[start:end]
-    orphan_fi = "    fi\n  fi\nfi\n\nset_progress"
+    orphan_fi = "    fi\n  fi\nfi\nfi\n\nset_progress"
     replacement = "    fi\n  fi\n\nset_progress"
     assert segment.count(orphan_fi) == 1, segment
-    return segment.replace(orphan_fi, replacement)
+    segment = segment.replace(orphan_fi, replacement)
+    # This slice includes the real FFmpeg-discovery loop, which probes
+    # hardcoded absolute Homebrew/MacPorts/system paths. On a machine that
+    # actually has FFmpeg installed there (e.g. a dev laptop with
+    # Homebrew), those paths would be found and validated, invalidating
+    # any test that wants to exercise "FFmpeg genuinely undiscoverable".
+    # Rewrite them to a nonexistent root so this suite never depends on
+    # what happens to be installed on the machine running it. Harmless for
+    # every other test here, since their fake FFmpeg fixture is always
+    # found via the stubbed bundled_ffmpeg_path() candidate first, before
+    # the loop ever reaches these hardcoded paths.
+    for root in ("/opt/homebrew", "/usr/local", "/opt/local", "/usr/bin"):
+        segment = segment.replace(f'"{root}/', f'"/nonexistent-test-root{root}/')
+    return segment
 
 
 def _build_harness(
@@ -155,6 +169,7 @@ def _build_harness(
     *,
     onnxruntime_install_succeeds: bool,
     pre_status_reason: str | None = None,
+    ffmpeg_missing: bool = False,
 ) -> Path:
     text = _bootstrap_text()
     funcs = "\n".join(_function_body(text, name) for name in _FUNCTIONS)
@@ -172,10 +187,14 @@ def _build_harness(
     install_fails_marker = tmp_path / "onnxruntime_install_should_fail"
     if not onnxruntime_install_succeeds:
         install_fails_marker.write_text("1", encoding="utf-8")
-    if pre_status_reason is not None:
+    if pre_status_reason is not None or ffmpeg_missing:
         # Isolate the whitelist-gap question from onnxruntime timing
         # entirely: onnxruntime is already present from the start, so the
-        # only sticky failure in play is the injected pre_status_reason.
+        # only sticky failure in play is the injected pre_status_reason (or,
+        # for ffmpeg_missing, whatever the real FFmpeg-discovery loop itself
+        # records) -- not the documented, harmless "first assertion
+        # transiently observes onnxruntime missing" race that would
+        # otherwise win set_status()'s sticky-first-wins and mask it.
         marker.write_text("1", encoding="utf-8")
 
     # A fake VENV_PY that intercepts every invocation style the real
@@ -261,6 +280,25 @@ def _build_harness(
         encoding="utf-8",
     )
     fake_python.chmod(0o755)
+    fake_ffmpeg = tmp_path / "ffmpeg pair" / "ffmpeg"
+    if not ffmpeg_missing:
+        fake_ffmpeg.parent.mkdir()
+        fake_ffprobe = fake_ffmpeg.parent / "ffprobe"
+        # validate_ffmpeg_pair() only accepts a candidate whose `-version`
+        # first line matches "ffmpeg version *" / "ffprobe version *"
+        # (STEMwerk_Bootstrap_macOS.sh's ffmpeg_identity_mismatch check) --
+        # the fixtures must actually satisfy that, not just exist.
+        for tool, version_line in (
+            (fake_ffmpeg, "ffmpeg version 6.0-fixture Copyright (c) fixture"),
+            (fake_ffprobe, "ffprobe version 6.0-fixture Copyright (c) fixture"),
+        ):
+            tool.write_text(f"#!/bin/sh\necho '{version_line}'\nexit 0\n", encoding="utf-8")
+            tool.chmod(0o755)
+
+    if ffmpeg_missing:
+        _bundled_ffmpeg_stub_body = "return 1"
+    else:
+        _bundled_ffmpeg_stub_body = "printf '%s\\n' '" + str(fake_ffmpeg) + "'"
 
     harness = tmp_path / "harness.sh"
     harness.write_text(
@@ -288,7 +326,10 @@ def _build_harness(
             BUNDLED_WHEELS_DIR=""
             MANAGED_WHEELS_DIR=""
             TORCH_PIN_APPLIED="0"
-            FFMPEG=""
+            FFMPEG="{"" if ffmpeg_missing else fake_ffmpeg}"
+            FFPROBE="{"" if ffmpeg_missing else fake_ffmpeg.parent / 'ffprobe'}"
+            FFMPEG_VALIDATED="{"no" if ffmpeg_missing else "yes"}"
+            FFMPEG_VALIDATION_REASON="{"" if ffmpeg_missing else "ffmpeg_pair_valid"}"
             VENV_PY=""
             STATUS="{"deps_failed" if pre_status_reason is not None else "ok"}"
             STATUS_REASON="{pre_status_reason or ""}"
@@ -349,11 +390,21 @@ def _build_harness(
             MACOS_RUNTIME_POLICY_OBSERVED=""
             MACOS_RUNTIME_POLICY_MUTATION_STARTED=""
 
+            {funcs}
+
+            # These must be defined AFTER {{funcs}}, not before: bundled_ffmpeg_path
+            # is both stubbed here AND present in _FUNCTIONS (its real body is
+            # part of the driver's own candidate-discovery flow), and shell
+            # allows silent function redefinition -- whichever definition comes
+            # LAST wins. Defining the intended fakes last ensures they always
+            # take effect instead of being silently shadowed by the real
+            # extracted bundled_ffmpeg_path() (which needs BUNDLED_PAYLOAD_DIR,
+            # unset here, and would fail under `set -u`).
             resolve_core_target() {{ CORE_TARGET="stub"; CORE_TARGET_DESC="stub"; return 0; }}
             install_stemwerk_core_target() {{ return 0; }}
             log_final_dependency_versions() {{ :; }}
-
-            {funcs}
+            bundled_ffmpeg_path() {{ {_bundled_ffmpeg_stub_body}; }}
+            command_path() {{ return 1; }}
 
             {driver}
 
@@ -448,3 +499,35 @@ def test_real_onnxruntime_install_failure_still_truthfully_fails(tmp_path: Path)
     assert parsed.get("FINAL_STATUS") != "ok", (
         f"a genuine onnxruntime install failure was falsely reported as healthy: {parsed}"
     )
+
+
+def test_missing_ffmpeg_status_survives_successful_final_runtime_verification(tmp_path: Path):
+    """Issue #111 (flarkflarkflark/STEMwerk-reaper): a genuinely offline,
+    managed-wheelhouse install where FFmpeg is undiscoverable anywhere (no
+    bundled payload, nothing at any Homebrew/MacPorts/system path, nothing
+    on PATH) hits the script's real FFmpeg-discovery loop, which records a
+    sticky STATUS=missing_ffmpeg/ffmpeg_not_found via set_status(). The
+    final runtime verification block re-checks numba/samplerate/
+    audio_separator/onnxruntime/stemwerk_core/the pinned torch stack --
+    none of which say anything about FFmpeg -- and must NOT be allowed to
+    clear this sticky status to "ok" on that basis alone. This is the exact
+    reported crash: bootstrap reports healthy while
+    ensure_core_model_cache() goes on to instantiate
+    audio_separator.Separator(...) without FFmpeg, raising an uncaught
+    FileNotFoundError deep in setup instead of surfacing the real,
+    already-known cause."""
+    harness = _build_harness(tmp_path, onnxruntime_install_succeeds=True, ffmpeg_missing=True)
+    result = _run(harness)
+    assert result.returncode == 0, result.stdout + result.stderr
+    parsed = _parse(result.stdout)
+    assert parsed.get("FINAL_RUNTIME_VERIFIED") == "yes", result.stdout
+    log_text = (tmp_path / "bootstrap.log").read_text(encoding="utf-8")
+    assert "Cleared stale STATUS" not in log_text, (
+        "a sticky missing_ffmpeg status was cleared by the final runtime "
+        f"verification whitelist despite FFmpeg still being undiscoverable: {log_text}"
+    )
+    assert parsed.get("FINAL_STATUS") == "missing_ffmpeg", (
+        "a genuinely missing FFmpeg was not truthfully reported as a sticky "
+        f"failure after a fully successful final runtime verification: {parsed}"
+    )
+    assert parsed.get("FINAL_STATUS_REASON") == "ffmpeg_not_found", parsed

@@ -20,6 +20,49 @@ import zipfile
 from email.parser import BytesParser
 from pathlib import Path
 
+try:
+    from tools.macos_ffmpeg import (
+        FFMPEG_LICENSE,
+        FFMPEG_SOURCE_SHA256,
+        FFMPEG_SOURCE_URL,
+        FFMPEG_VERSION,
+        build_official_arm64_ffmpeg,
+        macho_architectures,
+        validate_macho_release_contract,
+        validate_macho_tree_release_contract,
+        validate_macho_wheel_release_contract,
+        validate_ffmpeg_pair,
+    )
+    from tools.macos_release_hygiene import (
+        validate_macos_release_wheelhouse,
+        validate_stemwerk_core_source_tree,
+    )
+    from tools.macos_managed_python import (
+        prepare_managed_python_payload,
+        validate_official_managed_python_provenance,
+    )
+except ModuleNotFoundError:  # Direct execution via ``python tools/...py``.
+    from macos_ffmpeg import (  # type: ignore[no-redef]
+        FFMPEG_LICENSE,
+        FFMPEG_SOURCE_SHA256,
+        FFMPEG_SOURCE_URL,
+        FFMPEG_VERSION,
+        build_official_arm64_ffmpeg,
+        macho_architectures,
+        validate_macho_release_contract,
+        validate_macho_tree_release_contract,
+        validate_macho_wheel_release_contract,
+        validate_ffmpeg_pair,
+    )
+    from macos_release_hygiene import (  # type: ignore[no-redef]
+        validate_macos_release_wheelhouse,
+        validate_stemwerk_core_source_tree,
+    )
+    from macos_managed_python import (  # type: ignore[no-redef]
+        prepare_managed_python_payload,
+        validate_official_managed_python_provenance,
+    )
+
 
 CORE_MODEL_FILES = (
     "htdemucs.yaml",
@@ -76,11 +119,32 @@ def parse_args() -> argparse.Namespace:
         "--model-cache",
         default=str(Path.home() / "Library" / "Application Support" / "STEMwerk" / "models"),
     )
-    parser.add_argument("--ffmpeg", default="/opt/homebrew/bin/ffmpeg")
-    parser.add_argument("--ffprobe", default="/opt/homebrew/bin/ffprobe")
+    parser.add_argument(
+        "--ffmpeg",
+        help="Development-only override; requires --allow-development-ffmpeg-override and --ffprobe.",
+    )
+    parser.add_argument("--ffprobe", help="Development-only override paired with --ffmpeg.")
+    parser.add_argument(
+        "--allow-development-ffmpeg-override",
+        action="store_true",
+        help="Explicitly permit a non-release FFmpeg override. Output is marked release-ineligible.",
+    )
+    parser.add_argument(
+        "--release-mode",
+        action="store_true",
+        help="Require the official pinned source build and release-eligible provenance.",
+    )
+    parser.add_argument(
+        "--source-artifact-dir",
+        help="Preserve the exact verified FFmpeg source archive and checksum for release distribution.",
+    )
     parser.add_argument(
         "--managed-python",
-        default=str(Path.home() / "Library" / "Application Support" / "STEMwerk" / "python"),
+        help="Development-only override with an already extracted managed-Python directory.",
+    )
+    parser.add_argument(
+        "--managed-python-artifact",
+        help="Exact pinned python-build-standalone archive; required by release mode.",
     )
     parser.add_argument("--constraints", default="scripts/reaper/constraints/macos.txt")
     parser.add_argument(
@@ -359,36 +423,19 @@ def _repack_wheel(root: Path, output: Path) -> None:
                 archive.writestr(info, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
 
 
-def macho_architectures(path: Path) -> tuple[str, ...]:
-    with path.open("rb") as handle:
-        magic = handle.read(4)
-    macho_magics = {
-        b"\xfe\xed\xfa\xce",
-        b"\xfe\xed\xfa\xcf",
-        b"\xce\xfa\xed\xfe",
-        b"\xcf\xfa\xed\xfe",
-        b"\xca\xfe\xba\xbe",
-        b"\xbe\xba\xfe\xca",
-        b"\xca\xfe\xba\xbf",
-        b"\xbf\xba\xfe\xca",
-    }
-    if magic not in macho_magics:
-        return ()
-    output = subprocess.run(
-        ["lipo", "-archs", str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    ).stdout
-    return tuple(output.strip().split())
-
-
 def assert_arm64_macho(path: Path) -> None:
     architectures = macho_architectures(path)
     if architectures and architectures != ("arm64",):
-        raise RuntimeError(f"Non-arm64-only Mach-O object: {path} ({' '.join(architectures)})")
+        raise RuntimeError(
+            "reason=macos_macho_architecture_mismatch "
+            f"Non-arm64-only Mach-O object: {path} ({' '.join(architectures)})"
+        )
+    # Uses validate_macho_release_contract's default ceiling
+    # (BUNDLED_APPLE_SILICON_MACOS_AUDIT_MAXIMUM, "14.0") -- this builder
+    # assembles the bundled Apple Silicon payload, so every Mach-O it
+    # produces (including FFmpeg's own binaries) is checked against the
+    # PACKAGE's contract here, not FFmpeg's own (lower) build target.
+    validate_macho_release_contract(path)
 
 
 def _retag_wheel_file(original: Path, root: Path, *, force_samplerate: bool = False) -> Path:
@@ -453,7 +500,12 @@ def thin_universal_wheels(wheels_dir: Path) -> None:
                     subprocess.run(["lipo", str(candidate), "-thin", "arm64", "-output", str(thinned)], check=True)
                     thinned.replace(candidate)
                     changed = True
-                assert_arm64_macho(candidate)
+                try:
+                    assert_arm64_macho(candidate)
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        f"{exc} wheel={wheel.name} entry={candidate.relative_to(root).as_posix()}"
+                    ) from exc
             if changed:
                 _retag_wheel_file(wheel, root)
 
@@ -521,18 +573,65 @@ def verify_offline_resolution(wheels_dir: Path, python_executable: str) -> None:
 
 
 def verify_payload_architectures(output_dir: Path) -> None:
+    # Both helpers default to BUNDLED_APPLE_SILICON_MACOS_AUDIT_MAXIMUM
+    # ("14.0"). FFmpeg's own binaries (built at FFMPEG_DEPLOYMENT_TARGET,
+    # "12.0") pass this trivially: 12.0 does not exceed the 14.0 ceiling.
     for root in (output_dir / "ffmpeg", output_dir / "python"):
-        for candidate in root.rglob("*"):
-            if candidate.is_file():
-                assert_arm64_macho(candidate)
-    for wheel in (output_dir / "wheels").glob("*.whl"):
-        with tempfile.TemporaryDirectory(prefix="stemwerk-wheel-audit-") as temp_name:
-            root = Path(temp_name)
-            with zipfile.ZipFile(wheel) as archive:
-                archive.extractall(root)
-            for candidate in root.rglob("*"):
-                if candidate.is_file():
-                    assert_arm64_macho(candidate)
+        validate_macho_tree_release_contract(root)
+    for wheel in (output_dir / "wheels").rglob("*.whl"):
+        validate_macho_wheel_release_contract(wheel)
+
+
+def prepare_portable_ffmpeg(
+    destination: Path,
+    ffmpeg_override: str | None,
+    ffprobe_override: str | None,
+    *,
+    release_mode: bool = False,
+    allow_development_override: bool = False,
+    source_artifact_dir: Path | None = None,
+) -> dict[str, object]:
+    if bool(ffmpeg_override) != bool(ffprobe_override):
+        raise RuntimeError("--ffmpeg and --ffprobe must be supplied together")
+    destination.mkdir(parents=True, exist_ok=True)
+    if not ffmpeg_override:
+        return build_official_arm64_ffmpeg(destination, source_artifact_dir=source_artifact_dir)
+    if release_mode:
+        raise RuntimeError("Release mode refuses all FFmpeg/ffprobe overrides")
+    if not allow_development_override:
+        raise RuntimeError(
+            "Development FFmpeg overrides require --allow-development-ffmpeg-override"
+        )
+    ffmpeg = Path(ffmpeg_override).expanduser().resolve()
+    ffprobe = Path(ffprobe_override or "").expanduser().resolve()
+    ensure_file(ffmpeg, "ffmpeg override")
+    ensure_file(ffprobe, "ffprobe override")
+    shutil.copy2(ffmpeg, destination / "ffmpeg")
+    shutil.copy2(ffprobe, destination / "ffprobe")
+    audit = validate_ffmpeg_pair(destination / "ffmpeg", destination / "ffprobe")
+    provenance = {
+        "component": "FFmpeg",
+        "build_mode": "development-override",
+        "official_source_build": False,
+        "release_eligible": False,
+        "version": audit["versions"]["ffmpeg"],
+        "license": "development-override-license-unverified",
+        "source_url": "development-override",
+        "source_sha256": "development-override",
+        "reproducibility": "not applicable: externally supplied development binaries",
+        "binaries": {
+            name: {
+                "sha256": sha256_file(destination / name),
+                "size": (destination / name).stat().st_size,
+            }
+            for name in ("ffmpeg", "ffprobe")
+        },
+        "validation": audit,
+    }
+    (destination / "SOURCE_PROVENANCE.json").write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return provenance
 
 
 def write_manifest(
@@ -541,6 +640,8 @@ def write_manifest(
     wheel_inventory: list[dict[str, object]],
     compatibility_config: dict[str, object] | None,
     with_models: bool,
+    ffmpeg_provenance: dict[str, object],
+    managed_python_provenance: dict[str, object],
 ) -> None:
     manifest = {
         "platform": "macos-apple-silicon-arm64",
@@ -554,7 +655,13 @@ def write_manifest(
             "libsamplerate_version": LIBSAMPLERATE_VERSION,
             "libsamplerate_source_url": LIBSAMPLERATE_URL,
             "libsamplerate_source_sha256": LIBSAMPLERATE_SHA256,
+            "ffmpeg_version": FFMPEG_VERSION,
+            "ffmpeg_license": FFMPEG_LICENSE,
+            "ffmpeg_source_url": FFMPEG_SOURCE_URL,
+            "ffmpeg_source_sha256": FFMPEG_SOURCE_SHA256,
         },
+        "ffmpeg": ffmpeg_provenance,
+        "managed_python": managed_python_provenance,
         "contains": {
             "ffmpeg": True,
             "python": True,
@@ -573,30 +680,61 @@ def main() -> int:
     repo_root = Path.cwd().resolve()
     output_dir = (repo_root / args.output).resolve()
     model_cache = Path(args.model_cache).expanduser().resolve()
-    ffmpeg_path = Path(args.ffmpeg).expanduser().resolve()
-    ffprobe_path = Path(args.ffprobe).expanduser().resolve()
-    managed_python_dir = Path(args.managed_python).expanduser().resolve()
+    managed_python_artifact = (
+        Path(args.managed_python_artifact).expanduser().resolve()
+        if args.managed_python_artifact else None
+    )
+    managed_python_dir = (
+        Path(args.managed_python).expanduser().resolve()
+        if args.managed_python
+        else Path.home() / "Library" / "Application Support" / "STEMwerk" / "python"
+    )
     constraints_file = (repo_root / args.constraints).resolve()
     compat_config = (repo_root / args.drumsep_compat_config).resolve()
+    source_artifact_dir = (
+        (repo_root / args.source_artifact_dir).resolve() if args.source_artifact_dir else None
+    )
+    if args.release_mode and source_artifact_dir is None:
+        raise RuntimeError("Release mode requires --source-artifact-dir for corresponding source")
+    if args.release_mode and managed_python_artifact is None:
+        raise RuntimeError("Release mode requires --managed-python-artifact")
+    if args.release_mode and args.managed_python:
+        raise RuntimeError("Release mode refuses --managed-python development directory overrides")
     python_executable = payload_python()
 
     validate_declared_policy(RUNTIME_REQUIREMENTS)
+    validate_stemwerk_core_source_tree(
+        repo_root / "scripts/reaper/vendor/stemwerk-core", release_mode=args.release_mode
+    )
     reset_dir(output_dir)
-    ensure_file(ffmpeg_path, "ffmpeg binary")
-    ensure_file(ffprobe_path, "ffprobe binary")
-    (output_dir / "ffmpeg").mkdir(parents=True)
-    shutil.copy2(ffmpeg_path, output_dir / "ffmpeg" / "ffmpeg")
-    shutil.copy2(ffprobe_path, output_dir / "ffmpeg" / "ffprobe")
+    ffmpeg_provenance = prepare_portable_ffmpeg(
+        output_dir / "ffmpeg",
+        args.ffmpeg,
+        args.ffprobe,
+        release_mode=args.release_mode,
+        allow_development_override=args.allow_development_ffmpeg_override,
+        source_artifact_dir=source_artifact_dir,
+    )
+    if args.release_mode and ffmpeg_provenance.get("release_eligible") is not True:
+        raise RuntimeError("Release mode produced release-ineligible FFmpeg provenance")
 
     wheels_dir = output_dir / "wheels"
     download_closed_wheelhouse(wheels_dir, constraints_file, python_executable)
     build_stemwerk_core_wheel(repo_root, wheels_dir, python_executable)
     replace_samplerate_with_native_arm64(wheels_dir)
     thin_universal_wheels(wheels_dir)
+    validate_macos_release_wheelhouse(wheels_dir)
     inventory = resolved_wheel_inventory(wheels_dir)
     verify_offline_resolution(wheels_dir, python_executable)
 
-    copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")
+    managed_python_provenance = prepare_managed_python_payload(
+        output_dir / "python",
+        artifact=managed_python_artifact,
+        development_source=managed_python_dir if managed_python_artifact is None else None,
+        release_mode=args.release_mode,
+    )
+    if args.release_mode and managed_python_provenance.get("release_eligible") is not True:
+        raise RuntimeError("Release mode produced release-ineligible managed-Python provenance")
     compatibility: dict[str, object] | None = None
     if args.with_models:
         copy_files(model_cache, output_dir / "models", CORE_MODEL_FILES, "core model payload file")
@@ -604,7 +742,13 @@ def main() -> int:
     else:
         print("runtime-only payload: models/ and drumsep/ are not bundled (online catalog supplies them)")
     verify_payload_architectures(output_dir)
-    write_manifest(output_dir, args.version, inventory, compatibility, args.with_models)
+    write_manifest(
+        output_dir, args.version, inventory, compatibility, args.with_models,
+        ffmpeg_provenance, managed_python_provenance,
+    )
+    if args.release_mode:
+        manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+        validate_official_managed_python_provenance(output_dir / "python", manifest)
     print(f"Prepared closed arm64 Apple Silicon payload at {output_dir}")
     return 0
 

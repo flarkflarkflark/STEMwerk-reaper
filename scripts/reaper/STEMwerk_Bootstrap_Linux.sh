@@ -1505,7 +1505,8 @@ install_drumsep_runtime() {
     "onnx2torch-py313==${DRUMSEP_ONNX2TORCH_PY313_VERSION}" \
     "torch==${DRUMSEP_TORCH_VERSION}" \
     "torchvision==${DRUMSEP_TORCHVISION_VERSION}" \
-    "numba==${DRUMSEP_NUMBA_VERSION}" >> "${_drumsep_log}" 2>&1; then
+    "numba==${DRUMSEP_NUMBA_VERSION}" \
+    "librosa==0.11.0" >> "${_drumsep_log}" 2>&1; then
     write_drumsep_state "install_failed" "missing" "package_install_failed"
     return 1
   fi
@@ -1759,11 +1760,12 @@ enforce_runtime_python_pins() {
   if [ -z "${VENV_PY}" ] || [ ! -x "${VENV_PY}" ]; then
     return 1
   fi
-  log_step "Enforcing runtime Python deps: numpy==${PINNED_NUMPY_VERSION} numba==${PINNED_NUMBA_VERSION} llvmlite==${PINNED_LLVM_VERSION}"
+  log_step "Enforcing runtime Python deps: numpy==${PINNED_NUMPY_VERSION} numba==${PINNED_NUMBA_VERSION} llvmlite==${PINNED_LLVM_VERSION} librosa==0.11.0"
   pip_install_with_scope main "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir \
     "numpy==${PINNED_NUMPY_VERSION}" \
     "llvmlite==${PINNED_LLVM_VERSION}" \
-    "numba==${PINNED_NUMBA_VERSION}" >> "${LOG_FILE}" 2>&1
+    "numba==${PINNED_NUMBA_VERSION}" \
+    "librosa==0.11.0" >> "${LOG_FILE}" 2>&1
 }
 
 if [ -z "${RUNTIME_BASE}" ]; then
@@ -2486,6 +2488,7 @@ PY
         echo "numpy==${PINNED_NUMPY_VERSION}"
         echo "llvmlite==${PINNED_LLVM_VERSION}"
         echo "numba==${PINNED_NUMBA_VERSION}"
+        echo "librosa==0.11.0"
         "${VENV_PY}" - <<'PY' 2>/dev/null
 import importlib
 for name in ("torch","torchvision","torchaudio"):

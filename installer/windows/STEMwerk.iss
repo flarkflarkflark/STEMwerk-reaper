@@ -83,25 +83,19 @@ Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 
 [CustomMessages]
 english.TaskCleanupRuntime=Before setup: clean previous runtime state/logs/.venv/cache
-english.TaskCleanupModels=Also remove cached models (larger re-download on first use)
 english.RunOpenGuide=Open Windows setup guide
 english.RunOpenLog=Open setup log
 
 dutch.TaskCleanupRuntime=Voor setup: verwijder vorige runtime-state/logs/.venv/cache
-dutch.TaskCleanupModels=Verwijder ook modelcache (grotere herdownload bij eerste gebruik)
 dutch.RunOpenGuide=Open Windows setup-handleiding
 dutch.RunOpenLog=Open setup-log
 
 german.TaskCleanupRuntime=Vor Setup: vorherigen Runtime-Status/Logs/.venv/Cache bereinigen
-german.TaskCleanupModels=Auch Modell-Cache entfernen (größerer Re-Download bei erster Nutzung)
 german.RunOpenGuide=Windows-Setup-Anleitung öffnen
 german.RunOpenLog=Setup-Log öffnen
 
 [Tasks]
 Name: "cleanup_runtime"; Description: "{cm:TaskCleanupRuntime}"; Flags: unchecked
-#if BundleRuntime != "1"
-Name: "cleanup_models"; Description: "{cm:TaskCleanupModels}"; Flags: unchecked
-#endif
 
 [InstallDelete]
 ; {app} is the fully STEMwerk-owned REAPER Scripts\STEMwerk-reaper root.
@@ -319,10 +313,6 @@ begin
   Result := '';
   if WizardIsTaskSelected('cleanup_runtime') then
     Result := Result + ' -CleanRuntime';
-  #if BundleRuntime != "1"
-  if WizardIsTaskSelected('cleanup_models') then
-    Result := Result + ' -CleanModels';
-  #endif
   #if BundleRuntime == "1"
   Result := Result + ' -BundledRuntime';
   #if DrumsepWheelPayloadSubdir != ""
@@ -367,13 +357,6 @@ begin
       '- Cleared previous runtime state/logs/.venv/cache before setup.',
       '- Vorige runtime state/logs/.venv/cache opgeschoond voor setup.',
       '- Vorherigen Runtime-Status/Logs/.venv/Cache vor dem Setup bereinigt.') + #13#10;
-  #if BundleRuntime != "1"
-  if WizardIsTaskSelected('cleanup_models') then
-    CleanupLines := CleanupLines + LText(
-      '- Cleared cached models folder before setup.',
-      '- Modelcache-map opgeschoond voor setup.',
-      '- Modell-Cache-Ordner vor dem Setup bereinigt.') + #13#10;
-  #endif
   if CleanupLines = '' then
     CleanupLines := LText(
       '- Kept existing runtime data and cached models in place.',
@@ -399,7 +382,7 @@ begin
     LText('- If STEMwerk is missing, use: Actions -> Show action list -> ReaScript: Load...', '- Als STEMwerk ontbreekt, gebruik dan: Actions -> Show action list -> ReaScript: Load...', '- Wenn STEMwerk fehlt, nutze: Actions -> Show action list -> ReaScript: Load...') + #13#10 +
     LText('- Preferred helper: load STEMwerk_Setup_Toolbar.lua from %APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper. It registers the normal STEMwerk actions; cancel the toolbar prompt if you only need the actions.', '- Voorkeurshelper: laad STEMwerk_Setup_Toolbar.lua uit %APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper. Die registreert de normale STEMwerk-acties; annuleer de toolbar-prompt als je alleen de acties nodig hebt.', '- Bevorzugter Helfer: lade STEMwerk_Setup_Toolbar.lua aus %APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper. Er registriert die normalen STEMwerk-Aktionen; brich den Toolbar-Dialog ab, wenn du nur die Aktionen brauchst.') + #13#10 +
     LText('- Manual fallback: load only STEMwerk-SETUP.lua, STEMwerk.lua, STEMwerk_Drum_Kit_Split.lua, and STEMwerk_Explode_Takes.lua. Do not load _internal\\*.lua.', '- Handmatige fallback: laad alleen STEMwerk-SETUP.lua, STEMwerk.lua, STEMwerk_Drum_Kit_Split.lua en STEMwerk_Explode_Takes.lua. Laad geen _internal\\*.lua.', '- Manueller Fallback: lade nur STEMwerk-SETUP.lua, STEMwerk.lua, STEMwerk_Drum_Kit_Split.lua und STEMwerk_Explode_Takes.lua. Lade kein _internal\\*.lua.') + #13#10 +
-    LText('- Use STEMwerk: Setup if you want to check or repair the runtime.', '- Gebruik STEMwerk: Setup als je de runtime wilt controleren of herstellen.', '- Nutze STEMwerk: Setup, wenn du die Runtime pruefen oder reparieren moechtest.') + #13#10 + #13#10 +
+    LText('- Use STEMwerk: Setup to check the runtime (Check only). If it reports a problem, re-run this STEMwerk installer to repair it.', '- Gebruik STEMwerk: Setup om de runtime te controleren (Check only). Meldt dat een probleem, voer deze STEMwerk-installer opnieuw uit om te herstellen.', '- Nutze STEMwerk: Setup, um die Runtime zu pruefen (Check only). Meldet das ein Problem, fuehre diesen STEMwerk-Installer erneut aus, um sie zu reparieren.') + #13#10 + #13#10 +
     LText('Setup log:', 'Setup-log:', 'Setup-Log:') + #13#10 +
     '  ' + GetLogPath;
 end;
@@ -484,11 +467,6 @@ begin
       'Removed previous runtime state/logs/venv/cache folders.',
       'Vorige runtime state/logs/venv/cache-mappen verwijderd.',
       'Vorherige Runtime-Status/Logs/venv/Cache-Ordner entfernt.')
-  else if Detail = 'Removed cached models folder (%LOCALAPPDATA%\\STEMwerk\\models).' then
-    Result := LText(
-      'Removed cached models folder (%LOCALAPPDATA%\\STEMwerk\\models).',
-      'Gecachte modellenmap verwijderd (%LOCALAPPDATA%\\STEMwerk\\models).',
-      'Zwischengespeicherter Modellordner entfernt (%LOCALAPPDATA%\\STEMwerk\\models).')
   else if Detail = 'Keeping existing runtime cache and model folders.' then
     Result := LText(
       'Keeping existing runtime cache and model folders.',
@@ -1000,9 +978,9 @@ begin
       '- De REAPER STEMwerk scripts kopieren/bijwerken.',
       '- Die REAPER STEMwerk Skripte kopieren/aktualisieren.') + #13#10 +
     LText(
-      '- Optionally clean previous runtime/model cache if you select those tasks.',
-      '- Optioneel oude runtime/modelcache opschonen als je die taken aanvinkt.',
-      '- Optional alten Runtime-/Modell-Cache bereinigen, wenn diese Aufgaben ausgewählt sind.') + #13#10 +
+      '- Optionally clean previous runtime cache if you select that task. Models are always kept.',
+      '- Optioneel oude runtime-cache opschonen als je die taak aanvinkt. Modellen blijven altijd behouden.',
+      '- Optional alten Runtime-Cache bereinigen, wenn diese Aufgabe ausgewählt ist. Modelle bleiben immer erhalten.') + #13#10 +
     LText(
       '- Prepare the local Python runtime and verify backend dependencies.',
       '- De lokale Python runtime voorbereiden en backend-afhankelijkheden verifieren.',
@@ -1119,9 +1097,9 @@ begin
   TasksInfoLabel.Font.Size := 8;
   TasksInfoLabel.Font.Color := RGBColor(95, 95, 95);
   TasksInfoLabel.Caption := LText(
-    'Safe defaults: keep models unchecked unless you want a full clean reset.',
-    'Veilige standaard: laat modellen uitgevinkt tenzij je een volledige schone reset wilt.',
-    'Sichere Standardwerte: Modelle abgewählt lassen, außer bei gewünschtem Komplett-Reset.');
+    'Safe default: leave this unchecked. Downloaded models are always kept by this installer.',
+    'Veilige standaard: laat dit uitgevinkt. Gedownloade modellen blijven altijd behouden door deze installer.',
+    'Sichere Standardeinstellung: abgewählt lassen. Heruntergeladene Modelle bleiben durch diesen Installer immer erhalten.');
   TasksInfoLabel.Left := TasksX;
   TasksInfoLabel.Top := TasksY + ScaleY(20);
 

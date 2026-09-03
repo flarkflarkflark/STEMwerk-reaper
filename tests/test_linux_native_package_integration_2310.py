@@ -67,7 +67,7 @@ def test_fresh_user_gets_complete_clean_linux_payload(tmp_path):
     assert result.returncode == 0, result.stderr
     target = resource / "Scripts/STEMwerk-reaper"
     setup = (target / "STEMwerk-SETUP.lua").read_text(encoding="utf-8")
-    assert "-- @version 2.3.1.0" in setup
+    assert "-- @version 2.3.1.1" in setup
 
     contract = release_gate.parse_production_payload_contract(release_gate.PRODUCTION_PAYLOAD_CONTRACT)
     required = release_gate.required_files_for_platform(contract, "linux")
@@ -120,7 +120,7 @@ def test_existing_install_is_replaced_without_touching_runtime_or_models(tmp_pat
     result = _run_helper(source, resource, home)
 
     assert result.returncode == 0, result.stderr
-    assert "-- @version 2.3.1.0" in target.joinpath("STEMwerk-SETUP.lua").read_text()
+    assert "-- @version 2.3.1.1" in target.joinpath("STEMwerk-SETUP.lua").read_text()
     assert not target.joinpath("stale-package-owned.lua").exists()
     assert _tree_manifest(runtime) == runtime_before
 

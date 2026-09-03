@@ -1,6 +1,6 @@
 ﻿# STEMwerk Windows Setup Guide
 
-This guide is for the Windows installer build of STEMwerk 2.3.1.0.
+This guide is for the Windows installer build of STEMwerk 2.3.1.1.
 
 ## What the installer just did
 
@@ -14,7 +14,7 @@ The Windows installer:
 
 The Windows installer remains the recommended fresh-install and repair route on Windows.
 
-If you are updating an older Windows STEMwerk install, uninstall the old version first and then install `2.3.1.0` fresh. This avoids stale runtime/backend state.
+If you are updating an older Windows STEMwerk install, uninstall the old version first and then install `2.3.1.1` fresh. This avoids stale runtime/backend state.
 
 ## Installer types
 
@@ -22,7 +22,7 @@ If you are updating an older Windows STEMwerk install, uninstall the old version
 - `bundled installer`: includes Python and FFmpeg
 - `offline-bundled ... allmodels installer`: includes the bundled runtime payloads needed for a fully offline install for its target backend
 
-The large offline allmodels installers remain on the `2.3.0.0` release line and are still valid unless you specifically need the latest Windows setup/runtime fixes from `2.3.1.0`.
+The large offline allmodels installers remain on the `2.3.0.0` release line and are still valid unless you specifically need the latest Windows setup/runtime fixes from `2.3.1.1`.
 
 ## Offline allmodels variants
 
@@ -37,7 +37,7 @@ These installers are intended to complete setup fully offline from bundled wheel
 ## What to do next
 
 1. Start REAPER.
-2. If `STEMwerk` actions are already visible, run `STEMwerk: Setup` if you want to check or repair the runtime.
+2. If `STEMwerk` actions are already visible, run `STEMwerk: Setup` if you want to check the runtime.
 3. Use `Check only` to verify runtime health.
 4. Run `Stemwerk: Main` from the Actions menu for normal use.
 5. If `STEMwerk` actions are missing, open `Actions -> Show action list -> ReaScript: Load...`.
@@ -47,16 +47,14 @@ These installers are intended to complete setup fully offline from bundled wheel
 
 ## Setup and repair
 
-Use `STEMwerk: Setup` for:
+On Windows, install, update, and repair are handled by the STEMwerk installer, not by `STEMwerk: Setup` inside REAPER. Use `STEMwerk: Setup` only for:
 
 - `Check only`
-- `Repair`
-- `Rebuild venv`
 - `Save Support Bundle`
 - `Open logs folder`
 - `Open runtime folder`
 
-Re-run the installer mainly when the installed script payload is missing or damaged, or when you want to reinstall bundled payloads.
+If `Check only` reports a problem, re-run the same STEMwerk installer (online or bundled) you used before; it repairs the runtime in place. Re-run it also when the installed script payload is missing or damaged, or when you want to reinstall bundled payloads.
 
 Uninstall removes STEMwerk runtime data and installed STEMwerk REAPER scripts.
 
@@ -73,7 +71,7 @@ Uninstall removes STEMwerk runtime data and installed STEMwerk REAPER scripts.
 6. Do not load every `.lua` file in the folder.
 7. Do not load files under `_internal\`.
 8. `STEMwerk_AI_Separate.lua` is a compatibility wrapper for older installs and is not needed on a fresh install.
-9. After registration, run `STEMwerk: Setup`, click `Check only`, then use `Repair` or `Rebuild venv` if recommended.
+9. After registration, run `STEMwerk: Setup` and click `Check only`. If it reports a problem, re-run the STEMwerk installer to repair the runtime.
 10. Use `Open logs folder` or `Save Support Bundle` when asking for help.
 11. Re-run the installer only if the installation payload itself is missing or damaged.
 

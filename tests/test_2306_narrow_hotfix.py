@@ -29,7 +29,7 @@ def _load_drumsep_helper():
     return module
 
 
-def _arm64_fake_bin(tmp_path):
+def _arm64_fake_bin(tmp_path, network_marker=None):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     uname = fake_bin / "uname"
@@ -41,9 +41,40 @@ def _arm64_fake_bin(tmp_path):
     # Blokkeer elke echte download in de fixture (managed python e.d.).
     for tool in ("curl", "wget"):
         shim = fake_bin / tool
-        shim.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        marker_command = ""
+        if network_marker is not None:
+            marker_command = f"printf '%s\\n' {tool} >> '{network_marker}'\n"
+        shim.write_text(f"#!/bin/sh\n{marker_command}exit 1\n", encoding="utf-8")
         shim.chmod(0o755)
     return fake_bin
+
+
+def _write_valid_ffmpeg_pair(directory):
+    for tool in ("ffmpeg", "ffprobe"):
+        executable = directory / tool
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text(
+            f"#!/bin/sh\nprintf '%s\\n' '{tool} version fixture'\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+
+
+def _snapshot_files(root):
+    return {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
+def _read_env_file(path):
+    return {
+        key: value
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if "=" in line
+        for key, value in [line.split("=", 1)]
+    }
 
 
 def _sentinel_runtime(tmp_path):
@@ -170,54 +201,87 @@ def test_apple_silicon_corrupt_payload_fails_before_runtime_cleanup(tmp_path):
     corrupt.mkdir(parents=True)
     (corrupt / "junk.txt").write_text("broken\n", encoding="utf-8")
 
-    fake_bin = _arm64_fake_bin(tmp_path)
+    network_marker = tmp_path / "network-attempted"
+    fake_bin = _arm64_fake_bin(tmp_path, network_marker)
     runtime, sentinel = _sentinel_runtime(tmp_path)
+    nested_sentinel = runtime / ".venv/lib/preserved.txt"
+    nested_sentinel.parent.mkdir(parents=True)
+    nested_sentinel.write_text("also preserved\n", encoding="utf-8")
+    before_venv = _snapshot_files(runtime / ".venv")
     state = tmp_path / "state.env"
     log = tmp_path / "bootstrap.log"
 
     env = dict(os.environ)
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["HOME"] = str(tmp_path / "home")
     result = _run_bootstrap(script_dir, runtime, state, log, env, mode="rebuild-venv")
 
     assert result.returncode != 0
+    assert _snapshot_files(runtime / ".venv") == before_venv
     assert sentinel.read_text(encoding="utf-8") == "preserved\n"
-    ready_text = (runtime / "state" / "ready_to_go.env").read_text(encoding="utf-8")
-    assert "READY_TO_GO_STATUS=missing" in ready_text
-    assert "MAIN_RUNTIME_STATUS=missing" in ready_text
-    assert "apple_silicon_requires_bundled_payload" in ready_text
-    state_text = state.read_text(encoding="utf-8")
-    assert "STATUS_REASON=apple_silicon_requires_bundled_payload" in state_text
-    assert "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed" in state_text
-    assert "MACOS_PAYLOAD_PREFLIGHT_REASON=bundled_payload_incomplete_or_corrupt" in state_text
-    assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
+    ready = _read_env_file(runtime / "state" / "ready_to_go.env")
+    assert ready["READY_TO_GO_STATUS"] == "missing"
+    assert ready["MAIN_RUNTIME_STATUS"] == "missing"
+    assert ready["READY_TO_GO_DETAIL"] == "ffmpeg_not_found"
+    assert ready["FFMPEG_REASON"] == "ffmpeg_not_found"
+    state_fields = _read_env_file(state)
+    assert state_fields["STATUS"] == "missing_ffmpeg"
+    assert state_fields["STATUS_REASON"] == "ffmpeg_not_found"
+    assert state_fields["MACOS_PAYLOAD_PREFLIGHT_STATUS"] == "failed"
+    assert state_fields["MACOS_PAYLOAD_PREFLIGHT_REASON"] == "ffmpeg_not_found"
+    assert state_fields["MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED"] == "false"
+    assert state_fields["MACOS_RUNTIME_POLICY_MUTATION_STARTED"] == "false"
     assert not (runtime / "bin").exists()
     assert not (runtime / "ffmpeg").exists()
     assert not (runtime / "python").exists()
+    assert not network_marker.exists()
 
 
-def test_apple_silicon_preflight_contract_precedes_runtime_mutation():
-    script = MACOS_BOOTSTRAP.read_text(encoding="utf-8")
-    gate = script.index(
-        'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" = "present" ]; then'
-    )
-    corrupt_gate = script.index(
-        'elif [ "${MAC_ARCH}" = "arm64" ] && [ -d "${BUNDLED_PAYLOAD_DIR}" ]; then',
-        gate,
-    )
-    failure_marker = script.index('log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"', corrupt_gate)
-    readiness = script.index(
-        'write_ready_to_go_state "mps" "missing" "missing" '
-        '"apple_silicon_requires_bundled_payload" "missing"',
-        corrupt_gate,
-    )
-    online_branch = script.index(
-        'MACOS_PAYLOAD_PREFLIGHT_REASON="online_fallback"',
-        readiness,
-    )
-    runtime_dirs = script.index(
-        'mkdir -p "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"'
-    )
-    assert gate < corrupt_gate < failure_marker < readiness < online_branch < runtime_dirs
+def test_apple_silicon_preflight_contract_precedes_runtime_mutation(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX bootstrap fixture")
+    script_dir = tmp_path / "reaper"
+    script_dir.mkdir()
+    shutil.copy2(MACOS_BOOTSTRAP, script_dir / MACOS_BOOTSTRAP.name)
+    payload = script_dir / "_bundled/macos/apple-silicon"
+    for name in ("wheels", "python", "ffmpeg"):
+        (payload / name).mkdir(parents=True, exist_ok=True)
+    (payload / "manifest.json").write_text("{}\n", encoding="utf-8")
+    ffmpeg = payload / "ffmpeg/ffmpeg"
+    ffmpeg.write_text("#!/bin/sh\nprintf '%s\\n' 'ffmpeg version fixture'\n", encoding="utf-8")
+    ffmpeg.chmod(0o755)
+
+    network_marker = tmp_path / "network-attempted"
+    fake_bin = _arm64_fake_bin(tmp_path, network_marker)
+    runtime, _sentinel = _sentinel_runtime(tmp_path)
+    nested_sentinel = runtime / ".venv/lib/nested/preserved.txt"
+    nested_sentinel.parent.mkdir(parents=True)
+    nested_sentinel.write_text("preserved before preflight\n", encoding="utf-8")
+    before_venv = _snapshot_files(runtime / ".venv")
+    state = tmp_path / "state.env"
+    log = tmp_path / "bootstrap.log"
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["HOME"] = str(tmp_path / "home")
+
+    result = _run_bootstrap(script_dir, runtime, state, log, env, mode="rebuild-venv")
+
+    assert result.returncode != 0
+    assert _snapshot_files(runtime / ".venv") == before_venv
+    state_fields = _read_env_file(state)
+    assert state_fields["STATUS"] == "missing_ffmpeg"
+    assert state_fields["STATUS_REASON"] == "ffprobe_not_found"
+    assert state_fields["MACOS_PAYLOAD_PREFLIGHT_STATUS"] == "failed"
+    assert state_fields["MACOS_PAYLOAD_PREFLIGHT_REASON"] == "ffprobe_not_found"
+    assert state_fields["MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED"] == "false"
+    assert state_fields["MACOS_RUNTIME_POLICY_MUTATION_STARTED"] == "false"
+    log_text = log.read_text(encoding="utf-8")
+    assert "Removing requested virtual environment rebuild target" not in log_text
+    assert "Creating STEMwerk virtual environment" not in log_text
+    assert not (runtime / "bin").exists()
+    assert not (runtime / "ffmpeg").exists()
+    assert not (runtime / "python").exists()
+    assert not network_marker.exists()
 
 
 def _complete_payload_fixture(script_dir):
@@ -237,9 +301,8 @@ def test_healthy_repair_policy_mismatch_preserves_existing_runtime(tmp_path):
     script_dir.mkdir()
     bootstrap = script_dir / MACOS_BOOTSTRAP.name
     shutil.copy2(MACOS_BOOTSTRAP, bootstrap)
-    _complete_payload_fixture(script_dir)
-
-    fake_bin = _arm64_fake_bin(tmp_path)
+    network_marker = tmp_path / "network-attempted"
+    fake_bin = _arm64_fake_bin(tmp_path, network_marker)
 
     runtime = tmp_path / "runtime"
     python = runtime / ".venv/bin/python"
@@ -268,6 +331,7 @@ def test_healthy_repair_policy_mismatch_preserves_existing_runtime(tmp_path):
 
     env = dict(os.environ)
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["HOME"] = str(tmp_path / "home")
     result = subprocess.run(
         [
             "/bin/sh",
@@ -299,26 +363,42 @@ def test_healthy_repair_policy_mismatch_preserves_existing_runtime(tmp_path):
     assert "MACOS_RUNTIME_POLICY_STATUS=mismatch" in state_text
     assert "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false" in state_text
     assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
+    assert not network_marker.exists()
 
 
-def test_runtime_policy_gate_preserves_matching_and_missing_recovery_paths():
-    script = MACOS_BOOTSTRAP.read_text(encoding="utf-8")
-    policy_gate = script.index('if [ "${MODE}" = "repair" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then')
-    match = script.index('MACOS_RUNTIME_POLICY_STATUS="match"', policy_gate)
-    match_status = script.index('set_status "ok" ""', match)
-    match_write = script.index("write_state", match_status)
-    match_exit = script.index("exit 0", match_write)
-    mismatch_branch = script.index('mismatch\\|*)', match)
-    mismatch_exit = script.index('set_status "repair_required" "${MACOS_RUNTIME_POLICY_REASON}"', match)
-    missing = script.index('MACOS_RUNTIME_POLICY_REASON="missing_runtime_recovery"', mismatch_exit)
-    explicit_rebuild = script.index(
-        'MACOS_RUNTIME_POLICY_REASON="explicit_rebuild_after_payload_preflight"', missing
-    )
-    mutation = script.index('MACOS_RUNTIME_POLICY_MUTATION_STARTED="true"', explicit_rebuild)
-    venv_create = script.index('log "Creating STEMwerk virtual environment..."', mutation)
-    assert policy_gate < match < match_status < match_write < match_exit < mismatch_exit
-    assert policy_gate < match < mismatch_exit < missing < explicit_rebuild < mutation < venv_create
-    assert "exit 1" not in script[match:mismatch_branch]
+def test_runtime_policy_gate_preserves_matching_and_missing_recovery_paths(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX bootstrap fixture")
+    script_dir = tmp_path / "reaper"
+    script_dir.mkdir()
+    shutil.copy2(MACOS_BOOTSTRAP, script_dir / MACOS_BOOTSTRAP.name)
+    network_marker = tmp_path / "network-attempted"
+    fake_bin = _arm64_fake_bin(tmp_path, network_marker)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    sentinel = runtime / "preserved-before-recovery.txt"
+    sentinel.write_text("preserved\n", encoding="utf-8")
+    before = _snapshot_files(runtime)
+    state = tmp_path / "state.env"
+    log = tmp_path / "bootstrap.log"
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["HOME"] = str(tmp_path / "home")
+    env["STEMWERK_OFFLINE"] = "1"
+
+    result = _run_bootstrap(script_dir, runtime, state, log, env, mode="repair")
+
+    assert result.returncode != 0
+    assert _snapshot_files(runtime) == before
+    state_fields = _read_env_file(state)
+    assert state_fields["MACOS_RUNTIME_POLICY_STATUS"] == "missing"
+    assert state_fields["MACOS_RUNTIME_POLICY_REASON"] == "missing_runtime_recovery"
+    assert state_fields["MACOS_PAYLOAD_PREFLIGHT_STATUS"] == "failed"
+    assert state_fields["MACOS_PAYLOAD_PREFLIGHT_REASON"] == "online_fallback_failed"
+    assert state_fields["MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED"] == "false"
+    assert state_fields["MACOS_RUNTIME_POLICY_MUTATION_STARTED"] == "false"
+    assert not (runtime / ".venv").exists()
+    assert not network_marker.exists()
 
 
 def test_runtime_policy_match_repair_short_circuits_without_mutation(tmp_path):
@@ -328,26 +408,70 @@ def test_runtime_policy_match_repair_short_circuits_without_mutation(tmp_path):
     script_dir.mkdir()
     shutil.copy2(MACOS_BOOTSTRAP, script_dir / MACOS_BOOTSTRAP.name)
 
-    fake_bin = _arm64_fake_bin(tmp_path)
+    network_marker = tmp_path / "network-attempted"
+    fake_bin = _arm64_fake_bin(tmp_path, network_marker)
+    _write_valid_ffmpeg_pair(fake_bin)
     runtime = tmp_path / "runtime"
     python = runtime / ".venv/bin/python"
     python.parent.mkdir(parents=True)
     python.write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' 'match|python=3.12;architecture=arm64;"
-        "audio-separator=0.23.0;numpy=1.26.4;numba=0.59.1;llvmlite=0.42.0;"
-        "torch=2.5.1;torchaudio=2.5.1;samplerate=0.1.0'\n",
+        "if [ \"${1:-}\" = \"-c\" ]; then\n"
+        "  case \"${2:-}\" in\n"
+        "    *sys.version_info*) printf '%s\\n' '3.12.0' ;;\n"
+        "  esac\n"
+        "  exit 0\n"
+        "fi\n"
+        "case \"${1:-}\" in\n"
+        "  *stemwerk_samplerate_guard.py)\n"
+        "    printf '%s\\n' 'STEMWERK_SAMPLERATE_GUARD before_samplerate_import=ok'\n"
+        "    printf '%s\\n' 'STEMWERK_SAMPLERATE_GUARD after_samplerate_import=ok'\n"
+        "    printf '%s\\n' 'STEMWERK_SAMPLERATE_GUARD repair_attempted=no'\n"
+        "    printf '%s\\n' 'STEMWERK_SAMPLERATE_GUARD arch_match=yes'\n"
+        "    exit 0\n"
+        "    ;;\n"
+        "esac\n"
+        "body=$(cat)\n"
+        "case \"$body\" in\n"
+        "  *'summary = \";\".join'*)\n"
+        "    printf '%s\\n' 'match|python=3.12;architecture=arm64;audio-separator=0.23.0;numpy=1.26.4;numba=0.59.1;llvmlite=0.42.0;torch=2.5.1;torchaudio=2.5.1;samplerate=0.1.0'\n"
+        "    ;;\n"
+        "  *'expected_numpy = '*) printf '%s\\n' 'ok|profile=fixture' ;;\n"
+        "  *'errors = []'*) printf '%s\\n' 'ok' ;;\n"
+        "esac\n",
         encoding="utf-8",
     )
     python.chmod(0o755)
+    internal = script_dir / "_internal"
+    internal.mkdir()
+    (internal / "stemwerk_samplerate_guard.py").write_text("# fixture path\n", encoding="utf-8")
     sentinel = runtime / ".venv/STEMWERK_MACOS_MATCH_TEST_SENTINEL"
     sentinel.write_text("preserved\n", encoding="utf-8")
-    before = {path.relative_to(runtime): path.read_bytes() for path in runtime.rglob("*") if path.is_file()}
+    ready = runtime / "state/ready_to_go.env"
+    ready.parent.mkdir(parents=True)
+    ready.write_text("READY_TO_GO_STATUS=stale\nMAIN_RUNTIME_STATUS=stale\n", encoding="utf-8")
+    before_venv = _snapshot_files(runtime / ".venv")
+    home = tmp_path / "home"
+    model_dir = home / "Library/Application Support/STEMwerk/models"
+    model_dir.mkdir(parents=True)
+    for name in (
+        "htdemucs.yaml",
+        "955717e8-8726e21a.th",
+        "htdemucs_ft.yaml",
+        "f7e0c4bc-ba3fe64a.th",
+        "d12395a8-e57c48e6.th",
+        "92cfc3b6-ef3bcb9c.th",
+        "04573f0d-f3cf25b2.th",
+        "htdemucs_6s.yaml",
+        "5c90dfd2-34c22ccb.th",
+    ):
+        (model_dir / name).write_bytes(b"fixture\n")
     state = tmp_path / "state.env"
     log = tmp_path / "bootstrap.log"
 
     env = dict(os.environ)
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["HOME"] = str(home)
     env["HTTP_PROXY"] = "http://127.0.0.1:9"
     env["HTTPS_PROXY"] = "http://127.0.0.1:9"
     env["PIP_INDEX_URL"] = "http://127.0.0.1:9/simple"
@@ -356,18 +480,25 @@ def test_runtime_policy_match_repair_short_circuits_without_mutation(tmp_path):
     result = _run_bootstrap(script_dir, runtime, state, log, env, mode="repair")
 
     assert result.returncode == 0
-    after = {path.relative_to(runtime): path.read_bytes() for path in runtime.rglob("*") if path.is_file()}
-    assert after == before
+    assert _snapshot_files(runtime / ".venv") == before_venv
     assert sentinel.read_text(encoding="utf-8") == "preserved\n"
-    state_text = state.read_text(encoding="utf-8")
-    assert "STATUS=ok" in state_text
-    assert "STATUS_REASON=" not in state_text
-    assert "MACOS_RUNTIME_POLICY_STATUS=match" in state_text
-    assert "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false" in state_text
-    assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
+    state_fields = _read_env_file(state)
+    assert state_fields["STATUS"] == "ok"
+    assert state_fields.get("STATUS_REASON", "") == ""
+    assert state_fields["MACOS_RUNTIME_POLICY_STATUS"] == "match"
+    assert state_fields["MACOS_RUNTIME_POLICY_MUTATION_STARTED"] == "false"
+    assert state_fields["MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED"] == "false"
+    ready_fields = _read_env_file(ready)
+    assert ready_fields["READY_TO_GO_STATUS"] == "ok"
+    assert ready_fields["MAIN_RUNTIME_STATUS"] == "ok"
+    assert ready_fields["FFMPEG_STATUS"] == "ok"
     log_text = log.read_text(encoding="utf-8")
     assert "STEP 3/5: Installing STEMwerk runtime" not in log_text
-    assert "127.0.0.1:9" not in log_text
+    assert "Removing incompatible virtual environment" not in log_text
+    assert "Creating STEMwerk virtual environment" not in log_text
+    assert "STEP 4/5: Checking FFmpeg" in log_text
+    assert "STEP 5/5: Preparing Drum Kit runtime" in log_text
+    assert not network_marker.exists()
 
 
 def test_explicit_rebuild_remains_after_complete_payload_preflight():

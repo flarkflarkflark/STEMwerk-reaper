@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description STEMwerk - AI Stem Separation
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.1.0
+-- @version 2.3.1.1
 -- @changelog
 --   2026-04-24: Added quick-command path for toolbar explode actions that run without opening Main UI.
 --   2026-04-24: Fixed playback-state transfer for imported stem takes with source-length guard (prevents double-stretch/content mismatch).
@@ -54,7 +54,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.3.1.0"
+local APP_VERSION = "2.3.1.1"
 SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
@@ -1717,6 +1717,8 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
             runtimeGuidance = "Run Setup/Repair to install the Apple MPS Drum Kit Split runtime.\n"
         elseif OS == "Linux" then
             runtimeGuidance = runtimeGuidance .. "Optional GPU path: Setup/Repair Drum Kit Split ROCm runtime.\n"
+        elseif OS == "Windows" then
+            runtimeGuidance = "Re-run the STEMwerk installer to repair the Drum Kit Split runtime.\n"
         end
         local msg = headline .. "\n"
             .. runtimeGuidance
@@ -2060,7 +2062,7 @@ function showIntelMacDksPolicyBlock(source)
     local title = trSafeValue("drumsep_intel_mac_unsupported_title", "Drum Kit Split unavailable on Intel Mac")
     local body = trSafeValue(
         "drumsep_intel_mac_unsupported_body",
-        "Drum Kit Split is not available on Intel Mac in STEMwerk 2.3.1.0. Normal CPU stem separation, including the normal six-stem mode, remains available."
+        "Drum Kit Split is not available on Intel Mac in this release. Normal CPU stem separation, including the normal six-stem mode, remains available."
     )
     if reaper and type(reaper.ShowMessageBox) == "function" then
         reaper.ShowMessageBox(tostring(body), tostring(title), 0)
@@ -13770,8 +13772,9 @@ local function fileSizeBytes(p)
     return tonumber(sz) or -1
 end
 
-B0_MODEL_BLOCK_MESSAGE =
-    "The required model for this workflow is not installed. Open STEMwerk Setup and run Repair to install the required models before processing."
+B0_MODEL_BLOCK_MESSAGE = (OS == "Windows")
+    and "The required model for this workflow is not installed. Re-run the STEMwerk installer to install the required models before processing."
+    or "The required model for this workflow is not installed. Open STEMwerk Setup and run Repair to install the required models before processing."
 
 function B0_readSimpleEnvFile(path)
     local out = {}
@@ -20443,7 +20446,9 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         if not pythonAvailable then
             local msg =
                 "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
-                .. "Run STEMwerk-SETUP.lua to repair the runtime."
+                .. ((OS == "Windows")
+                    and "Re-run the STEMwerk installer to repair the runtime."
+                    or "Run STEMwerk-SETUP.lua to repair the runtime.")
             debugLog(msg)
             SW_LOG.logExecResult("preflight: python missing", -1, msg)
             local lf = io.open(logFile, "w")
@@ -22862,7 +22867,9 @@ _sep.processAllStemsResult = function()
                 .. "\n\nFix:\n"
                 .. "Install the missing ONNX Runtime package into the Python venv that REAPER is using:\n"
                 .. onnxFixCmd .. "\n\n"
-                .. "Then rerun STEMwerk-SETUP.lua in REAPER to repair the runtime.\n\n"
+                .. ((OS == "Windows")
+                    and "Then run STEMwerk: Setup in REAPER and click Check only to verify the runtime. If problems remain, re-run the STEMwerk installer to repair it.\n\n"
+                    or "Then rerun STEMwerk-SETUP.lua in REAPER to repair the runtime.\n\n")
                 .. "On Windows DirectML, use:\n"
                 .. tostring(PYTHON_PATH) .. " -m pip install onnxruntime-directml\n\n"
                 .. "On Apple Silicon, use:\n"

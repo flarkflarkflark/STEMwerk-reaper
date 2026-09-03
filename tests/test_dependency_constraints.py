@@ -1,10 +1,12 @@
 """Regression smoke for the v2.2.2.1 macOS/Linux torch pin hotfix."""
 
+import hashlib
 import importlib.util
 import json
 import ntpath
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -43,6 +45,17 @@ class _OsProxy:
 
 def _read_utf8(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8", errors="replace")
+
+
+def _quoted_librosa_requirements(text: str) -> list[str]:
+    requirements = []
+    for line in text.splitlines():
+        token = line.strip().rstrip(",")
+        if token.startswith('"librosa'):
+            closing_quote = token.find('"', 1)
+            if closing_quote != -1:
+                requirements.append(token[1:closing_quote])
+    return requirements
 
 
 def _service_line_torch_runtime_status(torch_version, torchaudio_version="2.5.1"):
@@ -659,7 +672,7 @@ def test_linux_cuda_drumsep_path_uses_shared_five_step_setup_and_stays_out_of_ro
     assert 'STEP_TOTAL="5"' in bootstrap
     assert 'set_status "running" "launcher_started" "1" "5" "Launching bootstrap"' in launcher
     assert 'if OS ~= "Windows" then' in setup_internal
-    assert '{ id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }' in setup_internal
+    assert '{ id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 }, linuxGpuCapability = drumsepRuntimeLabelCapability }' in setup_internal
     assert '{ id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }' in setup_internal
     assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime" and mode ~= "ready-to-go-verify"' in setup_internal
 
@@ -1435,22 +1448,31 @@ def test_windows_setup_overview_ignores_stale_failed_capabilities_when_bootstrap
     assert "verification = \"\"" in setup_internal
 
 
-def test_windows_setup_overview_ignores_stale_running_and_failed_bootstrap_state_when_ready_is_ok():
+def test_windows_setup_overview_keeps_current_bootstrap_status_authoritative():
     setup_internal = _read_utf8("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua")
+    start = setup_internal.index("function buildWindowsSetupOverview(")
+    end = setup_internal.index("\nlocal function drawButton", start)
+    overview = setup_internal[start:end]
 
-    assert 'local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"' in setup_internal
-    assert 'local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"' in setup_internal
-    assert 'local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)' in setup_internal
-    assert 'local readyHealthy = (' in setup_internal
-    assert 'trim(readyState.READY_TO_GO_STATUS or "") == "ok"' in setup_internal
-    assert 'trim(readyState.MAIN_RUNTIME_STATUS or "") == "ok"' in setup_internal
-    assert 'local staleRunning = (status == "running") and (not pid) and (not guardBusy) and readyHealthy' in setup_internal
-    assert 'local staleGuardFailed = (trim(guard.STATUS or "") == "failed") and readyHealthy and bootstrapComplete and (not guardBusy)' in setup_internal
-    assert 'local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running")' in setup_internal
-    assert 'and readyHealthy and bootstrapComplete and not runtimePolicyRequiresRebuild(state)' in setup_internal
-    assert 'if staleRunning or staleGuardFailed or staleFailedState then' in setup_internal
-    assert 'status = "ok"' in setup_internal
-    assert 'reason = ""' in setup_internal
+    assert 'local status = trim(state.STATUS or "")' in overview
+    assert 'local reason = trim(state.STATUS_REASON or "")' in overview
+    assert 'if status ~= "" and status ~= "ok" then needsRepair = true end' in overview
+    assert 'setupStatus = (status ~= "" and status or "unknown")' in overview
+    for removed_normalizer in ("staleRunning", "staleGuardFailed", "staleFailedState"):
+        assert removed_normalizer not in overview
+
+    lua = shutil.which("lua5.4") or shutil.which("lua5.3") or shutil.which("lua") or shutil.which("luajit")
+    assert lua is not None, "Lua interpreter required for executable fail-closed Setup coverage"
+    result = subprocess.run(
+        [lua, "tests/support/run_setup_final_rows_headless.lua"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS windows-deps-failed-cannot-be-overridden-by-old-success-log" in result.stdout
+    assert "PASS windows-running-cannot-be-finalized-by-old-success-log" in result.stdout
+    assert "PASS windows-current-healthy-state-stays-healthy" in result.stdout
 
 
 def test_windows_setup_overview_labels_unchecked_deps_and_keeps_homebrew_ffmpeg_guidance_off_windows():
@@ -4343,6 +4365,104 @@ def test_linux_drumsep_runtime_installer_is_isolated_and_pinned():
     assert script.index('if [ "${MODE}" = "drumsep-runtime" ]; then') < script.index('log_stage "Creating venv"')
 
 
+def test_linux_drumsep_runtime_installer_pins_librosa_exactly():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    drumsep_install = script.split("install_drumsep_runtime() {", 1)[1].split("\n\nresolve_core_target()", 1)[0]
+
+    assert drumsep_install.count('"librosa==0.11.0"') == 1
+    assert '"numba==${DRUMSEP_NUMBA_VERSION}"' in drumsep_install
+
+
+def test_windows_audio_runtime_dependency_list_pins_librosa_exactly():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
+    dep_list = script.split(
+        "function GetAudioRuntimeDependencyList([string]$BackendName) {", 1
+    )[1].split("\n\nfunction GetMatchedTorchaudioContract", 1)[0]
+
+    assert _quoted_librosa_requirements(dep_list) == ["librosa==0.11.0"]
+    assert '"librosa>=0.10,<1.0"' not in dep_list
+
+
+def test_windows_drumsep_cpu_runtime_pins_librosa_exactly_once():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
+    drumsep_install = script.split(
+        "function InstallDrumsepRuntime([string]$BasePythonPath) {", 1
+    )[1].split("\n\nfunction InstallDrumsepDirectmlRuntime", 1)[0]
+
+    assert _quoted_librosa_requirements(drumsep_install) == [
+        "librosa==$drumsepLibrosaVersion"
+    ]
+
+
+def test_windows_drumsep_cuda_offline_and_online_routes_pin_librosa_separately():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
+    cuda_install = script.split(
+        "function InstallDrumsepCudaRuntime([string]$BasePythonPath) {", 1
+    )[1].split("\n\n$candidates = @()", 1)[0]
+    offline_args = cuda_install.split(
+        "$drumsepCudaInstallArgs = @(", 1
+    )[1].split("\n    )", 1)[0]
+    install_routes = cuda_install.split(
+        "if ($offlineBundledAllmodelsMode) {", 1
+    )[1]
+    offline_route, online_route = install_routes.split("} else {", 1)
+    online_route = online_route.split(
+        '$installOk = InstallWithPipAllowOnlineFallback', 1
+    )[0]
+
+    assert _quoted_librosa_requirements(offline_args) == [
+        "librosa==$drumsepLibrosaVersion"
+    ]
+    assert "InstallBundledDrumsepPackages $drumsepPython $drumsepCudaInstallArgs" in offline_route
+    assert _quoted_librosa_requirements(online_route) == [
+        "librosa==$drumsepLibrosaVersion"
+    ]
+
+
+def test_linux_main_runtime_constraints_pin_librosa_exactly():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    constraint_generation = script.split(
+        'log_step "Pinned torch version for downstream installs: ${TORCH_VER}"', 1
+    )[1].split(
+        'log_step "CUDA/NVIDIA package overrides blocked via constraints"', 1
+    )[0]
+
+    assert constraint_generation.count('echo "librosa==0.11.0"') == 1
+    assert constraint_generation.index('echo "numba==${PINNED_NUMBA_VERSION}"') < constraint_generation.index(
+        'echo "librosa==0.11.0"'
+    )
+    assert constraint_generation.index('echo "librosa==0.11.0"') < constraint_generation.index(
+        'for name in ("torch","torchvision","torchaudio"):'
+    )
+
+
+def test_linux_main_audio_install_fallback_and_repair_routes_preserve_librosa_pin():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    pin_enforcement = script.split("enforce_runtime_python_pins() {", 1)[1].split(
+        '\n}\n\nif [ -z "${RUNTIME_BASE}" ]', 1
+    )[0]
+    main_flow = script.split('if [ -z "${RUNTIME_BASE}" ]', 1)[1]
+    audio_routes = main_flow.split(
+        'log_stage "Checking/installing audio_separator"', 1
+    )[1].split(
+        'if [ "${audio_install_rc}" -eq 0 ] && [ "${STATUS}" = "ok" ]; then', 1
+    )[0]
+    initial_route, after_initial = audio_routes.split(
+        'if [ "${audio_install_rc}" -ne 0 ] && [ "${PACKAGE}" != "audio-separator==0.23.0" ]; then', 1
+    )
+    fallback_route, repair_route = after_initial.split(
+        'if [ "${audio_install_rc}" -ne 0 ] && [ "${managed_diffq_required}" -eq 0 ]; then', 1
+    )
+
+    assert _quoted_librosa_requirements(pin_enforcement) == ["librosa==0.11.0"]
+    assert main_flow.index("enforce_runtime_python_pins") < main_flow.index(
+        'log_stage "Installing STEMwerk-core"'
+    )
+    assert '-c "${CONSTRAINTS_FILE}"' in initial_route
+    assert '-c "${CONSTRAINTS_FILE}"' in fallback_route
+    assert '-c "${CONSTRAINTS_FILE}"' in repair_route
+
+
 def test_linux_drumsep_runtime_state_fields_are_written():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
@@ -4372,7 +4492,7 @@ def test_linux_setup_exposes_explicit_drumsep_runtime_action_without_normal_setu
     assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime"' in setup_internal
     assert '((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or "bootstrap.env")' in setup_internal
     assert '((isDrumsepRuntime and "drumsep_install.log") or (isDrumsepRocmRuntime and "drumsep_rocm_install.log") or "bootstrap.log")' in setup_internal
-    assert '{ id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }' in setup_internal
+    assert '{ id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 }, linuxGpuCapability = drumsepRuntimeLabelCapability }' in setup_internal
     assert '{ id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }' in setup_internal
     assert 'refreshSetupMenuChoiceLabels({ choices = choices })' in setup_internal
     assert 'startLinuxSetup(runtime, separatorScript, chosen)' in setup_internal
@@ -4383,6 +4503,14 @@ def test_linux_setup_exposes_explicit_drumsep_runtime_action_without_normal_setu
 
 
 def test_windows_setup_exposes_directml_drumsep_runtime_action_and_state_files():
+    # 2.3.1.1 Setup UX/installer-policy cleanup: Windows install/repair is
+    # owned by the external STEMwerk .exe installer, so the in-REAPER Setup
+    # menu no longer offers CUDA/DirectML DrumSep runtime install buttons
+    # (see tests/test_2311_setup_ui_policy.py for the full policy coverage).
+    # startWindowsSetup's internal mode recognition/state-file naming for
+    # these modes is deliberately left in place (defense in depth / matches
+    # the fail-closed guard's "even if reached some other way" contract) --
+    # only the choices-list buttons that used to dispatch into it are gone.
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8", errors="replace")
 
     assert 'WINDOWS_SETUP.mode == "drumsep-cuda-runtime"' in setup_internal
@@ -4390,13 +4518,16 @@ def test_windows_setup_exposes_directml_drumsep_runtime_action_and_state_files()
     assert '(isDrumsepCudaRuntime and "drumsep_runtime_cuda.env")' in setup_internal
     assert '(isDrumsepCudaRuntime and "drumsep_cuda_install.log")' in setup_internal
     assert '(isDrumsepCudaRuntime and "drumsep_cuda_runtime.pid")' in setup_internal
-    assert '{ id = "drumsep-cuda-runtime", accent = { 0.22, 0.62, 0.70 } }' in setup_internal
+    assert '{ id = "drumsep-cuda-runtime", accent = { 0.22, 0.62, 0.70 } }' not in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env")' in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_directml_install.log")' in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_directml_runtime.pid")' in setup_internal
-    assert '{ id = "drumsep-directml-runtime", accent = { 0.12, 0.58, 0.76 } }' in setup_internal
+    assert '{ id = "drumsep-directml-runtime", accent = { 0.12, 0.58, 0.76 } }' not in setup_internal
     assert 'refreshSetupMenuChoiceLabels({ choices = choices })' in setup_internal
+    # The dispatch call itself still exists (it is the fail-closed guard's
+    # entry point), but it is now unreachable from the Windows choices list.
     assert 'startWindowsSetup(runtime, separatorScript, chosen, true)' in setup_internal
+    assert 'if OS == "Windows" then\n        msgBox(\n            "STEMwerk Setup",\n            "Windows install, repair, and uninstall are handled by the STEMwerk installer' in setup_internal
 
 
 def test_linux_drumsep_rocm_runtime_installer_has_disk_preflight_and_rocm_pins():
@@ -4857,6 +4988,7 @@ def test_windows_installers_remove_stemwerk_owned_runtime_and_reaper_scripts_on_
 
 
 def test_shipped_windows_docs_and_dialogs_do_not_advertise_stale_release_version():
+    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
     setup_guide = Path("installer/windows/STEMwerk_Windows_Setup_Guide.md").read_text(encoding="utf-8")
     setup_guide_de = Path("installer/windows/STEMwerk_Windows_Setup_Guide.de.md").read_text(encoding="utf-8")
     setup_guide_nl = Path("installer/windows/STEMwerk_Windows_Setup_Guide.nl.md").read_text(encoding="utf-8")
@@ -4867,15 +4999,23 @@ def test_shipped_windows_docs_and_dialogs_do_not_advertise_stale_release_version
     assert "STEMwerk 2.3.0.6" not in setup_guide
     assert "install `2.3.0.6` fresh" not in setup_guide
     assert "latest Windows setup/runtime fixes from `2.3.0.4`" not in setup_guide
-    assert "This guide is for the Windows installer build of STEMwerk 2.3.1.0." in setup_guide
+    assert f"This guide is for the Windows installer build of STEMwerk {target_version}." in setup_guide
+    assert f"install `{target_version}` fresh" in setup_guide
+    assert f"latest Windows setup/runtime fixes from `{target_version}`" in setup_guide
 
     assert "STEMwerk 2.3.0.6" not in setup_guide_de
     assert "STEMwerk 2.3.0.6" not in setup_guide_nl
+    assert f"Diese Anleitung gilt fuer den Windows-Installer von STEMwerk {target_version}." in setup_guide_de
+    assert f"Deze handleiding hoort bij de Windows-installer van STEMwerk {target_version}." in setup_guide_nl
 
     assert "Version: 2.3.0.6" not in license_agreement
-    assert "Version: 2.3.1.0" in license_agreement
+    assert f"Version: {target_version}" in license_agreement
 
-    assert "in STEMwerk 2.3.0.6." not in main_script
+    fallback_start = main_script.index("function showIntelMacDksPolicyBlock(")
+    fallback_end = main_script.index("\nlocal function clearDialogWorkflowSelection", fallback_start)
+    fallback = main_script[fallback_start:fallback_end]
+    assert "Drum Kit Split is not available on Intel Mac in this release." in fallback
+    assert re.search(r"\b2\.3\.\d+\.\d+\b", fallback) is None
 
     assert "bundled 2.3.0.6 dependency policy" not in macos_bootstrap
 
@@ -5035,15 +5175,28 @@ def _assert_no_stale_current_version_semantics(section_text, target_version, sec
 
 def _assert_readme_release_contract(readme, target_version):
     release_status = _readme_section(readme, "## Release status")
+    recommended_install = _readme_section(readme, "### Recommended install path")
     assets_table = _readme_section(readme, f"### GitHub release assets for {target_version}")
     windows_notes = _readme_section(readme, "## Windows Notes")
 
     # --- release status section must identify target_version as current,
     # not as something still forthcoming.
     assert f"STEMwerk `{target_version}`, the current release" in release_status
-    for stale_future_phrase in ("upcoming", "forthcoming", "will ship", "will be installed"):
+    for stale_future_phrase in (
+        "upcoming",
+        "forthcoming",
+        "will ship",
+        "will be installed",
+        "has not yet been published",
+        "once published",
+    ):
         assert stale_future_phrase not in release_status.lower()
-    assert "has not yet been published as a tagged GitHub Release" in release_status
+    release_url = (
+        "https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/"
+        f"v{target_version}"
+    )
+    assert release_url in release_status
+    assert release_url in assets_table
 
     # --- Windows guidance must target the current version, not an older one.
     assert f"The current stable Windows target is `{target_version}`" in windows_notes
@@ -5082,6 +5235,12 @@ def _assert_readme_release_contract(readme, target_version):
     assert f"stemwerk-{target_version}-1-x86_64.pkg.tar.zst" not in assets_table
     assert "noarch" not in assets_table
     assert "-any.pkg.tar.zst" not in assets_table
+    assert (
+        f"Linux users: use ReaPack or the `STEMwerk-{target_version}-x86_64.AppImage` "
+        "release asset."
+    ) in recommended_install
+    assert "package-based release assets" not in recommended_install
+    assert "After installing a native Linux `.deb`, `.rpm`, or Arch package" not in readme
 
     # --- the large offline/allmodels macOS pkg is a separate-channel product and
     # is not a normal GitHub release asset for this line.
@@ -5093,14 +5252,20 @@ def _assert_readme_release_contract(readme, target_version):
     assert len(asset_rows) == 6, asset_rows
 
     # Genuinely historical references remain valid and must be preserved.
-    assert "`2.3.0.0` remains the original 2.3 full-release baseline" in readme
+    assert "`2.3.0.0` is the original historical 2.3 full-release baseline" in readme
     assert "large offline/full installers deliberately remain on the `2.3.0.0` line" in readme
-    assert "## What's new in 2.3.0.6 / 2.3.0.7" in readme
+    assert "## Historical: what was new in 2.3.0.6 / 2.3.0.7" in readme
+    assert "Apple Silicon MPS (GPU-accelerated) is validated for this release" in readme
+    assert "CPU Normal Stems are supported and validated" in readme
+    assert "Direct Kit / Kit Split are unsupported by design on Intel Macs" in readme
+    assert "Processing never automatically downloads a required model or asset" in readme
+    assert "fails closed before doing work and directs the user back to Setup/Repair" in readme
 
 
-def test_shipped_readme_identifies_current_2310_release_and_assets():
-    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
-    assert target_version == "2.3.1.0"
+def test_shipped_readme_identifies_current_public_2311_release_and_assets():
+    repository_version = Path("VERSION").read_text(encoding="utf-8").strip()
+    assert repository_version == "2.3.1.1"
+    target_version = repository_version
 
     readme = Path("README.md").read_text(encoding="utf-8")
     _assert_readme_release_contract(readme, target_version)
@@ -5115,6 +5280,7 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
     deliberately-unpublished Linux native packages or the separate-channel
     offline/allmodels pkg advertised as release assets, and dropped published
     rows."""
+    assert Path("VERSION").read_text(encoding="utf-8").strip() == "2.3.1.1"
     target_version = Path("VERSION").read_text(encoding="utf-8").strip()
     real_readme = Path("README.md").read_text(encoding="utf-8")
 
@@ -5149,7 +5315,7 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
             "",
         ),
         # F: a deliberately unpublished Linux native package advertised as a
-        # published 2.3.1.0 release asset.
+        # published current-release asset.
         "F": mutate(
             f"| `STEMwerk-{target_version}-x86_64.AppImage` | Linux AppImage |",
             f"| `stemwerk_{target_version}_amd64.deb` | Debian/Ubuntu package |",
@@ -5191,6 +5357,10 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
         "I": mutate(
             "## Release status",
             f"`{target_version}` is upcoming and not yet ready for general use.",
+        ),
+        "S": mutate(
+            "## Release status",
+            f"`{target_version}` has not yet been published; use it once published.",
         ),
         # J: historical-exemption abuse #1 -- "previously published" framing
         # reused to smuggle in an unconditional "current" claim for a stale
@@ -5237,7 +5407,7 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
     # guidance for the stale version and must remain historically valid.
     historical_present_fact = mutate(
         "## Release status",
-        f"ReaPack currently serves 2.3.0.7; it will be updated to {target_version} once published.",
+        f"Before {target_version} was published, ReaPack served 2.3.0.7.",
     )
     _assert_readme_release_contract(historical_present_fact, target_version)
 
@@ -5261,6 +5431,10 @@ def _make_fixture_file(tmp_path, name, content):
     path = tmp_path / name
     path.write_bytes(content)
     return path
+
+
+def _sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_windows_fetch_runtime_assets_declares_pinned_checksums_and_immutable_ffmpeg_source():
@@ -5287,9 +5461,7 @@ def test_windows_fetch_runtime_assets_declares_pinned_checksums_and_immutable_ff
 
 def test_windows_fetch_runtime_assets_accepts_bytes_matching_expected_checksum(tmp_path):
     good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
-    good_sha256 = subprocess.run(
-        ["sha256sum", str(good)], text=True, capture_output=True
-    ).stdout.split()[0]
+    good_sha256 = _sha256(good)
     out = tmp_path / "out.bin"
 
     result = _run_fetch_runtime_assets_helper(
@@ -5320,9 +5492,7 @@ def test_windows_fetch_runtime_assets_rejects_downloaded_bytes_with_wrong_checks
 
 def test_windows_fetch_runtime_assets_rejects_and_replaces_corrupted_cache(tmp_path):
     good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
-    good_sha256 = subprocess.run(
-        ["sha256sum", str(good)], text=True, capture_output=True
-    ).stdout.split()[0]
+    good_sha256 = _sha256(good)
     out = _make_fixture_file(tmp_path, "out.bin", b"stale corrupted cache contents")
 
     result = _run_fetch_runtime_assets_helper(
@@ -5338,9 +5508,7 @@ def test_windows_fetch_runtime_assets_rejects_and_replaces_corrupted_cache(tmp_p
 
 def test_windows_fetch_runtime_assets_accepts_already_verified_cache_without_redownload(tmp_path):
     good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
-    good_sha256 = subprocess.run(
-        ["sha256sum", str(good)], text=True, capture_output=True
-    ).stdout.split()[0]
+    good_sha256 = _sha256(good)
     out = _make_fixture_file(tmp_path, "out.bin", b"correct bytes")
 
     result = _run_fetch_runtime_assets_helper(
@@ -6113,16 +6281,20 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert 'replace_samplerate_with_native_arm64(wheels_dir)' in script
 
 
-def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
+def test_macos_payload_builder_requires_official_ffmpeg_and_local_runtime_sources():
     script = Path("tools/build_macos_apple_silicon_payload.py").read_text()
 
-    assert 'default="/opt/homebrew/bin/ffmpeg"' in script
-    assert 'default="/opt/homebrew/bin/ffprobe"' in script
-    assert 'default=str(Path.home() / "Library" / "Application Support" / "STEMwerk" / "python")' in script
+    assert 'return build_official_arm64_ffmpeg(destination, source_artifact_dir=source_artifact_dir)' in script
+    assert 'Release mode refuses all FFmpeg/ffprobe overrides' in script
+    assert '--allow-development-ffmpeg-override' in script
+    assert '"release_eligible": False' in script
+    assert '"--managed-python-artifact"' in script
+    assert 'Release mode requires --managed-python-artifact' in script
+    assert 'Release mode refuses --managed-python development directory overrides' in script
     assert 'Library" / "Application Support" / "STEMwerk" / "models"' in script
     assert 'Missing required {label}' in script
-    assert '"ffmpeg binary"' in script
-    assert '"managed Python runtime payload"' in script
+    assert '"ffmpeg override"' in script
+    assert 'prepare_managed_python_payload(' in script
     assert '"core model payload file"' in script
     assert '"DrumSep payload file"' in script
     assert 'Incomplete wheelhouse: missing' in script
@@ -6130,7 +6302,7 @@ def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
     assert '"samplerate==0.1.0"' in script
     assert 'build_stemwerk_core_wheel(repo_root, wheels_dir, python_executable)' in script
     assert '"--no-build-isolation"' in script
-    assert 'copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")' in script
+    assert 'validate_official_managed_python_provenance(output_dir / "python", manifest)' in script
 
 
 def test_macos_bootstrap_uses_bundled_apple_silicon_payloads_when_present():
@@ -6172,9 +6344,9 @@ def test_macos_bootstrap_records_bundled_payload_status_markers():
 def test_macos_bootstrap_prefers_bundled_ffmpeg_and_offline_wheelhouse():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
-    assert '_bundled_ffmpeg="$(bundled_ffmpeg_path || true)"' in script
-    assert 'FFMPEG="${_bundled_ffmpeg}"' in script
-    assert 'MACOS_BUNDLED_FFMPEG_STATUS="ok"' in script
+    assert '"$(bundled_ffmpeg_path || true)" \\' in script
+    assert 'if validate_ffmpeg_pair "${p}"; then' in script
+    assert 'MACOS_BUNDLED_FFMPEG_STATUS="validated"' in script
     assert '"${_py}" -m pip install --no-index --find-links "${BUNDLED_WHEELS_DIR}" "$@"' in script
     assert 'bundled_managed_python_dir()' in script
     assert 'install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip' in script
@@ -7276,7 +7448,9 @@ def test_macos_bootstrap_clears_stale_torch_pin_assert_failure_after_final_runti
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     assert 'FINAL_RUNTIME_VERIFIED="yes"' in script
-    assert 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS}" != "ok" ]; then' in script
+    assert 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] \\' in script
+    assert '&& [ "${FFMPEG_VALIDATED}" = "yes" ] \\' in script
+    assert '&& [ "${STATUS}" != "ok" ]; then' in script
     assert 'STATUS="ok"' in script
     assert 'STATUS_REASON=""' in script
     assert 'Cleared stale STATUS=${STATUS}/${STATUS_REASON} after final runtime verification succeeded' in script
@@ -7286,7 +7460,7 @@ def test_macos_bootstrap_only_clears_stale_torch_pin_status_after_real_final_che
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     line_no = lambda needle: next(i for i, line in enumerate(script.splitlines(), 1) if needle in line)
-    clear_line = 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS}" != "ok" ]; then'
+    clear_line = 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] \\'
     assert line_no(clear_line) > line_no('if [ "${_onnx_observed}" != "${PINNED_ONNXRUNTIME_VERSION}" ]; then')
     assert line_no(clear_line) > line_no('if ! assert_pinned_torch_stack "${VENV_PY}"; then')
 
@@ -7931,7 +8105,10 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' not in core_section
     assert 'core_model_prefetch_ffmpeg_path=${_prefetch_ffmpeg_path}' in macos_bootstrap
     assert 'core_model_prefetch_path_prefix=${_prefetch_ffmpeg_dir}' in macos_bootstrap
-    assert 'PATH="${_prefetch_path}" FFMPEG_PATH="${_prefetch_ffmpeg_path}" STEMWERK_FFMPEG_PATH="${_prefetch_ffmpeg_path}" IMAGEIO_FFMPEG_EXE="${_prefetch_ffmpeg_path}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' in macos_bootstrap
+    assert '_prefetch_log="$(mktemp "${TMPDIR:-/tmp}/stemwerk-core-model-prefetch.XXXXXX")" || return 1' in macos_bootstrap
+    assert 'PATH="${_prefetch_path}" FFMPEG_PATH="${_prefetch_ffmpeg_path}" STEMWERK_FFMPEG_PATH="${_prefetch_ffmpeg_path}" IMAGEIO_FFMPEG_EXE="${_prefetch_ffmpeg_path}" "${_py}" - <<PY > "${_prefetch_log}" 2>&1' in macos_bootstrap
+    assert 'cat "${_prefetch_log}" >> "${LOG_FILE}" 2>/dev/null || true' in macos_bootstrap
+    assert 'CORE_MODEL_PREFETCH_REASON="ffmpeg_constructor_failed"' in macos_bootstrap
     assert 'STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' in macos_bootstrap
     assert 'detail_path = os.environ.get("STEMWERK_DRUMSEP_DETAIL_FILE", "").strip()' in macos_bootstrap
     assert 'if detail_path:' in macos_bootstrap
@@ -7939,9 +8116,11 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'sep.load_model(resolve_audio_separator_model_id(model_name))' in macos_bootstrap
     assert 'READY_MAIN_RUNTIME_STATUS="missing"' in macos_bootstrap
     assert 'echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"' in macos_bootstrap
-    assert 'READY_DETAIL="core_model_download_failed"' in macos_bootstrap
-    assert 'log "core_model_prefetch_failed=core_model_download_failed"' in macos_bootstrap
-    assert 'set_status "deps_failed" "core_model_download_failed"' in macos_bootstrap
+    assert 'READY_DETAIL="${CORE_MODEL_PREFETCH_REASON:-ffmpeg_validation_failed}"' in macos_bootstrap
+    assert 'READY_DETAIL="${CORE_MODEL_PREFETCH_REASON:-core_model_download_failed}"' in macos_bootstrap
+    assert 'log "core_model_prefetch_failed=${READY_DETAIL}"' in macos_bootstrap
+    assert 'set_status "missing_ffmpeg" "${READY_DETAIL}"' in macos_bootstrap
+    assert 'set_status "deps_failed" "${READY_DETAIL}"' in macos_bootstrap
     assert 'set_status "deps_failed" "core_model_prefetch_failed"' not in macos_bootstrap
     assert 'DRUMSEP_PREFETCH_DETAIL="$(cat "${_detail_file}" 2>/dev/null || true)"' in macos_bootstrap
     assert 'log "drumsep_model_prefetch_detail=${DRUMSEP_PREFETCH_DETAIL:-unknown}"' in macos_bootstrap
@@ -8130,9 +8309,10 @@ def test_windows_capabilities_write_failure_clears_stale_state_and_fails_bootstr
 
 
 def test_windows_installer_license_text_matches_23_release():
+    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
     text = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
 
-    assert "Version: 2.3.1.0" in text
+    assert f"Version: {target_version}" in text
     assert "Version: 2.2.2" not in text
 
 

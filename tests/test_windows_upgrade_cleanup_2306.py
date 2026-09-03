@@ -12,6 +12,7 @@ ISS = WINDOWS_DIR / "STEMwerk.iss"
 PAYLOAD_ISS = WINDOWS_DIR / "STEMwerk_Windows_Payload.iss"
 BOOTSTRAP = ROOT / "scripts" / "reaper" / "STEMwerk_Bootstrap_Windows.ps1"
 LICENSE = WINDOWS_DIR / "STEMwerk_License_Agreement.txt"
+INSTALLER = WINDOWS_DIR / "STEMwerk_Installer_Windows.ps1"
 
 SOURCE_RE = re.compile(
     r'^Source: "(?P<source>[^"]+)"; DestDir: "(?P<dest>[^"]+)";',
@@ -158,14 +159,81 @@ def test_runtime_and_model_cache_are_outside_owned_application_cleanup(tmp_path:
     assert checkpoint.read_bytes() == b"preserve-me"
 
 
-def test_clean_runtime_remains_opt_in_and_models_require_their_own_option() -> None:
+def test_clean_runtime_remains_opt_in() -> None:
     text = ISS.read_text(encoding="utf-8")
     assert 'Name: "cleanup_runtime"' in text
-    assert 'Name: "cleanup_models"' in text
     assert "if WizardIsTaskSelected('cleanup_runtime') then" in text
     assert "Result := Result + ' -CleanRuntime'" in text
-    assert "if WizardIsTaskSelected('cleanup_models') then" in text
-    assert "Result := Result + ' -CleanModels'" in text
+
+
+def test_normal_windows_install_offers_no_model_purge_option() -> None:
+    # 2.3.1.1 policy cleanup: normal Windows Setup/Repair must never offer to
+    # remove cached models. The whole feature (task checkbox, its label in
+    # all three languages, the code that turned the checkbox into a
+    # -CleanModels argument, and the finished-page summary line) must be
+    # completely absent from the source -- not merely unchecked by default --
+    # so neither the online/thin nor the bundled Inno preprocessor branch can
+    # possibly define or activate it.
+    text = ISS.read_text(encoding="utf-8")
+    assert 'cleanup_models' not in text
+    assert 'CleanModels' not in text
+    assert 'TaskCleanupModels' not in text
+    assert 'remove cached models' not in text.lower()
+
+
+def test_online_and_bundled_iss_variants_cannot_activate_the_old_task() -> None:
+    # The removed task was previously the only thing gated by
+    # "#if BundleRuntime != \"1\"" (online/thin only); that whole conditional
+    # branch is gone now, which on its own proves neither variant can define
+    # it. Assert both facts explicitly: the dispatch call is gone, and the
+    # bundled-only branch (still needed for the bundled runtime payload
+    # itself) is untouched, so this isn't a case of the whole preprocessor
+    # mechanism having been accidentally deleted.
+    text = ISS.read_text(encoding="utf-8")
+    assert "WizardIsTaskSelected('cleanup_models')" not in text
+    assert '#if BundleRuntime != "1"' not in text
+    assert '#if BundleRuntime == "1"' in text
+
+
+def test_windows_installer_powershell_has_no_hidden_model_purge_equivalent() -> None:
+    text = INSTALLER.read_text(encoding="utf-8")
+    assert "CleanModels" not in text
+    assert "STEMWERK_CLEAN_MODELS" not in text
+    assert '"models"' not in text
+
+
+def test_normal_pre_setup_cleanup_preserves_models() -> None:
+    # cleanup_runtime ("Before setup: clean previous runtime state/logs/.venv/cache")
+    # is the only remaining pre-setup cleanup task. Its target list, both in
+    # the Inno [Code] helper and in the PowerShell installer, must never
+    # include "models".
+    iss_text = ISS.read_text(encoding="utf-8")
+    start = iss_text.index("procedure CleanupRuntimeArtifacts(RemoveModels: Boolean);")
+    end = iss_text.index("\nend;", start)
+    cleanup_fn = iss_text[start:end]
+    unconditional_part, _, guarded_part = cleanup_fn.partition("if RemoveModels")
+    assert "'\\models'" not in unconditional_part
+    assert "'\\models'" in guarded_part
+
+    installer_text = INSTALLER.read_text(encoding="utf-8")
+    targets_match = re.search(r'\$runtimeTargets = @\(([^)]*)\)', installer_text)
+    assert targets_match, "expected $runtimeTargets list in STEMwerk_Installer_Windows.ps1"
+    targets = targets_match.group(1)
+    assert '"models"' not in targets
+    assert 'state' in targets and '.venv' in targets
+
+
+def test_uninstaller_full_reset_behavior_is_not_accidentally_removed() -> None:
+    # Separate, explicit full-uninstall model-removal path (distinct from the
+    # normal Setup/Repair flow above) must remain untouched by the 2.3.1.1
+    # Setup UX/policy cleanup.
+    text = ISS.read_text(encoding="utf-8")
+    assert "UninstallCleanupModels: Boolean;" in text
+    assert "UninstallCleanupModels := False;" in text
+    assert "procedure CleanupRuntimeArtifacts(RemoveModels: Boolean);" in text
+    assert "CleanupRuntimeArtifacts(UninstallCleanupModels);" in text
+    assert "function InitializeUninstall: Boolean;" in text
+    assert "procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);" in text
 
 
 def test_online_bootstrap_uses_download_when_no_current_bundle_exists() -> None:

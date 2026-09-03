@@ -151,22 +151,89 @@ jobs:
 
   macos-pkg:
     needs: validate-version
-    runs-on: macos-latest
+    # Pin the Apple Silicon runner OS. Exact Xcode/SDK/clang versions are recorded
+    # in SOURCE_PROVENANCE.json instead of claiming byte-identical reproducibility.
+    runs-on: macos-14
     env:
       STEMWERK_VERSION: ${{ needs.validate-version.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build .pkg
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: arm64
+
+      - name: Verify pinned Apple Silicon release host
         shell: bash
         run: |
+          set -euo pipefail
+          [[ "$(uname -s)" == "Darwin" ]]
+          [[ "$(uname -m)" == "arm64" ]]
+          sw_vers
+          xcodebuild -version
+          clang --version
+          xcrun --sdk macosx --show-sdk-version
+
+      - name: Prepare pinned managed Python payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          filename="$(python tools/macos_managed_python.py --print-artifact-field managed_python_artifact_filename)"
+          url="$(python tools/macos_managed_python.py --print-artifact-field managed_python_artifact_url)"
+          expected="$(python tools/macos_managed_python.py --print-artifact-field managed_python_artifact_sha256)"
+          archive="$RUNNER_TEMP/$filename"
+          curl --fail --location --show-error "$url" --output "$archive"
+          actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+          [[ "$actual" == "$expected" ]]
+          printf '%s\n' "$archive" > "$RUNNER_TEMP/stemwerk-managed-python-artifact-path"
+
+      - name: Build official portable FFmpeg and bundled runtime payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/build_macos_apple_silicon_payload.py \
+            --version "$STEMWERK_VERSION" \
+            --output scripts/reaper/_bundled/macos/apple-silicon \
+            --managed-python-artifact "$(cat "$RUNNER_TEMP/stemwerk-managed-python-artifact-path")" \
+            --source-artifact-dir installer/macos/dist/source \
+            --release-mode
+
+      - name: Build and audit standard and bundled packages
+        shell: bash
+        run: |
+          set -euo pipefail
           bash installer/macos/build_pkg.sh
+          bash installer/macos/build_pkg.sh --variant bundled-apple-silicon
+          test -f "installer/macos/dist/STEMwerk-$STEMWERK_VERSION.pkg"
+          test -f "installer/macos/dist/STEMwerk-$STEMWERK_VERSION-bundled-apple-silicon.pkg"
+          test -f installer/macos/build/online/final-package-audit.json
+          test -f installer/macos/build/bundled-apple-silicon/final-package-audit.json
+
+      - name: Write macOS release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd installer/macos/dist
+            shasum -a 256 \
+              "STEMwerk-$STEMWERK_VERSION.pkg" \
+              "STEMwerk-$STEMWERK_VERSION-bundled-apple-silicon.pkg" \
+              source/ffmpeg-8.0.3.tar.xz \
+              source/ffmpeg-8.0.3.tar.xz.sha256 \
+              > "SHA256SUMS-$STEMWERK_VERSION-macos.txt"
+          )
 
       - name: Upload build artifacts (macOS)
         uses: actions/upload-artifact@v4
         with:
           name: installers-macos
-          path: installer/macos/dist/*.pkg
+          path: |
+            installer/macos/dist/*.pkg
+            installer/macos/dist/*.txt
+            installer/macos/dist/source/*
+            installer/macos/build/*/final-package-audit.json
           if-no-files-found: error
 
       - name: Upload release asset (macOS .pkg)
@@ -174,7 +241,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate-version.outputs.release_tag }}
-          files: installer/macos/dist/*.pkg
+          files: |
+            installer/macos/dist/*.pkg
+            installer/macos/dist/*.txt
+            installer/macos/dist/source/*
 
   linux-packages:
     needs: validate-version

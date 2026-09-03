@@ -1,6 +1,6 @@
 -- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.1.0
+-- @version 2.3.1.1
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -60,7 +60,6 @@ local ensureDir
 local quoteArg
 local execProcess
 local trim
-local showDeferredFinalWindow
 
 local function setupPlatformLabel()
     if OS == "Windows" then return "Windows" end
@@ -708,6 +707,26 @@ local function prettySetupReason(reason)
             part = "ffprobe executable validation failed"
         elseif lower == "ffmpeg_not_found" then
             part = "STEMwerk could not find FFmpeg"
+        elseif lower == "ffmpeg_not_executable" then
+            part = "FFmpeg was found but is not executable"
+        elseif lower == "ffmpeg_dependency_failed" then
+            part = "FFmpeg could not start because a required macOS library is unavailable"
+        elseif lower == "ffmpeg_identity_mismatch" then
+            part = "The selected FFmpeg executable did not identify itself as FFmpeg"
+        elseif lower == "ffprobe_not_found" then
+            part = "FFprobe is missing next to FFmpeg"
+        elseif lower == "ffprobe_not_executable" then
+            part = "FFprobe was found but is not executable"
+        elseif lower == "ffprobe_dependency_failed" then
+            part = "FFprobe could not start because a required macOS library is unavailable"
+        elseif lower == "ffprobe_identity_mismatch" then
+            part = "The selected FFprobe executable did not identify itself as FFprobe"
+        elseif lower == "ffmpeg_constructor_failed" then
+            part = "FFmpeg failed while the core model downloader was being initialized"
+        elseif lower == "core_model_cache_incomplete_after_prefetch" then
+            part = "Core model download finished, but the model cache is incomplete"
+        elseif lower == "bundled_payload_incomplete_or_corrupt" then
+            part = "The bundled macOS recovery payload is incomplete or corrupt"
         elseif lower == "ffmpeg_shim_path" then
             part = "Windows shim FFmpeg path detected (install a real ffmpeg.exe)"
         elseif lower == "stemwerk_core_bundle_incomplete" then
@@ -806,6 +825,83 @@ local function prettySetupReason(reason)
         end
     end
     return table.concat(parts, "; ")
+end
+
+-- Windows has no Repair/Rebuild venv button in this REAPER Setup menu
+-- (install/repair is owned by the external STEMwerk installer). The shared
+-- prettySetupReason()/prettyCheckError() reason text is correct as-is for
+-- Linux/macOS (where those actions genuinely exist) and is deliberately left
+-- untouched for them; this wrapper only rewrites the small set of "Run
+-- Repair/Rebuild..." phrasings, in place, for Windows rendering, so a
+-- Windows user is never pointed at a button that is not there. Everything
+-- below is local to this one function (not the main chunk) to avoid adding
+-- to the file's top-level local-variable budget.
+-- Global (not local): pure text transform, headlessly testable for the same
+-- reason as resolveLinuxDrumsepGpuCapability / buildSetupMenuChoices.
+function windowsSafeReasonText(text)
+    if not text or text == "" then return text end
+    local function plainReplace(s, find, repl)
+        local out, start = {}, 1
+        while true do
+            local from, to = s:find(find, start, true)
+            if not from then
+                out[#out + 1] = s:sub(start)
+                break
+            end
+            out[#out + 1] = s:sub(start, from - 1)
+            out[#out + 1] = repl
+            start = to + 1
+        end
+        return table.concat(out)
+    end
+    -- Ordered from most to least specific so a longer phrase is rewritten
+    -- before any shorter substring of it would otherwise match.
+    local replacements = {
+        { "Run Repair/Rebuild to restore the supported runtime.", "Re-run the STEMwerk installer to restore the supported runtime." },
+        { "run Rebuild venv/Repair to install the pinned torch stack", "re-run the STEMwerk installer to install the pinned torch stack" },
+        { "run Rebuild venv/Repair", "re-run the STEMwerk installer" },
+        { "Repair/Rebuild could not complete.", "could not complete. Re-run the STEMwerk installer." },
+        { "then run Repair/Rebuild again.", "then re-run the STEMwerk installer." },
+        { "then run Repair/Rebuild.", "then re-run the STEMwerk installer." },
+        { "for Repair/Rebuild.", "for the next STEMwerk installer run." },
+        { "use Rebuild venv to replace it", "re-run the STEMwerk installer to replace it" },
+        { "run Repair again with an internet connection", "re-run the STEMwerk installer with an internet connection" },
+        { "run Repair again, or download the full macOS Apple Silicon installer", "re-run the STEMwerk installer, or download the current installer" },
+        { "Run Rebuild venv once; if this persists, download the current installer", "Re-run the STEMwerk installer; if this persists, download the current installer" },
+        { "then run Repair again.", "then re-run the STEMwerk installer." },
+    }
+    for _, pair in ipairs(replacements) do
+        text = plainReplace(text, pair[1], pair[2])
+    end
+    return text
+end
+
+local function prettyFfmpegCheckDetail(ffmpegOk, ffmpegPath, ffmpegReason)
+    if ffmpegOk then
+        local path = trim(ffmpegPath)
+        return path ~= "" and path or "FFmpeg and FFprobe validated"
+    end
+    local rawReason = trim(ffmpegReason)
+    local friendlyReason = prettySetupReason(rawReason)
+    if friendlyReason ~= "" and friendlyReason:lower() ~= rawReason:lower() then
+        return friendlyReason
+    end
+    return "FFmpeg and FFprobe could not be validated"
+end
+
+-- Pure production row-builder exposed for the existing headless Setup tests.
+-- The Check-only UI and its test seam therefore execute the same mapping.
+function buildFfmpegCheckRow(verification, ffmpegPath)
+    verification = verification or {}
+    return {
+        label = "FFmpeg + ffprobe",
+        ok = verification.ffmpegOk == true,
+        detail = prettyFfmpegCheckDetail(
+            verification.ffmpegOk == true,
+            ffmpegPath,
+            verification.ffmpegReason
+        ),
+    }
 end
 
 local function prettyCheckError(err)
@@ -1343,23 +1439,39 @@ local function readTail(path, maxLines)
     return lines
 end
 
-local function wrapLine(line, maxLen)
-    if #line <= maxLen then return { line } end
+local function wrapLine(line, maxLen, withOffsets)
+    if #line <= maxLen then
+        if withOffsets then
+            return { { text = line, charStart = 1, charEnd = #line } }
+        end
+        return { line }
+    end
     local out = {}
     local s = line
+    local charStart = 1
+    local function append(text, first, last)
+        if withOffsets then
+            out[#out + 1] = { text = text, charStart = first, charEnd = last }
+        else
+            out[#out + 1] = text
+        end
+    end
     while #s > maxLen do
         local chunk = s:sub(1, maxLen)
         local cut = chunk:match("^(.*)%s+[%w%p]*$")
         if cut and #cut > 0 then
-            out[#out + 1] = cut
+            append(cut, charStart, charStart + #cut - 1)
             s = s:sub(#cut + 1)
-            s = s:gsub("^%s+", "")
+            local leading = s:match("^(%s+)") or ""
+            s = s:sub(#leading + 1)
+            charStart = charStart + #cut + #leading
         else
-            out[#out + 1] = chunk
+            append(chunk, charStart, charStart + #chunk - 1)
             s = s:sub(maxLen + 1)
+            charStart = charStart + maxLen
         end
     end
-    if s ~= "" then out[#out + 1] = s end
+    if s ~= "" then append(s, charStart, charStart + #s - 1) end
     return out
 end
 
@@ -2304,7 +2416,7 @@ local function windowsDrawStatus(state, logLines, pidAlive, pid)
     if state.STATUS_REASON and state.STATUS_REASON ~= "" then
         gfx.x = 18
         gfx.y = y
-        gfx.drawstr("Reason: " .. tostring(prettySetupReason(state.STATUS_REASON)))
+        gfx.drawstr("Reason: " .. tostring(windowsSafeReasonText(prettySetupReason(state.STATUS_REASON))))
         y = y + 20
     end
     if lastLogLine ~= "" then
@@ -2613,7 +2725,31 @@ local function windowsSetupTick()
     reaper.defer(windowsSetupTick)
 end
 
-local function startWindowsSetup(runtime, separatorScript, mode, reuseWindow)
+-- Finding 7 (2.3.1.1 adversarial review): global (not local) so the real
+-- fail-closed guard below -- and the real production dispatch that decides
+-- when to call this function at all -- can be exercised executably by a
+-- headless test, instead of only proven by reading the source. No second,
+-- test-only dispatch implementation exists anywhere: a test calls this
+-- exact function.
+function startWindowsSetup(runtime, separatorScript, mode, reuseWindow)
+    -- Fail-closed defense in depth: normal Windows install/repair/uninstall
+    -- is owned by the external STEMwerk .exe installer, never by this
+    -- in-REAPER Setup UI. The choices list this function is dispatched from
+    -- no longer offers any action that reaches here on Windows, but if it is
+    -- ever still reached -- a stale ExtState value, a direct call, or some
+    -- other internal dispatch route -- refuse to mutate anything and point
+    -- the user at the real installer instead.
+    if OS == "Windows" then
+        msgBox(
+            "STEMwerk Setup",
+            "Windows install, repair, and uninstall are handled by the STEMwerk installer, not by this in-REAPER Setup menu.\n\n"
+                .. "Nothing was changed.\n\n"
+                .. "Download and run the current STEMwerk-Setup.exe (or the bundled variant) from the STEMwerk-reaper releases page. "
+                .. "Use Check only or Save Support Bundle here for read-only diagnostics.",
+            0
+        )
+        return false
+    end
     mode = tostring(mode or "repair")
     local isDrumsepRuntime = mode == "drumsep-runtime"
     local isDrumsepCudaRuntime = mode == "drumsep-cuda-runtime"
@@ -2735,6 +2871,7 @@ local function verifyRuntimePaths(state, publishExtState)
     local errors = {}
     local pythonOk = false
     local ffmpegOk = false
+    local ffmpegReason = ""
     local ffprobePath = ""
     local audioOk = false
     local torchRuntime = {
@@ -2789,7 +2926,8 @@ local function verifyRuntimePaths(state, publishExtState)
             ffprobePath = resolvedFfprobe
             if publishExtState then setExt("ffmpegPath", resolved.ffmpegPath) end
         else
-            errors[#errors + 1] = pairReason ~= "" and pairReason or "ffmpeg_unusable"
+            ffmpegReason = pairReason ~= "" and pairReason or "ffmpeg_unusable"
+            errors[#errors + 1] = ffmpegReason
         end
     end
 
@@ -2816,6 +2954,7 @@ local function verifyRuntimePaths(state, publishExtState)
         ffprobePath = ffprobePath,
         pythonOk = pythonOk,
         ffmpegOk = ffmpegOk,
+        ffmpegReason = ffmpegReason,
         audioOk = audioOk,
         detectedPythonVersion = detectedPythonVersion,
         supportedPythonFound = supportedPythonFound,
@@ -3374,29 +3513,40 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     finalMessage[#finalMessage + 1] = ""
     finalMessage[#finalMessage + 1] = "Status: " .. tostring(prettySetupStatus(state.STATUS or "unknown"))
     if state.STATUS_REASON and state.STATUS_REASON ~= "" then
-        finalMessage[#finalMessage + 1] = "Reason: " .. tostring(prettySetupReason(state.STATUS_REASON))
+        local reasonText = prettySetupReason(state.STATUS_REASON)
+        if OS == "Windows" then reasonText = windowsSafeReasonText(reasonText) end
+        finalMessage[#finalMessage + 1] = "Reason: " .. tostring(reasonText)
     end
     finalMessage[#finalMessage + 1] = "Failure: " .. failureClass
-    finalMessage[#finalMessage + 1] = "Checks: " .. formatCheckErrors(errors)
+    local checksText = formatCheckErrors(errors)
+    if OS == "Windows" then checksText = windowsSafeReasonText(checksText) end
+    finalMessage[#finalMessage + 1] = "Checks: " .. checksText
     if hasError("python_unsupported") or trim(state.STATUS_REASON or "") == "python_unsupported" then
         local detected = trim(verification.detectedPythonVersion or state.DETECTED_PYTHON_VERSION or "")
         finalMessage[#finalMessage + 1] = ""
+        local pythonUnsupportedText
         if detected ~= "" then
-            finalMessage[#finalMessage + 1] = "System Python " .. detected .. " is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
+            pythonUnsupportedText = "System Python " .. detected .. " is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
         else
-            finalMessage[#finalMessage + 1] = "System Python is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
+            pythonUnsupportedText = "System Python is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
         end
+        if OS == "Windows" then pythonUnsupportedText = windowsSafeReasonText(pythonUnsupportedText) end
+        finalMessage[#finalMessage + 1] = pythonUnsupportedText
     end
     if trim(state.STATUS_REASON or "") ~= "core_model_download_failed" and (hasError("torch_too_new_for_demucs") or hasError("torch_runtime_unsupported")) then
         local torchVersion = trim(verification.torchVersion or "")
         finalMessage[#finalMessage + 1] = ""
-        finalMessage[#finalMessage + 1] = "Unsupported Torch runtime detected: torch "
+        local torchTooNewText = "Unsupported Torch runtime detected: torch "
             .. (torchVersion ~= "" and torchVersion or "unknown")
             .. ". STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
+        if OS == "Windows" then torchTooNewText = windowsSafeReasonText(torchTooNewText) end
+        finalMessage[#finalMessage + 1] = torchTooNewText
     end
     if hasError("torchaudio_missing_for_demucs") then
         finalMessage[#finalMessage + 1] = ""
-        finalMessage[#finalMessage + 1] = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
+        local torchaudioMissingText = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
+        if OS == "Windows" then torchaudioMissingText = windowsSafeReasonText(torchaudioMissingText) end
+        finalMessage[#finalMessage + 1] = torchaudioMissingText
     end
     if OS == "macOS" and (hasError("ffmpeg_missing") or hasError("ffmpeg_unusable") or trim(state.STATUS or "") == "missing_ffmpeg") then
         finalMessage[#finalMessage + 1] = ""
@@ -3495,7 +3645,7 @@ local function summarizeInstallerState(state)
     if state and next(state) ~= nil then
         lines[#lines + 1] = "Installer status: " .. tostring(prettySetupStatus(state.STATUS or "unknown"))
         if state.STATUS_REASON and state.STATUS_REASON ~= "" then
-            lines[#lines + 1] = "Installer reason: " .. tostring(prettySetupReason(state.STATUS_REASON))
+            lines[#lines + 1] = "Installer reason: " .. tostring(windowsSafeReasonText(prettySetupReason(state.STATUS_REASON)))
         end
         if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
             lines[#lines + 1] = "Python: " .. tostring(state.PYTHON_PATH)
@@ -3866,6 +4016,26 @@ local function windowsVerifyRepair(runtime, separatorScript)
 end
 
 local LINUX_SETUP = nil
+-- Finding 2 (2.3.1.1 second adversarial review): invocation-local evidence
+-- from the most recent live device/capability probe (probeRuntimeDevices)
+-- that actually ran in THIS running script process -- never read from or
+-- written to disk, so a fresh REAPER trigger of the Setup action (which
+-- re-executes this entire file via dofile()) always resets it to nil.
+-- Persisted capabilities.env/ready_to_go.env/bootstrap.env prove only what
+-- some earlier run once observed, never what this invocation has actually
+-- verified -- see verifyExistingSetup (the only writer) and
+-- startExistingRuntimeSetupMenu (the only reader, which merges it into the
+-- state table passed to buildSetupMenuChoices/resolveLinuxDrumsepGpuCapability
+-- as CURRENT_PROBE_* fields) below.
+local CURRENT_LINUX_PROBE = nil
+if STEMWERK_SETUP_HEADLESS_TEST and type(STEMWERK_SETUP_TEST_HOOKS) == "table" then
+    STEMWERK_SETUP_TEST_HOOKS.getCurrentLinuxProbe = function()
+        if not CURRENT_LINUX_PROBE then return nil end
+        local copy = {}
+        for k, v in pairs(CURRENT_LINUX_PROBE) do copy[k] = v end
+        return copy
+    end
+end
 local SETUP_MENU = nil
 local SETUP_MENU_DEFAULT_W = 1260
 local SETUP_MENU_DEFAULT_H = 904
@@ -4236,7 +4406,6 @@ local function drawLinuxPanel(x, y, w, h, bg, border)
 end
 
 local buildLinuxLogDisplayLines
-local syncLinuxLogScroll
 local drawLinuxScrollbar
 
 local function linuxValueColor(kind, isSuccess)
@@ -4637,6 +4806,34 @@ function buildLinuxFinalRows(state, capState, runtime, logFile, finalSuccess, ve
     return rows
 end
 
+-- Finding 3 (2.3.1.1 adversarial review): shared with labelHistoricalCheckOnlyLogLines
+-- below so drawLinuxLogPanel can reliably detect and peel this exact marker
+-- line off the scrollable buffer. Declared as a global function (not a
+-- top-level local) for the same headless-testability reason as
+-- labelHistoricalCheckOnlyLogLines/linuxLogPanelDefaultScrollToTop, and to
+-- avoid spending another slot of this file's 200-local-per-scope budget.
+function historicalCheckOnlyLogMarkerText()
+    return "--- Previous bootstrap/repair log (historical; not from this Check) ---"
+end
+
+-- Pure split, headlessly testable: if logLines[1] is the historical-provenance
+-- marker, peel it off and return it separately from the remaining body lines;
+-- otherwise return no banner and the original lines untouched. This lets the
+-- marker be rendered as a fixed, always-visible banner instead of living
+-- inside the scrollable console body, so the console can safely default to
+-- showing its actual current end-lines (bottom) without ever scrolling the
+-- provenance notice out of view.
+function splitHistoricalLogBanner(logLines)
+    if not logLines or logLines[1] ~= historicalCheckOnlyLogMarkerText() then
+        return nil, logLines or {}
+    end
+    local body = {}
+    for i = 2, #logLines do
+        body[#body + 1] = logLines[i]
+    end
+    return logLines[1], body
+end
+
 local function drawLinuxLogPanel(logX, logY, logW, logH, logLines, footerText)
     drawLinuxPanel(logX, logY, logW, logH, { 0.06, 0.06, 0.07, 1 }, { 0.22, 0.22, 0.24, 1 })
 
@@ -4651,17 +4848,36 @@ local function drawLinuxLogPanel(logX, logY, logW, logH, logLines, footerText)
     local scrollbarW = 24
     local logBodyY = logHeaderY + 22
     local footerH = 28
+    local wrapWidth = linuxWrapWidth(132)
+
+    local bannerText, bodyLogLines = splitHistoricalLogBanner(logLines)
+    if bannerText then
+        local bannerLineH = linuxLineHeight(11)
+        gfx.setfont(1, "Arial Bold", linuxFontSize(11))
+        gfx.set(0.95, 0.78, 0.30, 1)
+        local by = logBodyY
+        for _, bl in ipairs(wrapLine(bannerText, wrapWidth)) do
+            gfx.x = logX + logInnerPad
+            gfx.y = by
+            gfx.drawstr(bl)
+            by = by + bannerLineH
+        end
+        gfx.set(0.30, 0.30, 0.33, 1)
+        gfx.line(logX + 1, by, logX + logW - 2, by)
+        gfx.set(1, 1, 1, 1)
+        logBodyY = by + 6
+    end
+
     local availableBodyH = logH - (logBodyY - logY) - footerH - logInnerPad
     local logBodyH = math.max(80, availableBodyH)
     local logTextX = logX + logInnerPad
     local logTextY = logBodyY
     local logTextW = math.max(120, logW - (logInnerPad * 2) - scrollbarW - 8)
     local logLineH = linuxLineHeight(14)
-    local wrapWidth = linuxWrapWidth(132)
-    local displayLines = buildLinuxLogDisplayLines(logLines, wrapWidth)
+    local displayLines = buildLinuxLogDisplayLines(bodyLogLines, wrapWidth)
     local visibleLines = math.max(1, math.floor(logBodyH / logLineH))
     local totalLines = #displayLines
-    syncLinuxLogScroll(totalLines, visibleLines)
+    syncLinuxLogScroll(displayLines, visibleLines)
     local startIdx = math.max(1, totalLines - visibleLines - (LINUX_SETUP.logScroll or 0) + 1)
     local endIdx = math.min(totalLines, startIdx + visibleLines - 1)
 
@@ -4726,26 +4942,165 @@ end
 
 buildLinuxLogDisplayLines = function(logLines, wrapWidth)
     local out = {}
-    for _, line in ipairs(logLines or {}) do
-        local wrapped = wrapLine(line, wrapWidth)
-        for _, wl in ipairs(wrapped) do
-            out[#out + 1] = { text = wl, source = line }
+    logLines = logLines or {}
+    for sourceIndex, line in ipairs(logLines) do
+        local wrapped = wrapLine(line, wrapWidth, true)
+        for segmentIndex, segment in ipairs(wrapped) do
+            local before, after = {}, {}
+            for distance = 1, 4 do
+                before[distance] = logLines[sourceIndex - distance]
+                after[distance] = logLines[sourceIndex + distance]
+            end
+            out[#out + 1] = {
+                text = segment.text,
+                source = line,
+                sourceIndex = sourceIndex,
+                segmentIndex = segmentIndex,
+                segmentCount = #wrapped,
+                charStart = segment.charStart,
+                charEnd = segment.charEnd,
+                sourceBefore = before,
+                sourceAfter = after,
+            }
         end
     end
     return out
 end
 
-syncLinuxLogScroll = function(totalLines, visibleLines)
-    if not LINUX_SETUP then return 0 end
+if STEMWERK_SETUP_HEADLESS_TEST and type(STEMWERK_SETUP_TEST_HOOKS) == "table" then
+    STEMWERK_SETUP_TEST_HOOKS.buildLinuxLogDisplayLines = buildLinuxLogDisplayLines
+end
+
+local function copyLogContext(values)
+    local copy = {}
+    for i = 1, 4 do copy[i] = values and values[i] or nil end
+    return copy
+end
+
+local function captureLinuxLogAnchor(displayLines, displayIndex)
+    local item = displayLines and displayLines[displayIndex]
+    if not item then return nil end
+    local occurrence, reverseOccurrence = 0, 0
+    for _, candidate in ipairs(displayLines) do
+        if candidate.segmentIndex == 1 and candidate.source == item.source then
+            if candidate.sourceIndex <= item.sourceIndex then occurrence = occurrence + 1 end
+            if candidate.sourceIndex >= item.sourceIndex then reverseOccurrence = reverseOccurrence + 1 end
+        end
+    end
+    return {
+        source = item.source,
+        charStart = item.charStart or 1,
+        occurrence = occurrence,
+        reverseOccurrence = reverseOccurrence,
+        sourceBefore = copyLogContext(item.sourceBefore),
+        sourceAfter = copyLogContext(item.sourceAfter),
+    }
+end
+
+local function findLinuxLogAnchor(displayLines, anchor)
+    if not anchor then return nil end
+    local candidates = {}
+    local occurrence = 0
+    for index, item in ipairs(displayLines or {}) do
+        if item.segmentIndex == 1 and item.source == anchor.source then
+            occurrence = occurrence + 1
+            candidates[#candidates + 1] = { index = index, item = item, occurrence = occurrence }
+        end
+    end
+    local totalMatches = #candidates
+    local best, bestScore
+    for _, candidate in ipairs(candidates) do
+        local score = 0
+        for distance = 1, 4 do
+            local weight = 5 - distance
+            if anchor.sourceBefore[distance] ~= nil
+                and anchor.sourceBefore[distance] == candidate.item.sourceBefore[distance] then
+                score = score + weight
+            end
+            if anchor.sourceAfter[distance] ~= nil
+                and anchor.sourceAfter[distance] == candidate.item.sourceAfter[distance] then
+                score = score + weight
+            end
+        end
+        if candidate.occurrence == anchor.occurrence then score = score + 1 end
+        if (totalMatches - candidate.occurrence + 1) == anchor.reverseOccurrence then score = score + 1 end
+        if bestScore == nil or score > bestScore then
+            best, bestScore = candidate, score
+        end
+    end
+    if not best then return nil end
+
+    local nearestIndex, nearestDistance
+    for index, item in ipairs(displayLines) do
+        if item.sourceIndex == best.item.sourceIndex then
+            if anchor.charStart >= (item.charStart or 1) and anchor.charStart <= (item.charEnd or 0) then
+                return index
+            end
+            local distance = math.abs((item.charStart or 1) - anchor.charStart)
+            if nearestDistance == nil or distance < nearestDistance then
+                nearestIndex, nearestDistance = index, distance
+            end
+        end
+    end
+    return nearestIndex
+end
+
+-- The first visible source line and wrapped character position are the
+-- stable anchor; numeric distance-from-bottom is only the scrollbar value.
+function syncLinuxLogScroll(displayLines, visibleLines, target)
+    target = target or LINUX_SETUP
+    if not target then return 0 end
+    local totalLines = #(displayLines or {})
     local maxScroll = math.max(0, totalLines - visibleLines)
-    LINUX_SETUP.logScroll = clamp(LINUX_SETUP.logScroll or 0, 0, maxScroll)
+    if target.followTail then
+        target.logScroll = 0
+        target.logAnchor = nil
+    elseif target.logAnchor then
+        local anchorIndex = findLinuxLogAnchor(displayLines, target.logAnchor)
+        if anchorIndex then
+            target.logScroll = totalLines - visibleLines - anchorIndex + 1
+        else
+            target.logScroll = maxScroll
+        end
+    end
+    target.logScroll = clamp(target.logScroll or 0, 0, maxScroll)
+    target.lastDisplayLines = displayLines
+    target.lastVisibleLines = visibleLines
+    if not target.followTail then
+        local firstVisible = math.max(1, totalLines - visibleLines - target.logScroll + 1)
+        target.logAnchor = captureLinuxLogAnchor(displayLines, firstVisible)
+    end
     return maxScroll
 end
 
-local function adjustLinuxLogScroll(delta, totalLines, visibleLines)
-    if not LINUX_SETUP then return end
-    local maxScroll = syncLinuxLogScroll(totalLines, visibleLines)
-    LINUX_SETUP.logScroll = clamp((LINUX_SETUP.logScroll or 0) + delta, 0, maxScroll)
+-- Finding 5 (2.3.1.1 first adversarial review): the single shared helper for
+-- every manual scroll-position mutation -- wheel, scrollbar drag, and
+-- keyboard all route through this, so followTail can never drift out of
+-- sync with a site that moves the scroll position by hand. A deliberate
+-- scroll away from the bottom stops auto-following new log output (see
+-- linuxSetupTick's followTail check); landing back at (or very near) the
+-- Global (not local) and target-parameterized for the same headless-
+-- testability reason as syncLinuxLogScroll above.
+function setLinuxLogScrollManual(newScroll, totalLines, visibleLines, target)
+    target = target or LINUX_SETUP
+    if not target then return end
+    local maxScroll = math.max(0, totalLines - visibleLines)
+    target.logScroll = clamp(newScroll, 0, maxScroll)
+    target.followTail = target.logScroll <= 2
+    if target.followTail then
+        target.logAnchor = nil
+    elseif target.lastDisplayLines and #target.lastDisplayLines == totalLines then
+        local firstVisible = math.max(1, totalLines - visibleLines - target.logScroll + 1)
+        target.logAnchor = captureLinuxLogAnchor(target.lastDisplayLines, firstVisible)
+    else
+        target.logAnchor = nil
+    end
+end
+
+function adjustLinuxLogScroll(delta, totalLines, visibleLines, target)
+    target = target or LINUX_SETUP
+    if not target then return end
+    setLinuxLogScrollManual((target.logScroll or 0) + delta, totalLines, visibleLines, target)
 end
 
 drawLinuxScrollbar = function(rect, totalLines, visibleLines)
@@ -4966,8 +5321,21 @@ end
 
 function refreshSetupMenuChoiceLabels(menu)
     for _, choice in ipairs((menu and menu.choices) or {}) do
-        choice.label = setupChoiceLabel(choice.id)
-        choice.sub = setupChoiceSubtitle(choice.id)
+        -- Linux only (choice.linuxGpuCapability is nil everywhere else,
+        -- including macOS, which keeps the unchanged generic label below):
+        -- describe the actually-detected route instead of a generic name.
+        -- "unknown" (not yet probed) falls through to the same neutral
+        -- generic label as macOS -- never claim a backend without evidence.
+        if choice.id == "drumsep-runtime" and choice.linuxGpuCapability == "cpu" then
+            choice.label = setupText("setup_choice_drumsep_runtime_cpu_label", "Drum Kit Split CPU runtime")
+            choice.sub = setupText("setup_choice_drumsep_runtime_cpu_sub", "Install/repair optional Drum Kit runtime (CPU)")
+        elseif choice.id == "drumsep-runtime" and choice.linuxGpuCapability == "cuda" then
+            choice.label = setupText("setup_choice_drumsep_runtime_cuda_label", "Drum Kit Split CUDA GPU runtime")
+            choice.sub = setupText("setup_choice_drumsep_runtime_cuda_sub", "Install/repair optional Drum Kit runtime (NVIDIA CUDA GPU)")
+        else
+            choice.label = setupChoiceLabel(choice.id)
+            choice.sub = setupChoiceSubtitle(choice.id)
+        end
     end
 end
 
@@ -5341,16 +5709,120 @@ function labelHistoricalCheckOnlyLogLines(logLines, isCheckOnly)
     if not isCheckOnly or not logLines or #logLines == 0 then
         return logLines or {}
     end
-    local out = { "--- Previous bootstrap/repair log (historical; not from this Check) ---" }
+    local out = { historicalCheckOnlyLogMarkerText() }
     for _, line in ipairs(logLines) do
         out[#out + 1] = line
     end
     return out
 end
 
+-- Finding 6 (2.3.1.1 adversarial review): pure decision, headlessly testable
+-- for the same reason as linuxLogPanelDefaultScrollToTop /
+-- resolveLinuxDrumsepGpuCapability above -- should the new 2.3.1.1
+-- completion-follow/autoscroll behavior (the running-phase pull-to-bottom
+-- and the deferred completion scroll reset, both inside linuxSetupTick
+-- below) actually apply on this OS? linuxSetupTick/LINUX_SETUP is shared
+-- code with no OS gate on startLinuxSetup itself -- it is used for both
+-- Linux and macOS Setup windows, and never for Windows (which has its own
+-- separate WINDOWS_SETUP/windowsSetupTick entirely). This behavior has no
+-- macOS counterpart before 2.3.1.1, so it must stay Linux-only; macOS keeps
+-- its exact pre-2.3.1.1 scroll contract. Both actual gate sites below call
+-- this exact function (not a reimplementation of the same condition).
+function linuxConsoleAutoscrollAppliesOnThisOS()
+    return OS == "Linux"
+end
+
+-- Finding 4 (2.3.1.1 second adversarial review): pure decision, headlessly
+-- testable for the same reason as linuxConsoleAutoscrollAppliesOnThisOS
+-- above -- should the historical-provenance marker/banner (Finding 3) and
+-- the in-memory "Current Check result" section (Finding 5) apply on this
+-- OS? True only for Linux; macOS shares linuxSetupTick/LINUX_SETUP but
+-- never had either of those before 2.3.1.1 and must not gain them now.
+-- Windows never reaches this shared code at all (its own separate
+-- WINDOWS_SETUP/windowsSetupTick).
+function linuxHistoricalBannerAppliesOnThisOS()
+    return OS == "Linux"
+end
+
+-- Finding 5 (2.3.1.1 second adversarial review): verifyExistingSetup never
+-- writes a Check's own output to bootstrap.log (an ordinary Check never runs
+-- a bootstrap process at all), so a console that opens at the bottom (see
+-- Finding 3) would otherwise only ever show whatever the last HISTORICAL
+-- repair/bootstrap run happened to leave there. This builds a compact,
+-- in-memory-only section presenting the ACTUAL result of the Check that
+-- just ran, using ONLY that Check's own already-computed, already-tested
+-- evidence (overallState from deriveLinuxFinalPresentation, backend from
+-- buildCheckOnlyVerdict) -- never any persisted/historical status. Never
+-- written to bootstrap.log or any other file, and never changes product
+-- state; it exists purely as extra in-memory lines appended to what
+-- linuxSetupTick hands the console renderer. Optional fields (Reason/
+-- Profile/Backend) are omitted entirely when empty, never filled in as a
+-- misleading "OK". Pure and global for the same headless-testability
+-- reason as the other decision functions above.
+function buildCurrentLinuxCheckResultLines(overallState, verdict, profile)
+    verdict = verdict or {}
+    local lines = { setupText("current_check_result_title", "--- Current Check result ---") }
+
+    local statusLabel
+    if overallState == "ok" then
+        statusLabel = setupText("current_check_status_ok", "OK")
+    elseif overallState == "not_proven" then
+        statusLabel = setupText("current_check_status_not_proven", "NOT PROVEN")
+    else
+        statusLabel = setupText("current_check_status_failed", "FAILED")
+    end
+    lines[#lines + 1] = setupText("current_check_status_label", "Status: ") .. statusLabel
+
+    local profileText = trim(profile or "")
+    if profileText ~= "" then
+        lines[#lines + 1] = setupText("current_check_profile_label", "Profile: ") .. profileText
+    end
+
+    local backendText = trim(verdict.backend or "")
+    if backendText ~= "" then
+        lines[#lines + 1] = setupText("current_check_backend_label", "Backend: ") .. backendText
+    end
+
+    if overallState ~= "ok" then
+        local reasonText = trim(verdict.backendReason or "")
+        if reasonText == "" and verdict.adjustedErrors and #verdict.adjustedErrors > 0 then
+            reasonText = tostring(verdict.adjustedErrors[1])
+        end
+        if reasonText ~= "" then
+            lines[#lines + 1] = setupText("current_check_reason_label", "Reason: ") .. reasonText
+        end
+    end
+
+    return lines
+end
+
 function linuxSetupTick()
     if not LINUX_SETUP then return end
     if not gfx then return end
+
+    -- Console autoscroll (2.3.1.1): the completion transition below can
+    -- restore/resize the window on the very same tick it flips `finalized`
+    -- (see restoreLinuxWindowGeometry), so the log panel's layout metrics
+    -- (visibleLogLines etc.) aren't trustworthy yet on that exact tick.
+    -- Consuming the pending reset here, at the very top of the *next* tick,
+    -- guarantees the jump-to-bottom is computed after that layout has
+    -- actually settled, per a full deferred UI frame.
+    --
+    -- Finding 6 (2.3.1.1 adversarial review): linuxSetupTick/LINUX_SETUP is
+    -- shared code, used for both Linux and macOS Setup windows (there is no
+    -- OS gate on startLinuxSetup itself). This completion-follow transition
+    -- is new 2.3.1.1 behavior with no macOS counterpart before this release,
+    -- so it is gated to Linux only here -- macOS keeps its exact pre-2.3.1.1
+    -- scroll contract (no auto-snap on completion). The flag itself is still
+    -- armed unconditionally at both finalize sites below (harmless on
+    -- macOS, where it is simply never consumed) rather than also gating
+    -- those sites, to keep this fix to the one place that actually produces
+    -- an OS-visible effect.
+    if linuxConsoleAutoscrollAppliesOnThisOS() and LINUX_SETUP.pendingFinalScrollReset then
+        LINUX_SETUP.logScroll = 0
+        LINUX_SETUP.followTail = true
+        LINUX_SETUP.pendingFinalScrollReset = false
+    end
 
     if LINUX_SETUP.launchPending and LINUX_SETUP.launchCmd then
         if OS == "macOS" then
@@ -5364,7 +5836,30 @@ function linuxSetupTick()
     enforceSetupWindowMinimum(LINUX_SETUP)
 
     local state = parseStateFile(LINUX_SETUP.stateFile)
-    local logLines = labelHistoricalCheckOnlyLogLines(readTail(LINUX_SETUP.logFile, 400), LINUX_SETUP.checkVerdict ~= nil)
+    -- Finding 4 (2.3.1.1 second adversarial review): the historical-
+    -- provenance marker/banner (and, by construction, splitHistoricalLogBanner's
+    -- peeling of it in drawLinuxLogPanel) is Linux-only new-in-2.3.1.1 UI --
+    -- linuxSetupTick/LINUX_SETUP is shared with macOS (see
+    -- linuxConsoleAutoscrollAppliesOnThisOS above for the same reasoning
+    -- applied to the completion-follow feature), and macOS never had this
+    -- marker before this release. Passing isCheckOnly=false unconditionally
+    -- on non-Linux OSes means labelHistoricalCheckOnlyLogLines's own,
+    -- already-tested contract leaves the lines completely untouched there,
+    -- restoring macOS to its exact pre-2.3.1.1 Check-only console content.
+    local isLinuxCheckOnly = linuxHistoricalBannerAppliesOnThisOS() and LINUX_SETUP.checkVerdict ~= nil
+    local logLines = labelHistoricalCheckOnlyLogLines(readTail(LINUX_SETUP.logFile, 400), isLinuxCheckOnly)
+    if isLinuxCheckOnly then
+        -- Finding 5: append the actual current Check's own result as a
+        -- compact in-memory section after the historical content -- never
+        -- written to bootstrap.log, never changes product state. Linux-only
+        -- for the same reason as the historical marker above.
+        local presentation = deriveLinuxFinalPresentation(LINUX_SETUP.finalSuccess, LINUX_SETUP.checkVerdict.allBasicChecksOk, LINUX_SETUP.checkVerdict)
+        local currentCheckLines = buildCurrentLinuxCheckResultLines(
+            presentation.overallState, LINUX_SETUP.checkVerdict, profileForBackend(LINUX_SETUP.checkVerdict.backend))
+        for _, line in ipairs(currentCheckLines) do
+            logLines[#logLines + 1] = line
+        end
+    end
     local pidAlive, pid = linuxPidAlive(LINUX_SETUP.pidFile)
     if pidAlive then
         LINUX_SETUP.pidSeen = true
@@ -5379,6 +5874,10 @@ function linuxSetupTick()
     if wheel ~= lastWheel then
         local wheelStep = (wheel > lastWheel) and 3 or -3
         if LINUX_SETUP.logRect and isMouseIn(LINUX_SETUP.logRect.x, LINUX_SETUP.logRect.y, LINUX_SETUP.logRect.w, LINUX_SETUP.logRect.h) then
+            -- adjustLinuxLogScroll -> setLinuxLogScrollManual already updates
+            -- followTail: manual scroll always wins, and only keeps
+            -- auto-following the tail if this action left the view at (or
+            -- very near) the bottom.
             adjustLinuxLogScroll(wheelStep, LINUX_SETUP.totalLogLines or 0, LINUX_SETUP.visibleLogLines or 1)
         else
             local ctrlHeld = ((gfx.mouse_cap or 0) & 4) == 4
@@ -5398,6 +5897,7 @@ function linuxSetupTick()
         if not pidAlive and status ~= "" and status ~= "running" then
             local result = safePerformPostBootstrap(LINUX_SETUP.runtime, LINUX_SETUP.stateFile, LINUX_SETUP.logFile, status == "ok", state, LINUX_SETUP.separatorScript)
             LINUX_SETUP.finalized = true
+            LINUX_SETUP.pendingFinalScrollReset = true
             LINUX_SETUP.finalMessage = result.finalMessage
             LINUX_SETUP.finalSuccess = result.success
             LINUX_SETUP.summaryText = table.concat(result.finalMessage or {}, "\n")
@@ -5406,6 +5906,7 @@ function linuxSetupTick()
             if LINUX_SETUP.pidSeen or elapsed >= 5 then
                 local result = safePerformPostBootstrap(LINUX_SETUP.runtime, LINUX_SETUP.stateFile, LINUX_SETUP.logFile, status == "ok", state, LINUX_SETUP.separatorScript)
                 LINUX_SETUP.finalized = true
+                LINUX_SETUP.pendingFinalScrollReset = true
                 LINUX_SETUP.finalMessage = result.finalMessage
                 LINUX_SETUP.finalSuccess = result.success
                 LINUX_SETUP.summaryText = table.concat(result.finalMessage or {}, "\n")
@@ -5443,6 +5944,15 @@ function linuxSetupTick()
             return
         end
     else
+        -- While running, only auto-follow new log output if the user was
+        -- already at (or hasn't scrolled away from) the bottom; a deliberate
+        -- scroll-up during a running operation must not be overridden here.
+        -- Finding 6: Linux-only, same reasoning as the completion transition
+        -- above -- this active pull-to-bottom is new 2.3.1.1 behavior with
+        -- no macOS counterpart before this release.
+        if linuxConsoleAutoscrollAppliesOnThisOS() and LINUX_SETUP.followTail then
+            LINUX_SETUP.logScroll = 0
+        end
         linuxDrawStatus(state, logLines, pidAlive, pid)
     end
 
@@ -5522,7 +6032,7 @@ function linuxSetupTick()
             if total > visible then
                 local ratio = clamp((gfx.mouse_y - rect.y) / math.max(1, rect.h), 0, 1)
                 local maxScroll = math.max(0, total - visible)
-                LINUX_SETUP.logScroll = math.floor((1 - ratio) * maxScroll + 0.5)
+                setLinuxLogScrollManual(math.floor((1 - ratio) * maxScroll + 0.5), total, visible)
             end
         end
     end
@@ -5537,7 +6047,7 @@ function linuxSetupTick()
             if total > visible then
                 local ratio = clamp((gfx.mouse_y - rect.y) / math.max(1, rect.h), 0, 1)
                 local maxScroll = math.max(0, total - visible)
-                LINUX_SETUP.logScroll = math.floor((1 - ratio) * maxScroll + 0.5)
+                setLinuxLogScrollManual(math.floor((1 - ratio) * maxScroll + 0.5), total, visible)
             end
         end
     end
@@ -5552,6 +6062,22 @@ function linuxSetupTick()
         adjustLinuxLogScroll(5, LINUX_SETUP and LINUX_SETUP.totalLogLines or 0, LINUX_SETUP and LINUX_SETUP.visibleLogLines or 1)
     elseif key == 1685026670 then
         adjustLinuxLogScroll(-5, LINUX_SETUP and LINUX_SETUP.totalLogLines or 0, LINUX_SETUP and LINUX_SETUP.visibleLogLines or 1)
+    elseif key == 1885828464 then
+        -- Page Up: a full page (visibleLogLines) further back in the buffer.
+        adjustLinuxLogScroll(LINUX_SETUP and (LINUX_SETUP.visibleLogLines or 5) or 5, LINUX_SETUP and LINUX_SETUP.totalLogLines or 0, LINUX_SETUP and LINUX_SETUP.visibleLogLines or 1)
+    elseif key == 1885824110 then
+        -- Page Down: a full page back toward the bottom.
+        adjustLinuxLogScroll(-(LINUX_SETUP and (LINUX_SETUP.visibleLogLines or 5) or 5), LINUX_SETUP and LINUX_SETUP.totalLogLines or 0, LINUX_SETUP and LINUX_SETUP.visibleLogLines or 1)
+    elseif key == 1752132965 then
+        -- Home: jump to the oldest (top) end of the buffer.
+        if LINUX_SETUP then
+            setLinuxLogScrollManual(math.huge, LINUX_SETUP.totalLogLines or 0, LINUX_SETUP.visibleLogLines or 1)
+        end
+    elseif key == 6647396 then
+        -- End: explicitly return to the bottom and resume live-follow.
+        if LINUX_SETUP then
+            setLinuxLogScrollManual(0, LINUX_SETUP.totalLogLines or 0, LINUX_SETUP.visibleLogLines or 1)
+        end
     end
     if key == -1 or (LINUX_SETUP.finalized and key == 27) then
         gfx.quit()
@@ -6110,16 +6636,14 @@ end
 -- Pure decision, headlessly testable for the same reason as
 -- deriveLinuxFinalPresentation: should the final window's log panel open
 -- showing the TOP of the buffer (oldest lines first) instead of the bottom
--- (most recent, the panel's normal default)? True only for a Check-only final
--- window (checkVerdict ~= nil), the same condition linuxSetupTick uses to
--- gate labelHistoricalCheckOnlyLogLines -- that function always prepends its
--- historical-provenance marker as the very first line, and a panel that opens
--- at the bottom scrolls that marker out of view (the live AMD retest showed
--- the historical bootstrap.log tail with no visible marker, looking like
--- unlabeled current output). A live run's log panel is unaffected and keeps
--- opening at the bottom.
+-- (most recent, the panel's normal default)?
+--
+-- Linux Check-only windows open at the current result at the bottom. macOS
+-- keeps its pre-2.3.1.1 contract: Check-only opens at the top, while live
+-- setup still opens at the bottom. Windows uses a separate setup window and
+-- must not inherit either branch through this shared helper.
 function linuxLogPanelDefaultScrollToTop(checkVerdict)
-    return checkVerdict ~= nil
+    return OS == "macOS" and checkVerdict ~= nil
 end
 
 -- Verify-only path: fast file-existence checks only, no subprocess, no package import,
@@ -6159,9 +6683,8 @@ showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, fi
         lastMouseCap    = 0,
         lastMouseWheel  = gfx.mouse_wheel or 0,
         fontScale       = getLinuxSetupFontScale(),
-        -- math.huge clamps down to the max scroll offset (top of the buffer)
-        -- on the panel's first draw via syncLinuxLogScroll -- see
-        -- linuxLogPanelDefaultScrollToTop above.
+        -- math.huge clamps to the top on the first panel draw. The helper
+        -- preserves the platform-specific Check-only initial position.
         logScroll       = linuxLogPanelDefaultScrollToTop(checkVerdict) and math.huge or 0,
         stepFillByIndex = {},
         lastStepIndex   = 4,
@@ -6411,6 +6934,38 @@ function buildCheckOnlyFinalMessage(checks, allOk, verdict, backend, drumsepStat
     return finalMessage
 end
 
+function validatedCurrentLinuxProbe(deviceOut, probeErr, envJson, backend, profile)
+    if not deviceOut or trim(deviceOut) == "" then return nil end
+    if probeErr and trim(probeErr) ~= "" then return nil end
+    if not envJson or trim(envJson) == "" then return nil end
+
+    local candidate = {
+        ok = "true",
+        backend = trim(backend or ""),
+        profile = trim(profile or ""),
+        cudaAvailable = trim(envJsonValue(envJson, "cuda_available")),
+        cudaCount = trim(envJsonValue(envJson, "cuda_count")),
+        torchHip = trim(envJsonValue(envJson, "torch_hip")),
+    }
+    local cudaCount = tonumber(candidate.cudaCount)
+    local hipVersion = candidate.torchHip:match("^%d+%.%d+") ~= nil
+    local hipAbsent = candidate.torchHip == "" or candidate.torchHip == "null"
+
+    if candidate.profile ~= "linux-" .. candidate.backend then return nil end
+    if candidate.cudaAvailable ~= "true" and candidate.cudaAvailable ~= "false" then return nil end
+    if not cudaCount or cudaCount < 0 or cudaCount % 1 ~= 0 then return nil end
+    if candidate.backend == "rocm" then
+        if not hipVersion or candidate.cudaAvailable ~= "true" or cudaCount < 1 then return nil end
+    elseif candidate.backend == "cuda" then
+        if not hipAbsent or candidate.cudaAvailable ~= "true" or cudaCount < 1 then return nil end
+    elseif candidate.backend == "cpu" then
+        if not hipAbsent or candidate.cudaAvailable ~= "false" or cudaCount ~= 0 then return nil end
+    else
+        return nil
+    end
+    return candidate
+end
+
 verifyExistingSetup = function(runtime, separatorScript)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
@@ -6423,7 +6978,21 @@ verifyExistingSetup = function(runtime, separatorScript)
     local pythonPath = trim(resolvePath(effectiveState.PYTHON_PATH or effectiveState.VENV_PYTHON or capState.PYTHON_PATH or resolveLinuxPythonPath(effectiveState)))
     local ffmpegPath = trim(resolvePath(effectiveState.FFMPEG_PATH or capState.FFMPEG_PATH or resolveLinuxFfmpegPath(effectiveState)))
     local verification = verifyRuntimePaths(effectiveState, false)
-    local deviceOut, _, probeErr = probeRuntimeDevices(verification.pythonPath, separatorScript)
+    if OS == "Linux" then
+        CURRENT_LINUX_PROBE = nil
+    end
+    local function runDeviceProbe()
+        if STEMWERK_SETUP_HEADLESS_TEST and type(STEMWERK_SETUP_TEST_HOOKS) == "table"
+            and type(STEMWERK_SETUP_TEST_HOOKS.probeRuntimeDevices) == "function" then
+            return STEMWERK_SETUP_TEST_HOOKS.probeRuntimeDevices(verification.pythonPath, separatorScript)
+        end
+        return probeRuntimeDevices(verification.pythonPath, separatorScript)
+    end
+    local probeCallOk, deviceOut, _, probeErr = pcall(runDeviceProbe)
+    if not probeCallOk then
+        probeErr = "device_probe_exception:" .. tostring(deviceOut)
+        deviceOut = nil
+    end
     local envJson = extractEnvJson(deviceOut or "")
     local deviceNames = collectDeviceNames(deviceOut or "")
     local backend, backendReason = detectBackendFromProbe(deviceOut, envJson)
@@ -6431,6 +7000,18 @@ verifyExistingSetup = function(runtime, separatorScript)
         backendReason = probeErr
     end
     local profile = profileForBackend(backend)
+
+    -- Publish current evidence only after the complete probe result has been
+    -- validated as one coherent Linux CPU/CUDA/ROCm observation. The old
+    -- evidence was cleared before the call above, so failure, exception, or
+    -- partial output leaves the invocation fail-neutral.
+    if OS == "Linux" then
+        local validatedProbe = validatedCurrentLinuxProbe(deviceOut, probeErr, envJson, backend, profile)
+        if validatedProbe then
+            CURRENT_LINUX_PROBE = validatedProbe
+        end
+    end
+
     local checkProbe = reconcileCheckVerification(effectiveState, capState, readyState, verification, envJson, deviceNames, backend, backendReason, logFile)
     local verifiedRuntimeOk = checkProbe.verifiedRuntimeOk
     if verifiedRuntimeOk then
@@ -6449,8 +7030,7 @@ verifyExistingSetup = function(runtime, separatorScript)
           detail = fileExists(capFile) and capFile or "Not found" },
         { label = "Python path",         ok = pythonPath ~= "" and fileExists(pythonPath),
           detail = pythonPath ~= "" and pythonPath or "Not set in bootstrap.env" },
-        { label = "FFmpeg path",         ok = ffmpegPath ~= "" and fileExists(ffmpegPath),
-          detail = ffmpegPath ~= "" and ffmpegPath or "Not set in bootstrap.env/capabilities.env" },
+        buildFfmpegCheckRow(verification, ffmpegPath),
         { label = "Virtual environment", ok = pathExists(runtime.venvDir),
           detail = pathExists(runtime.venvDir) and runtime.venvDir or ("Not found: " .. tostring(runtime.venvDir)) },
     }
@@ -6667,6 +7247,8 @@ startLinuxSetup = function(runtime, separatorScript, mode)
         lastMouseWheel = gfx.mouse_wheel or 0,
         fontScale = getLinuxSetupFontScale(),
         logScroll = 0,
+        followTail = true,
+        pendingFinalScrollReset = false,
         stepFillByIndex = {},
         lastStepIndex = 1,
         lastProgressPct = 0,
@@ -6736,7 +7318,16 @@ function existingRuntimeSetupMenuTick()
         if id == "support-bundle" then return setupSummaryLabel(id, "Save bundle") end
         if id == "open-logs" then return setupSummaryLabel(id, "Open logs") end
         if id == "open-runtime" then return setupSummaryLabel(id, "Open runtime") end
-        if id == "drumsep-runtime" then return setupSummaryLabel(id, "DrumKit CPU") end
+        if id == "drumsep-runtime" then
+            -- macOS (linuxGpuCapability nil): unchanged "DrumKit CPU".
+            -- Linux: reflect what capabilities.env actually evidences;
+            -- "unknown" gets the neutral generic label, never a guess.
+            local cap = choice and choice.linuxGpuCapability
+            if cap == "cuda" then return setupText("setup_summary_drumkit_cuda", "DrumKit CUDA") end
+            if cap == "cpu" then return setupText("setup_summary_drumkit_cpu", "DrumKit CPU") end
+            if cap == "unknown" then return setupText("setup_summary_drumkit_generic", "DrumKit") end
+            return setupSummaryLabel(id, "DrumKit CPU")
+        end
         if id == "drumsep-rocm-runtime" then return setupSummaryLabel(id, "DrumKit ROCm") end
         if id == "drumsep-cuda-runtime" then return setupSummaryLabel(id, "DrumKit CUDA") end
         if id == "drumsep-directml-runtime" then return setupSummaryLabel(id, "DrumKit DML") end
@@ -7018,7 +7609,7 @@ function existingRuntimeSetupMenuTick()
         local o = m.windowsOverview
         local statusLine = "Last setup: " .. tostring(prettySetupStatus(o.setupStatus))
         if trim(o.setupReason or "") ~= "" then
-            statusLine = statusLine .. " (" .. tostring(prettySetupReason(o.setupReason)) .. ")"
+            statusLine = statusLine .. " (" .. tostring(windowsSafeReasonText(prettySetupReason(o.setupReason))) .. ")"
         end
         local rows = {
             "Profile/backend: " .. tostring(o.profile) .. " / " .. tostring(o.backend),
@@ -7054,16 +7645,15 @@ function existingRuntimeSetupMenuTick()
         end
     end
 
-    if m.updateDetected and y + linuxLineHeight(18) <= infoBottom then
-        gfx.setfont(1, "Arial Bold", linuxFontSize(12))
-        gfx.set(0.97, 0.80, 0.15, 1)
-        gfx.x = bodyX
-        gfx.y = y
-        gfx.drawstr(ellipsizeToWidth(setupText("setup_update_detected_repair_recommended", "Update detected - Repair recommended to apply new dependencies."), leftColW, "Arial Bold", linuxFontSize(12), 0))
-        y = y + linuxLineHeight(18)
-    end
-
-    if not compact and y + linuxLineHeight(18) <= infoBottom then
+    -- 2.3.1.1: a single, non-duplicate, non-alarmist update notice. A newer
+    -- Setup script than what was last recorded does not by itself mean
+    -- Repair is required -- Check only can already prove the runtime is
+    -- fully healthy and policy-compliant, so this must never assert "Repair
+    -- recommended" unconditionally. It only ever advises: run Check only
+    -- first, then Repair only if Check reports something is actually
+    -- needed. (See the models-kept notice below, and the "Models are kept"
+    -- headline in the buttons themselves, for the models guarantee.)
+    if not compact and OS ~= "Windows" and y + linuxLineHeight(18) <= infoBottom then
         gfx.setfont(1, "Arial", linuxFontSize(12))
         gfx.set(0.38, 0.72, 0.46, 1)
         gfx.x = bodyX
@@ -7072,7 +7662,7 @@ function existingRuntimeSetupMenuTick()
         y = y + linuxLineHeight(18)
     end
 
-    if not compact and y + linuxLineHeight(18) <= infoBottom then
+    if not compact and OS ~= "Windows" and y + linuxLineHeight(18) <= infoBottom then
         gfx.setfont(1, "Arial", linuxFontSize(12))
         gfx.set(0.90, 0.52, 0.24, 1)
         gfx.x = bodyX
@@ -7087,7 +7677,14 @@ function existingRuntimeSetupMenuTick()
             gfx.set(0.97, 0.80, 0.15, 1)
             gfx.x = bodyX
             gfx.y = y
-            gfx.drawstr(ellipsizeToWidth(setupText("setup_update_detected_choose_action", "Update detected - run Repair to apply changes"), leftColW, "Arial Bold", linuxFontSize(13), 0))
+            -- Windows has no Repair/Rebuild venv button (install/repair is
+            -- owned by the external installer), so it must never point at a
+            -- hidden action -- a dedicated key, not a repurposed shared one.
+            if OS == "Windows" then
+                gfx.drawstr(ellipsizeToWidth(setupText("setup_update_detected_choose_action_windows", "Setup script updated - run Check only; re-run the STEMwerk installer if it reports changes are needed."), leftColW, "Arial Bold", linuxFontSize(13), 0))
+            else
+                gfx.drawstr(ellipsizeToWidth(setupText("setup_update_detected_choose_action", "Setup script updated since last run - run Check only first; Repair only if it reports changes are needed."), leftColW, "Arial Bold", linuxFontSize(13), 0))
+            end
         else
             gfx.set(0.20, 0.92, 0.28, 1)
             gfx.x = bodyX
@@ -7489,10 +8086,162 @@ function existingRuntimeSetupMenuTick()
     reaper.defer(existingRuntimeSetupMenuTick)
 end
 
+-- Linux Drum Kit Split labeling (2.3.1.1): "drumsep-runtime" always installs
+-- via the same generic torch wheel (see install_drumsep_runtime in
+-- STEMwerk_Bootstrap_Linux.sh) -- it never selects a backend itself. That
+-- wheel uses CUDA automatically when the machine has it, and behaves as
+-- CPU-only otherwise; "drumsep-rocm-runtime" is the separate, explicit ROCm
+-- install path. So the right *label* for the "drumsep-runtime" choice
+-- depends on what capabilities.env already recorded about this machine from
+-- the last Check/Setup run -- this function only reads that existing,
+-- read-only evidence, it never probes hardware itself and changes no
+-- backend selection or runtime packages.
+--
+-- Finding 4 (2.3.1.1 first adversarial review): fail-neutral capability-state
+-- interpretation. The original bug treated ANY non-empty, non-"null"
+-- TORCH_HIP as ROCm proof, with no cross-check against CUDA_AVAILABLE/
+-- CUDA_COUNT at all -- "false", "0", or other garbage in TORCH_HIP would
+-- have been wrongly accepted. detectBackendFromProbe (above) combines the
+-- same raw torch-probe evidence into a single classification using a strict
+-- rule (ROCm requires a genuine HIP version string AND cuda_available==
+-- "true" AND cuda_count>0, since ROCm-enabled torch also exposes GPUs via
+-- the CUDA API -- see docs/ROCm.md); that rule is reused here (via the
+-- shared schema checks below) instead of re-deriving a second, independent
+-- classification that could drift from it.
+--
+-- Finding 2 (2.3.1.1 second adversarial review): the first-round fix still
+-- trusted persisted capabilities.env as its PRIMARY source of truth (gated
+-- only on CAP_VERSION/PROFILE/a same-invocation STATUS=="ok" check) -- but
+-- none of those prove a probe actually ran during THIS Setup invocation;
+-- capabilities.env, ready_to_go.env, and a stale-but-"ok" STATUS can all
+-- persist untouched for weeks. A GPU claim may now only ever come from
+-- state.CURRENT_PROBE_* -- invocation-local evidence populated exclusively
+-- by verifyExistingSetup's live probeRuntimeDevices() call in this same
+-- running process (see CURRENT_LINUX_PROBE above), never read from disk.
+-- No clock/age threshold is used as a substitute: state.CURRENT_PROBE_OK
+-- being exactly "true" is the only "a probe just happened" signal, and it
+-- can never survive past this invocation (a fresh dofile() resets it).
+--
+-- Persisted capabilities.env is still consulted, but demoted to a pure
+-- consistency cross-check, never a primary source: if it exists and its own
+-- BACKEND actively contradicts the current-invocation probe's backend, the
+-- whole result is treated as unreliable (neutral) rather than picking one.
+--
+-- Global (not local): pure decision, headlessly testable for the same
+-- reason as deriveLinuxFinalPresentation / linuxLogPanelDefaultScrollToTop.
+function resolveLinuxDrumsepGpuCapability(runtime, state)
+    if not runtime or not runtime.runtimeState then return "unknown" end
+    if not state then return "unknown" end
+
+    if trim(state.CURRENT_PROBE_OK or "") ~= "true" then return "unknown" end
+
+    local profile = trim(state.CURRENT_PROBE_PROFILE or "")
+    if not profile:match("^linux%-") then return "unknown" end
+
+    local backend = trim(state.CURRENT_PROBE_BACKEND or "")
+    local cudaAvailable = trim(state.CURRENT_PROBE_CUDA_AVAILABLE or "")
+    local torchHip = trim(state.CURRENT_PROBE_TORCH_HIP or "")
+    local cudaCount = tonumber(trim(state.CURRENT_PROBE_CUDA_COUNT or "")) or 0
+    local cudaAvailableValid = (cudaAvailable == "true" or cudaAvailable == "false")
+    local rocmEvidence = (torchHip ~= "" and torchHip ~= "null" and torchHip:match("^%d+%.%d+") ~= nil)
+
+    if backend ~= "cpu" and backend ~= "cuda" and backend ~= "rocm" then
+        return "unknown"
+    end
+
+    -- Persisted capabilities.env may only SUPPORT this current-invocation
+    -- evidence, never replace it: a contradicting persisted BACKEND means
+    -- the two disagree and neither can be trusted alone.
+    local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    if fileExists(capFile) then
+        local capState = parseStateFile(capFile)
+        local persistedBackend = trim(capState.BACKEND or "")
+        if persistedBackend ~= "" and persistedBackend ~= backend then
+            return "unknown"
+        end
+    end
+
+    if backend == "rocm" then
+        if rocmEvidence and cudaAvailableValid and cudaAvailable == "true" and cudaCount > 0 then
+            return "rocm"
+        end
+        return "unknown"
+    end
+
+    if backend == "cuda" then
+        if rocmEvidence then return "unknown" end
+        if cudaAvailableValid and cudaAvailable == "true" then
+            return "cuda"
+        end
+        return "unknown"
+    end
+
+    -- backend == "cpu"
+    if rocmEvidence then return "unknown" end
+    if cudaAvailableValid and cudaAvailable == "true" then return "unknown" end
+    if cudaAvailableValid and cudaAvailable == "false" then
+        return "cpu"
+    end
+    return "unknown"
+end
+
+-- Global (not local) and side-effect-free (no gfx, no ExtState, no file
+-- writes) specifically so the exact production policy -- what buttons this
+-- OS/machine is allowed to see -- is independently, headlessly testable.
+-- On Windows, install/repair/uninstall is owned by the external STEMwerk
+-- .exe installer, so this in-REAPER Setup menu must only ever offer
+-- read-only actions there (Check only, Save Support Bundle, Open logs
+-- folder, Open runtime folder, Cancel); every mutating action below
+-- (Repair, Rebuild venv, DrumSep runtime installs, Delete models/runtime)
+-- stays gated to OS ~= "Windows".
+function buildSetupMenuChoices(runtime, state)
+    local choices = {
+        { id = "verify", accent = { 0.22, 0.70, 0.50 } },
+        { id = "support-bundle", accent = { 0.26, 0.60, 0.88 } },
+        { id = "open-logs", accent = { 0.35, 0.56, 0.82 } },
+        { id = "open-runtime", accent = { 0.35, 0.56, 0.82 } },
+    }
+    if OS ~= "Windows" then
+        choices[#choices + 1] = { id = "repair", accent = { 0.92, 0.55, 0.10 } }
+        choices[#choices + 1] = { id = "rebuild-venv", accent = { 0.45, 0.52, 0.90 } }
+        local machineCapability = (OS == "Linux") and resolveLinuxDrumsepGpuCapability(runtime, state) or nil
+        -- "drumsep-runtime" itself only ever installs the generic CPU/CUDA
+        -- torch wheel (see resolveLinuxDrumsepGpuCapability above), never
+        -- ROCm -- so on ROCm-capable hardware it must still be labeled CPU;
+        -- ROCm gets its own separate "drumsep-rocm-runtime" choice below.
+        local drumsepRuntimeLabelCapability = machineCapability
+        if drumsepRuntimeLabelCapability == "rocm" then
+            drumsepRuntimeLabelCapability = "cpu"
+        end
+        choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 }, linuxGpuCapability = drumsepRuntimeLabelCapability }
+        if OS == "Linux" and machineCapability == "rocm" then
+            choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
+        end
+        choices[#choices + 1] = { id = "delete-models", accent = { 0.88, 0.28, 0.28 } }
+        choices[#choices + 1] = { id = "delete-runtime", accent = { 0.82, 0.22, 0.22 } }
+    end
+    choices[#choices + 1] = { id = "cancel", accent = { 0.38, 0.38, 0.42 } }
+    return choices
+end
+
 do
     function startExistingRuntimeSetupMenu(runtime, separatorScript)
         local stateFileForVer = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
         local storedState = fileExists(stateFileForVer) and parseStateFile(stateFileForVer) or {}
+        -- Finding 2: merge in this invocation's own live probe evidence, if
+        -- one has actually run in this same process (see CURRENT_LINUX_PROBE
+        -- above) -- never persisted, so this is nil on a freshly (re-)opened
+        -- Setup window until a real Check/probe completes.
+        local currentProbe = CURRENT_LINUX_PROBE
+        CURRENT_LINUX_PROBE = nil
+        if currentProbe then
+            storedState.CURRENT_PROBE_OK = currentProbe.ok
+            storedState.CURRENT_PROBE_BACKEND = currentProbe.backend
+            storedState.CURRENT_PROBE_PROFILE = currentProbe.profile
+            storedState.CURRENT_PROBE_CUDA_AVAILABLE = currentProbe.cudaAvailable
+            storedState.CURRENT_PROBE_CUDA_COUNT = currentProbe.cudaCount
+            storedState.CURRENT_PROBE_TORCH_HIP = currentProbe.torchHip
+        end
         local lastSetupVersion = trim(storedState.STEMWERK_SETUP_VERSION or "")
         local currentVersion = SETUP_VERSION or ""
         local updateDetected = (lastSetupVersion ~= "" and lastSetupVersion ~= currentVersion)
@@ -7502,27 +8251,7 @@ do
             windowsOverview = buildWindowsSetupOverview(runtime, currentVersion, lastSetupVersion)
         end
 
-        local choices = {
-            { id = "verify", accent = { 0.22, 0.70, 0.50 } },
-            { id = "repair", accent = { 0.92, 0.55, 0.10 } },
-            { id = "rebuild-venv", accent = { 0.45, 0.52, 0.90 } },
-            { id = "support-bundle", accent = { 0.26, 0.60, 0.88 } },
-            { id = "open-logs", accent = { 0.35, 0.56, 0.82 } },
-            { id = "open-runtime", accent = { 0.35, 0.56, 0.82 } },
-        }
-        if OS == "Windows" then
-            choices[#choices + 1] = { id = "drumsep-cuda-runtime", accent = { 0.22, 0.62, 0.70 } }
-            choices[#choices + 1] = { id = "drumsep-directml-runtime", accent = { 0.12, 0.58, 0.76 } }
-        end
-        if OS ~= "Windows" then
-            choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }
-            if OS == "Linux" then
-                choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
-            end
-            choices[#choices + 1] = { id = "delete-models", accent = { 0.88, 0.28, 0.28 } }
-            choices[#choices + 1] = { id = "delete-runtime", accent = { 0.82, 0.22, 0.22 } }
-        end
-        choices[#choices + 1] = { id = "cancel", accent = { 0.38, 0.38, 0.42 } }
+        local choices = buildSetupMenuChoices(runtime, storedState)
         refreshSetupMenuChoiceLabels({ choices = choices })
 
         SETUP_MENU = {
@@ -7540,6 +8269,7 @@ do
         }
         gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)
         reaper.defer(existingRuntimeSetupMenuTick)
+        return choices
     end
 
     function shouldSkipMacBootstrap(runtime)

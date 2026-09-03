@@ -29,6 +29,7 @@ scripts/reaper/i18n/stemwerk_language_wrapper.lua	i18n/stemwerk_language_wrapper
 installer/assets/stemwerk.svg	stemwerk.svg
 README.md	README.md
 LICENSE	LICENSE
+THIRD_PARTY_NOTICES.md	THIRD_PARTY_NOTICES.md
 scripts/reaper/_internal/STEMwerk_Devices.lua	_internal/STEMwerk_Devices.lua
 scripts/reaper/_internal/STEMwerk_DKS_Import.lua	_internal/STEMwerk_DKS_Import.lua
 scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua	_internal/STEMwerk_DrumKit_Workflow.lua

@@ -1,7 +1,6 @@
 param(
     [string]$RuntimeBase = "",
     [switch]$CleanRuntime,
-    [switch]$CleanModels,
     [switch]$BundledRuntime,
     [switch]$OfflineBundledAllmodels
 )
@@ -88,7 +87,6 @@ if ([string]::IsNullOrWhiteSpace($RuntimeBase)) {
 $RuntimeBase = Normalize-WindowsPath $RuntimeBase
 
 $cleanRuntimeRequested = $CleanRuntime.IsPresent -or ($env:STEMWERK_CLEAN_RUNTIME -eq "1")
-$cleanModelsRequested = $CleanModels.IsPresent -or ($env:STEMWERK_CLEAN_MODELS -eq "1")
 
 $stateDir = Join-NormalizedWindowsPath $RuntimeBase @("state")
 $logDir = Join-NormalizedWindowsPath $RuntimeBase @("logs")
@@ -100,9 +98,6 @@ if ($cleanRuntimeRequested) {
     foreach ($target in $runtimeTargets) {
         Remove-ChildDirectory -BasePath $RuntimeBase -ChildName $target | Out-Null
     }
-}
-if ($cleanModelsRequested) {
-    Remove-ChildDirectory -BasePath $RuntimeBase -ChildName "models" | Out-Null
 }
 
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
@@ -134,14 +129,9 @@ if ($OfflineBundledAllmodels.IsPresent) {
 LogLine "Installer bootstrap started" $logFile
 LogLine ("RUNTIME_BASE=" + $RuntimeBase) $logFile
 LogLine ("Installer progress log: " + $logFile) $logFile
-if ($cleanRuntimeRequested -or $cleanModelsRequested) {
+if ($cleanRuntimeRequested) {
     LogLine "STEMWERK_STATUS detail=Applying requested pre-setup cleanup." $logFile
-    if ($cleanRuntimeRequested) {
-        LogLine "STEMWERK_STATUS detail=Removed previous runtime state/logs/venv/cache folders." $logFile
-    }
-    if ($cleanModelsRequested) {
-        LogLine "STEMWERK_STATUS detail=Removed cached models folder (%LOCALAPPDATA%\\STEMwerk\\models)." $logFile
-    }
+    LogLine "STEMWERK_STATUS detail=Removed previous runtime state/logs/venv/cache folders." $logFile
 } else {
     LogLine "STEMWERK_STATUS detail=Keeping existing runtime cache and model folders." $logFile
 }

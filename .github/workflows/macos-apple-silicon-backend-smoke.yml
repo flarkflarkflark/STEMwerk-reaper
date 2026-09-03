@@ -14,6 +14,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Lua
+        uses: leafo/gh-actions-lua@v11
+        with:
+          luaVersion: "5.4"
+
+      - name: Provide GNU coreutils (sha256sum) on PATH
+        run: |
+          brew install coreutils
+          command -v sha256sum
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
