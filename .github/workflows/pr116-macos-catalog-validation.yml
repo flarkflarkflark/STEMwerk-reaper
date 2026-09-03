@@ -62,7 +62,9 @@ jobs:
           python3 -m pip install --no-cache-dir --upgrade pip
           python3 -m pip install --no-cache-dir -c scripts/reaper/constraints/macos.txt "audio-separator==0.23.0" pyyaml
           python3 -m pip install --no-cache-dir --force-reinstall --no-deps "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1"
+          python3 -m pip install --no-cache-dir onnxruntime-silicon || python3 -m pip install --no-cache-dir "onnxruntime>=1.21,<1.22"
           python3 -c "import importlib.metadata as m; print('audio-separator', m.version('audio-separator'))"
+          python3 -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)"
 
       - name: Write isolated production-code test
         run: |
