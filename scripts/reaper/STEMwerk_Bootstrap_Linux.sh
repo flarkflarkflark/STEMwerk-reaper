@@ -22,6 +22,7 @@ DRUMSEP_ONNX2TORCH_VERSION="1.5.15"
 DRUMSEP_ONNX2TORCH_PY313_VERSION="1.6.0"
 DRUMSEP_TORCH_VERSION="2.12.0"
 DRUMSEP_TORCHVISION_VERSION="0.27.0"
+DRUMSEP_CPU_TORCH_INDEX_URL="https://download.pytorch.org/whl/cpu"
 DRUMSEP_NUMBA_VERSION="0.65.1"
 DRUMSEP_ROCM_TORCH_VERSION="2.9.1+rocm6.4"
 DRUMSEP_ROCM_TORCHVISION_VERSION="0.24.1+rocm6.4"
@@ -1370,6 +1371,43 @@ PY
   esac
 }
 
+install_drumsep_mdxc_packages() {
+  _py="$1"
+  # audio-separator also declares diffq for its Demucs model family. STEMwerk's
+  # managed Direct Kit model is MDX23C and never imports that compiled module.
+  if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir --no-deps \
+    "audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}"; then
+    return 1
+  fi
+  pip_install_with_scope drumsep "${_py}" --no-cache-dir \
+    "numpy==${DRUMSEP_NUMPY_VERSION}" \
+    "onnxruntime==${DRUMSEP_ONNXRUNTIME_VERSION}" \
+    "onnx==${DRUMSEP_ONNX_VERSION}" \
+    "onnx2torch==${DRUMSEP_ONNX2TORCH_VERSION}" \
+    "onnx2torch-py313==${DRUMSEP_ONNX2TORCH_PY313_VERSION}" \
+    "numba==${DRUMSEP_NUMBA_VERSION}" \
+    "beartype==0.18.5" "einops==0.8.2" "julius==0.2.7" \
+    "librosa==0.11.0" "ml_collections==1.1.0" "pydub==0.25.1" "pyyaml==6.0.3" \
+    "requests==2.34.2" "resampy==0.4.3" "rotary-embedding-torch==0.6.5" \
+    "samplerate==0.1.0" "scipy==1.17.1" "six==1.17.0" "tqdm==4.67.3"
+}
+
+verify_drumsep_package_integrity() {
+  _py="$1"
+  _allowed="audio-separator ${DRUMSEP_AUDIO_SEPARATOR_VERSION} requires diffq, which is not installed."
+  if _check_output="$("${_py}" -m pip check 2>&1)"; then
+    log_step "DrumSep package integrity check passed"
+    return 0
+  fi
+  _unexpected="$(printf "%s\n" "${_check_output}" | grep -Fvx "${_allowed}" || true)"
+  if [ -n "${_unexpected}" ]; then
+    log_step "DrumSep package integrity check failed: ${_unexpected}"
+    return 1
+  fi
+  log_step "DrumSep package integrity check accepted unused Demucs-only diffq metadata dependency"
+  return 0
+}
+
 install_drumsep_rocm_runtime() {
   _log="$(drumsep_rocm_log_file)"
   _py="$(drumsep_rocm_runtime_python)"
@@ -1425,26 +1463,11 @@ install_drumsep_rocm_runtime() {
   fi
 
   set_progress "4" "${STEP_TOTAL}" "Installing DrumSep packages"
-  if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir --no-deps \
-    "audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}" >> "${_log}" 2>&1; then
-    write_drumsep_rocm_state "install_failed" "missing" "audio_separator_install_failed"
-    return 1
-  fi
-  if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir \
-    "numpy==${DRUMSEP_NUMPY_VERSION}" \
-    "onnxruntime==${DRUMSEP_ONNXRUNTIME_VERSION}" \
-    "onnx==${DRUMSEP_ONNX_VERSION}" \
-    "onnx2torch==${DRUMSEP_ONNX2TORCH_VERSION}" \
-    "onnx2torch-py313==${DRUMSEP_ONNX2TORCH_PY313_VERSION}" \
-    "numba==${DRUMSEP_NUMBA_VERSION}" \
-    "beartype==0.18.5" "diffq==0.2.4" "einops==0.8.2" "julius==0.2.7" \
-    "librosa==0.11.0" "ml_collections==1.1.0" "pydub==0.25.1" "pyyaml==6.0.3" \
-    "requests==2.34.2" "resampy==0.4.3" "rotary-embedding-torch==0.6.5" \
-    "samplerate==0.1.0" "scipy==1.17.1" "six==1.17.0" "tqdm==4.67.3" >> "${_log}" 2>&1; then
+  if ! install_drumsep_mdxc_packages "${_py}" >> "${_log}" 2>&1; then
     write_drumsep_rocm_state "install_failed" "missing" "package_install_failed"
     return 1
   fi
-  if ! "${_py}" -m pip check >> "${_log}" 2>&1; then
+  if ! verify_drumsep_package_integrity "${_py}" >> "${_log}" 2>&1; then
     write_drumsep_rocm_state "install_failed" "missing" "pip_check_failed"
     return 1
   fi
@@ -1496,18 +1519,28 @@ install_drumsep_runtime() {
   fi
 
   set_drumsep_substep_progress "3" "${_drumsep_step_total}" "Installing DrumSep packages"
-  if ! pip_install_with_scope drumsep "${_drumsep_py}" \
-    "audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}" \
-    "numpy==${DRUMSEP_NUMPY_VERSION}" \
-    "onnxruntime==${DRUMSEP_ONNXRUNTIME_VERSION}" \
-    "onnx==${DRUMSEP_ONNX_VERSION}" \
-    "onnx2torch==${DRUMSEP_ONNX2TORCH_VERSION}" \
-    "onnx2torch-py313==${DRUMSEP_ONNX2TORCH_PY313_VERSION}" \
-    "torch==${DRUMSEP_TORCH_VERSION}" \
-    "torchvision==${DRUMSEP_TORCHVISION_VERSION}" \
-    "numba==${DRUMSEP_NUMBA_VERSION}" \
-    "librosa==0.11.0" >> "${_drumsep_log}" 2>&1; then
+  _drumsep_wheelhouse="$(bundled_drumsep_wheelhouse_dir || true)"
+  if [ -n "${_drumsep_wheelhouse}" ]; then
+    if ! pip_install_with_scope drumsep "${_drumsep_py}" --no-cache-dir \
+      "torch==${DRUMSEP_TORCH_VERSION}+cpu" \
+      "torchvision==${DRUMSEP_TORCHVISION_VERSION}+cpu" >> "${_drumsep_log}" 2>&1; then
+      write_drumsep_state "install_failed" "missing" "cpu_torch_install_failed"
+      return 1
+    fi
+  else
+    if ! "${_drumsep_py}" -m pip install --no-cache-dir --index-url "${DRUMSEP_CPU_TORCH_INDEX_URL}" \
+      "torch==${DRUMSEP_TORCH_VERSION}+cpu" \
+      "torchvision==${DRUMSEP_TORCHVISION_VERSION}+cpu" >> "${_drumsep_log}" 2>&1; then
+      write_drumsep_state "install_failed" "missing" "cpu_torch_install_failed"
+      return 1
+    fi
+  fi
+  if ! install_drumsep_mdxc_packages "${_drumsep_py}" >> "${_drumsep_log}" 2>&1; then
     write_drumsep_state "install_failed" "missing" "package_install_failed"
+    return 1
+  fi
+  if ! verify_drumsep_package_integrity "${_drumsep_py}" >> "${_drumsep_log}" 2>&1; then
+    write_drumsep_state "install_failed" "missing" "pip_check_failed"
     return 1
   fi
 

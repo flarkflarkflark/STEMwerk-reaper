@@ -58,6 +58,28 @@ DIRECT_DKS_MODEL_YAML_URL = (
     "mdx_model_data/mdx_c_configs/"
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 )
+# audio-separator's own list_supported_model_files() fetches its canonical
+# catalog from exactly this URL when it isn't already on disk (same URL in
+# both the 0.23.0 and 0.34.1 pins STEMwerk uses). Reused verbatim here as the
+# last-resort authority instead of ever fabricating empty catalog sections.
+AUDIO_SEPARATOR_CANONICAL_DOWNLOAD_CHECKS_URL = (
+    "https://raw.githubusercontent.com/TRvlvr/application_data/main/filelists/download_checks.json"
+)
+# The sections audio-separator's list_supported_model_files() indexes
+# directly (model_downloads_list["..."]) without a .get() guard. A
+# download_checks.json missing any of these makes audio-separator raise
+# KeyError, or -- if the section is merely present but empty -- makes every
+# model in it permanently unresolvable, since audio-separator never
+# re-fetches its real catalog once a file already exists at this path.
+AUDIO_SEPARATOR_REQUIRED_CATALOG_SECTIONS = (
+    "demucs_download_list",
+    "vr_download_list",
+    "mdx_download_list",
+    "mdx_download_vip_list",
+    "mdx23c_download_list",
+    "mdx23c_download_vip_list",
+    "roformer_download_list",
+)
 DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
 DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
 DRUMSEP_RUNTIME_CUDA_DIRNAME = ".venv-drumsep-cuda"
@@ -1391,25 +1413,65 @@ def _resolve_direct_dks_model_catalog_entry(requested_model: str, model_cache_di
     return resolved_default, fallback_assets, None, checked_paths, "builtin_fallback"
 
 
+def _catalog_has_required_audio_separator_sections(data: Any) -> bool:
+    if not isinstance(data, dict):
+        return False
+    return all(
+        isinstance(data.get(section_name), dict)
+        for section_name in AUDIO_SEPARATOR_REQUIRED_CATALOG_SECTIONS
+    )
+
+
+def _fetch_authoritative_audio_separator_catalog(timeout: int = 120) -> Dict[str, Any]:
+    # Same URL, same "just fetch the JSON" approach audio-separator's own
+    # list_supported_model_files() uses -- not a STEMwerk-invented source.
+    with urllib.request.urlopen(AUDIO_SEPARATOR_CANONICAL_DOWNLOAD_CHECKS_URL, timeout=timeout) as response:
+        payload = response.read()
+    return json.loads(payload.decode("utf-8"))
+
+
 def _ensure_runtime_download_checks_has_drumsep(model_cache_dir: Path, entry_name: str, entry_payload: Dict[str, str], source_checks_path: Optional[Path]) -> Tuple[bool, str]:
     checks_path = model_cache_dir / "download_checks.json"
-    checks_data: Dict[str, Any]
+
+    checks_data: Optional[Dict[str, Any]] = None
+    loaded_from_runtime_file = False
     try:
         if checks_path.exists():
-            checks_data = _read_json_file(checks_path)
-        elif source_checks_path and source_checks_path.exists():
-            checks_data = _read_json_file(source_checks_path)
-        else:
-            checks_data = {}
+            candidate = _read_json_file(checks_path)
+            if _catalog_has_required_audio_separator_sections(candidate):
+                checks_data = candidate
+                loaded_from_runtime_file = True
+        if checks_data is None and source_checks_path and source_checks_path.exists():
+            candidate = _read_json_file(source_checks_path)
+            if _catalog_has_required_audio_separator_sections(candidate):
+                checks_data = candidate
     except Exception as exc:
         return False, f"download_checks_read_failed:{exc}"
+
+    if checks_data is None:
+        # Neither the runtime cache nor a bundled/dev-repo snapshot has a
+        # complete catalog. Fabricating the missing sections as empty dicts
+        # would stop audio-separator's own KeyError, but since it never
+        # re-fetches its real catalog once a file already exists here, that
+        # silently makes every model in those sections (e.g. Normal Stems'
+        # htdemucs) permanently unresolvable, even once its weights are on
+        # disk. Obtain the real catalog instead, the same way
+        # audio-separator's own list_supported_model_files() does.
+        try:
+            fetched = _fetch_authoritative_audio_separator_catalog()
+        except Exception as exc:
+            return False, f"authoritative_catalog_fetch_failed:{exc}"
+        if not _catalog_has_required_audio_separator_sections(fetched):
+            return False, "authoritative_catalog_incomplete"
+        checks_data = fetched
 
     normalized_sources = _normalize_direct_dks_asset_map(entry_payload)
     yaml_filename = _direct_dks_yaml_filename(normalized_sources)
     if not yaml_filename:
         return False, "drumsep_yaml_filename_missing"
 
-    changed = False
+    changed = not loaded_from_runtime_file
+
     mdx23c = checks_data.setdefault("mdx23c_download_list", {})
     if not isinstance(mdx23c, dict):
         return False, "mdx23c_download_list_invalid"
@@ -1427,7 +1489,7 @@ def _ensure_runtime_download_checks_has_drumsep(model_cache_dir: Path, entry_nam
         other_network[entry_name] = dict(normalized_sources)
         changed = True
 
-    if changed or not checks_path.exists():
+    if changed:
         try:
             checks_path.parent.mkdir(parents=True, exist_ok=True)
             checks_path.write_text(json.dumps(checks_data, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")

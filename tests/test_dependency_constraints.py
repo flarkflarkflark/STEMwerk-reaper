@@ -684,8 +684,10 @@ def test_linux_cuda_drumsep_path_uses_shared_five_step_setup_and_stays_out_of_ro
     assert 'log "DRUMSEP STEP ${DRUMSEP_STEP_INDEX}/${DRUMSEP_STEP_TOTAL}: ${DRUMSEP_STEP_LABEL}"' in bootstrap
     assert 'if [ "${MODE}" = "drumsep-runtime" ]; then' in bootstrap
     assert '_drumsep_step_total="4"' in drumsep_install
-    assert '"torch==${DRUMSEP_TORCH_VERSION}"' in drumsep_install
-    assert '"torchvision==${DRUMSEP_TORCHVISION_VERSION}"' in drumsep_install
+    assert '"torch==${DRUMSEP_TORCH_VERSION}+cpu"' in drumsep_install
+    assert '"torchvision==${DRUMSEP_TORCHVISION_VERSION}+cpu"' in drumsep_install
+    assert '--index-url "${DRUMSEP_CPU_TORCH_INDEX_URL}"' in drumsep_install
+    assert 'install_drumsep_mdxc_packages "${_drumsep_py}"' in drumsep_install
     assert 'set_drumsep_substep_progress "1" "${_drumsep_step_total}" "Creating DrumSep runtime"' in drumsep_install
     assert 'set_drumsep_substep_progress "4" "${_drumsep_step_total}" "Verifying DrumSep runtime"' in drumsep_install
     assert 'set_progress "1" "${STEP_TOTAL}" "Creating DrumSep runtime"' not in drumsep_install
@@ -2444,7 +2446,8 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "other_network_list_new" in script
     assert "def _ensure_runtime_download_checks_has_drumsep(" in script
     assert "mdx23c_download_list" in script
-    assert "checks_data = {}" in script
+    assert "def _fetch_authoritative_audio_separator_catalog(" in script
+    assert "AUDIO_SEPARATOR_REQUIRED_CATALOG_SECTIONS" in script
     assert "DIRECT_DKS_MODEL_DEAD_CKPT_URL" in script
     assert "DIRECT_DKS_MODEL_MIRROR_CKPT_URL" in script
     assert "def _preferred_direct_dks_asset_url(" in script
@@ -3732,6 +3735,13 @@ def test_direct_dks_preflight_rewrites_dead_ckpt_url_and_downloads_assets(tmp_pa
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
@@ -3791,7 +3801,7 @@ def test_direct_dks_preflight_rewrites_dead_ckpt_url_and_downloads_assets(tmp_pa
     assert persisted_sources[yaml_name] == yaml_url
 
 
-def test_direct_dks_preflight_uses_builtin_catalog_fallback_when_download_checks_are_missing(tmp_path, monkeypatch):
+def test_direct_dks_preflight_fetches_authoritative_catalog_when_download_checks_are_missing(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     model_cache_dir = tmp_path / "fresh model cache"
     monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: None)
@@ -3811,7 +3821,11 @@ def test_direct_dks_preflight_uses_builtin_catalog_fallback_when_download_checks
         def __exit__(self, exc_type, exc, tb):
             return False
 
+    authoritative_catalog = json.dumps(
+        {section: {} for section in module.AUDIO_SEPARATOR_REQUIRED_CATALOG_SECTIONS}
+    ).encode("utf-8")
     payloads = {
+        module.AUDIO_SEPARATOR_CANONICAL_DOWNLOAD_CHECKS_URL: authoritative_catalog,
         module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL: b"fresh-ckpt-bytes",
         module.DIRECT_DKS_MODEL_YAML_URL: b"audio:\n  dim_f: 1024\nmodel:\n  act: gelu\ntraining:\n  instruments:\n    - Kick\n",
     }
@@ -3831,8 +3845,14 @@ def test_direct_dks_preflight_uses_builtin_catalog_fallback_when_download_checks
     assert requested_model == module.DIRECT_DKS_MODEL_ALIAS
     assert resolved_model == module.DIRECT_DKS_MODEL_FILENAME
     assert detail is None
-    assert [url for url, _timeout in requests] == [module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL, module.DIRECT_DKS_MODEL_YAML_URL]
+    assert [url for url, _timeout in requests] == [
+        module.AUDIO_SEPARATOR_CANONICAL_DOWNLOAD_CHECKS_URL,
+        module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL,
+        module.DIRECT_DKS_MODEL_YAML_URL,
+    ]
     runtime_checks = json.loads((model_cache_dir / "download_checks.json").read_text(encoding="utf-8"))
+    for section in module.AUDIO_SEPARATOR_REQUIRED_CATALOG_SECTIONS:
+        assert isinstance(runtime_checks[section], dict)
     written_entry = runtime_checks["mdx23c_download_list"][module.DIRECT_DKS_MODEL_ENTRY_NAME]
     assert written_entry == {module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_YAML}
     persisted_sources = runtime_checks["other_network_list_new"][module.DIRECT_DKS_MODEL_ENTRY_NAME]
@@ -3853,6 +3873,13 @@ def test_direct_dks_preflight_skips_download_when_assets_already_exist(tmp_path,
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
@@ -3898,6 +3925,13 @@ def test_direct_dks_preflight_flags_audio_separator_0230_runtime_as_backend_limi
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
@@ -3947,6 +3981,13 @@ def test_direct_dks_preflight_allows_linux_rocm_runtime_with_six_output_capable_
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
@@ -3995,6 +4036,13 @@ def test_direct_dks_preflight_reports_source_and_target_on_download_failure(tmp_
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
@@ -4040,6 +4088,13 @@ def test_direct_dks_preflight_reports_yaml_schema_details_on_invalid_yaml(tmp_pa
     repo_checks.write_text(
         json.dumps(
             {
+                "demucs_download_list": {},
+                "vr_download_list": {},
+                "mdx_download_list": {},
+                "mdx_download_vip_list": {},
+                "mdx23c_download_list": {},
+                "mdx23c_download_vip_list": {},
+                "roformer_download_list": {},
                 "other_network_list_new": {
                     module.DIRECT_DKS_MODEL_ENTRY_NAME: {
                         module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
@@ -4354,20 +4409,22 @@ def test_linux_drumsep_runtime_installer_is_isolated_and_pinned():
     assert 'DRUMSEP_ONNX2TORCH_PY313_VERSION="1.6.0"' in script
     assert 'DRUMSEP_TORCH_VERSION="2.12.0"' in script
     assert 'DRUMSEP_TORCHVISION_VERSION="0.27.0"' in script
+    assert 'DRUMSEP_CPU_TORCH_INDEX_URL="https://download.pytorch.org/whl/cpu"' in script
     assert 'DRUMSEP_NUMBA_VERSION="0.65.1"' in script
     assert 'printf "%s/.venv-drumsep/bin/python\\n" "${RUNTIME_BASE}"' in script
     assert '"${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep"' in script
     assert 'pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel' in script
     assert '"audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}"' in script
     assert '"numpy==${DRUMSEP_NUMPY_VERSION}"' in script
-    assert '"torch==${DRUMSEP_TORCH_VERSION}"' in script
+    assert '"torch==${DRUMSEP_TORCH_VERSION}+cpu"' in script
+    assert '"torchvision==${DRUMSEP_TORCHVISION_VERSION}+cpu"' in script
     assert "create_venv_with_selected_python" in script
     assert script.index('if [ "${MODE}" = "drumsep-runtime" ]; then') < script.index('log_stage "Creating venv"')
 
 
 def test_linux_drumsep_runtime_installer_pins_librosa_exactly():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
-    drumsep_install = script.split("install_drumsep_runtime() {", 1)[1].split("\n\nresolve_core_target()", 1)[0]
+    drumsep_install = script.split("install_drumsep_mdxc_packages() {", 1)[1].split("\n\nverify_drumsep_package_integrity()", 1)[0]
 
     assert drumsep_install.count('"librosa==0.11.0"') == 1
     assert '"numba==${DRUMSEP_NUMBA_VERSION}"' in drumsep_install
