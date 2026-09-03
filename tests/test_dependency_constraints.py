@@ -5235,10 +5235,18 @@ def _assert_readme_release_contract(readme, target_version):
     assert f"stemwerk-{target_version}-1-x86_64.pkg.tar.zst" not in assets_table
     assert "noarch" not in assets_table
     assert "-any.pkg.tar.zst" not in assets_table
-    assert (
-        f"Linux users: use ReaPack or the `STEMwerk-{target_version}-x86_64.AppImage` "
-        "release asset."
-    ) in recommended_install
+    recommended_lines = recommended_install.splitlines()
+    windows_install = next(line for line in recommended_lines if line.startswith("- Windows users:"))
+    macos_install = next(line for line in recommended_lines if line.startswith("- macOS users:"))
+    linux_install = next(line for line in recommended_lines if line.startswith("- Linux users:"))
+
+    assert "Windows installer" in windows_install
+    assert "first-time installs and updates" in windows_install
+    assert "ReaPack is not the recommended Windows install/update route" in windows_install
+    assert "`.pkg` installer" in macos_install
+    assert "ReaPack" in macos_install
+    assert "ReaPack" in linux_install
+    assert f"`STEMwerk-{target_version}-x86_64.AppImage` release asset" in linux_install
     assert "package-based release assets" not in recommended_install
     assert "After installing a native Linux `.deb`, `.rpm`, or Arch package" not in readme
 
