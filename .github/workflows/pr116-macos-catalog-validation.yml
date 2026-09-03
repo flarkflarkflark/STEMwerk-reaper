@@ -1,0 +1,398 @@
+name: PR116 macOS Catalog Validation
+
+# Temporary, manual-only validation workflow for the PR #116 audit.
+# Proves or disproves the Apple Silicon clean-cache download_checks.json
+# regression on real GitHub-hosted macOS runners, by calling the actual
+# production _direct_dks_preflight_check()/_ensure_runtime_download_checks_has_drumsep()
+# code from scripts/reaper/audio_separator_process.py against the real,
+# pinned audio-separator==0.23.0 package. Not wired to any automatic trigger.
+# Not part of the release/merge gate.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  apple-silicon:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify architecture is arm64
+        run: |
+          set -euo pipefail
+          ARCH="$(uname -m)"
+          echo "uname -m = ${ARCH}"
+          if [ "${ARCH}" != "arm64" ]; then
+            echo "FAIL: expected arm64 on macos-15, got ${ARCH}"
+            exit 1
+          fi
+
+      - name: Set up fully isolated HOME/cache/runtime (no runner cache reused)
+        run: |
+          set -euo pipefail
+          ISO_ROOT="${RUNNER_TEMP}/pr116-catalog-audit"
+          rm -rf "${ISO_ROOT}"
+          mkdir -p "${ISO_ROOT}/home" "${ISO_ROOT}/model_cache" "${ISO_ROOT}/pip_cache_unused" "${ISO_ROOT}/artifacts"
+          echo "ISO_ROOT=${ISO_ROOT}" >> "$GITHUB_ENV"
+          echo "MODEL_CACHE_DIR=${ISO_ROOT}/model_cache" >> "$GITHUB_ENV"
+          echo "HOME=${ISO_ROOT}/home" >> "$GITHUB_ENV"
+          echo "PIP_CACHE_DIR=${ISO_ROOT}/pip_cache_unused" >> "$GITHUB_ENV"
+          echo "PIP_NO_CACHE_DIR=1" >> "$GITHUB_ENV"
+          echo "isolated HOME/model cache/pip cache created under ${ISO_ROOT}, no actions/cache used"
+
+      - name: Create isolated venv and install pinned audio-separator==0.23.0
+        run: |
+          set -euo pipefail
+          python3 -m venv "${ISO_ROOT}/venv"
+          source "${ISO_ROOT}/venv/bin/activate"
+          python3 -m pip install --no-cache-dir --upgrade pip
+          python3 -m pip install --no-cache-dir -c scripts/reaper/constraints/macos.txt "audio-separator==0.23.0" pyyaml
+          python3 -m pip install --no-cache-dir --force-reinstall --no-deps "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1"
+          python3 -c "import importlib.metadata as m; print('audio-separator', m.version('audio-separator'))"
+
+      - name: Write isolated production-code test
+        run: |
+          cat > "${ISO_ROOT}/run_test.py" <<'PYEOF'
+          """
+          Calls the REAL PR #116 production code
+          (scripts/reaper/audio_separator_process.py:_direct_dks_preflight_check ->
+          _ensure_runtime_download_checks_has_drumsep) against a genuinely clean
+          model cache on a real Apple Silicon GitHub-hosted runner, using the real
+          pinned audio-separator==0.23.0 package for catalog resolution. No catalog
+          logic is reimplemented here.
+          """
+          import importlib.util
+          import json
+          import os
+          import sys
+          import urllib.request
+          from pathlib import Path
+
+          WORKSPACE = Path(os.environ["GITHUB_WORKSPACE"])
+          MODEL_CACHE_DIR = Path(os.environ["MODEL_CACHE_DIR"])
+          MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+          EXPECTED_CATALOG_KEYS = (
+              "demucs_download_list",
+              "vr_download_list",
+              "mdx_download_list",
+              "mdx_download_vip_list",
+              "mdx23c_download_list",
+              "mdx23c_download_vip_list",
+              "roformer_download_list",
+              "other_network_list_new",
+          )
+
+
+          def load_production_module():
+              script_path = WORKSPACE / "scripts" / "reaper" / "audio_separator_process.py"
+              assert script_path.is_file(), f"missing production file: {script_path}"
+              spec = importlib.util.spec_from_file_location(
+                  "stemwerk_pr116_audio_separator_process", script_path
+              )
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+              return module
+
+
+          def preseed_real_normal_stems_model(model_cache_dir: Path) -> str:
+              """
+              Places a real, currently-supported Normal Stems (Demucs v4 htdemucs)
+              model file directly into the model cache, exactly as a bundled
+              installer payload would pre-seed it -- i.e. the file exists on disk
+              *before* download_checks.json is ever created. The real upstream
+              catalog is only consulted here to learn the current real filenames;
+              it is fetched to memory, never written into model_cache_dir, so
+              download_checks.json remains genuinely absent afterward.
+              Returns the weight filename that was placed (the one the regression
+              check must later resolve).
+              """
+              real_catalog_url = (
+                  "https://raw.githubusercontent.com/TRvlvr/application_data/"
+                  "main/filelists/download_checks.json"
+              )
+              with urllib.request.urlopen(real_catalog_url, timeout=120) as resp:
+                  real_catalog = json.load(resp)
+
+              demucs_list = real_catalog["demucs_download_list"]
+              preferred = [
+                  k for k in demucs_list
+                  if k.startswith("Demucs v4") and "htdemucs" in k.lower()
+                  and "_ft" not in k.lower() and "6s" not in k.lower()
+              ]
+              fallback = [k for k in demucs_list if k.startswith("Demucs v4")]
+              chosen_keys = preferred or fallback
+              assert chosen_keys, "no Demucs v4 entries found in the real upstream catalog"
+              chosen_key = sorted(chosen_keys)[0]
+              entry = demucs_list[chosen_key]
+              assert isinstance(entry, dict), f"unexpected entry shape for {chosen_key}"
+
+              print(f"preseed_source_entry={chosen_key}")
+              weight_filename = None
+              for config_key, config_value in entry.items():
+                  target = model_cache_dir / config_key
+                  print(f"preseed_download config_key={config_key} url={config_value}")
+                  with urllib.request.urlopen(config_value, timeout=600) as resp:
+                      data = resp.read()
+                  target.write_bytes(data)
+                  print(f"preseed_wrote={target} bytes={len(data)}")
+                  if config_key.lower().endswith((".th", ".ckpt")) or not config_key.lower().endswith(".yaml"):
+                      weight_filename = config_key
+
+              assert weight_filename, "could not determine the Demucs weight filename to test resolution against"
+              return weight_filename
+
+
+          def main() -> int:
+              module = load_production_module()
+
+              print("=== STEP A: confirm clean-cache precondition ===")
+              checks_path = MODEL_CACHE_DIR / "download_checks.json"
+              assert not checks_path.exists(), "download_checks.json must not exist before the test starts"
+              print(f"download_checks.json absent at {checks_path}: confirmed")
+
+              print("=== place a real supported Normal Stems model file before any DrumSep prefetch ===")
+              demucs_weight_filename = preseed_real_normal_stems_model(MODEL_CACHE_DIR)
+              print(f"normal_stems_weight_preseeded={demucs_weight_filename}")
+              assert not checks_path.exists(), "pre-seeding must not itself create download_checks.json"
+
+              print("=== STEP B: call the real PR #116 production preflight (allow_downloads=True) ===")
+              ok, requested_model, resolved_model, detail = module._direct_dks_preflight_check(
+                  module.DIRECT_DKS_MODEL_ALIAS,
+                  MODEL_CACHE_DIR,
+                  allow_downloads=True,
+              )
+              print(f"preflight_ok={ok} requested={requested_model} resolved={resolved_model} detail={detail}")
+              if not ok:
+                  print("PRODUCTION PREFLIGHT FAILED -- cannot proceed with regression check")
+                  return 1
+
+              print("=== validate resulting download_checks.json ===")
+              assert checks_path.exists(), "download_checks.json was not created by the production preflight"
+              raw_text = checks_path.read_text(encoding="utf-8")
+              try:
+                  data = json.loads(raw_text)
+              except json.JSONDecodeError as exc:
+                  print(f"INVALID JSON: {exc}")
+                  return 1
+              print("download_checks.json is valid JSON: confirmed")
+
+              missing_keys = [k for k in EXPECTED_CATALOG_KEYS if k not in data]
+              if missing_keys:
+                  print(f"MISSING CATALOG KEYS: {missing_keys}")
+                  return 1
+              print(f"all 8 expected top-level catalog keys present: {list(EXPECTED_CATALOG_KEYS)}")
+
+              mdx23c = data.get("mdx23c_download_list", {})
+              drumsep_entry_present = module.DIRECT_DKS_MODEL_ENTRY_NAME in mdx23c
+              print(f"drumsep_entry_in_mdx23c_download_list={drumsep_entry_present}")
+              if not drumsep_entry_present:
+                  print("DrumSep/MDX23C entry NOT found in mdx23c_download_list")
+                  return 1
+
+              print("=== STEP C: real audio-separator 0.23.0 catalog resolution (no reimplementation) ===")
+              from audio_separator.separator import Separator
+
+              out_dir = MODEL_CACHE_DIR.parent / "sep_out"
+              out_dir.mkdir(parents=True, exist_ok=True)
+              sep = Separator(model_file_dir=str(MODEL_CACHE_DIR), output_dir=str(out_dir), output_format="wav")
+
+              old_keyerror_present = False
+              drumsep_resolved = False
+              normal_stems_resolved = False
+
+              print(f"--- resolving DrumSep MDX23C file: {module.DIRECT_DKS_MODEL_FILENAME} ---")
+              try:
+                  drumsep_result = sep.download_model_files(module.DIRECT_DKS_MODEL_FILENAME)
+                  drumsep_resolved = True
+                  print(f"drumsep_resolution=OK {drumsep_result}")
+              except KeyError as exc:
+                  old_keyerror_present = True
+                  print(f"drumsep_resolution=KEYERROR {exc!r}")
+              except Exception as exc:
+                  print(f"drumsep_resolution=FAILED({type(exc).__name__}) {exc}")
+
+              print(f"--- resolving Normal Stems (already-on-disk) file: {demucs_weight_filename} ---")
+              try:
+                  ns_result = sep.download_model_files(demucs_weight_filename)
+                  normal_stems_resolved = True
+                  print(f"normal_stems_resolution=OK {ns_result}")
+              except KeyError as exc:
+                  old_keyerror_present = True
+                  print(f"normal_stems_resolution=KEYERROR {exc!r}")
+              except ValueError as exc:
+                  print(f"normal_stems_resolution=NOT_FOUND {exc}")
+              except Exception as exc:
+                  print(f"normal_stems_resolution=FAILED({type(exc).__name__}) {exc}")
+
+              gate1_no_old_keyerror = not old_keyerror_present
+              gate2_drumsep_resolves = drumsep_resolved
+              gate3_normal_stems_resolves = normal_stems_resolved
+
+              print("=== RELEASE GATE ===")
+              print(f"gate1_no_old_keyerror={gate1_no_old_keyerror}")
+              print(f"gate2_drumsep_resolves={gate2_drumsep_resolves}")
+              print(f"gate3_normal_stems_resolves={gate3_normal_stems_resolves}")
+
+              summary_path = MODEL_CACHE_DIR.parent / "artifacts" / "gate-summary.json"
+              summary_path.parent.mkdir(parents=True, exist_ok=True)
+              summary_path.write_text(
+                  json.dumps(
+                      {
+                          "gate1_no_old_keyerror": gate1_no_old_keyerror,
+                          "gate2_drumsep_resolves": gate2_drumsep_resolves,
+                          "gate3_normal_stems_resolves": gate3_normal_stems_resolves,
+                          "demucs_weight_filename": demucs_weight_filename,
+                      },
+                      indent=2,
+                  ),
+                  encoding="utf-8",
+              )
+
+              if gate1_no_old_keyerror and gate2_drumsep_resolves and gate3_normal_stems_resolves:
+                  print("APPLE SILICON CLEAN-CACHE CATALOG — PASS")
+                  return 0
+
+              if not gate3_normal_stems_resolves:
+                  print("APPLE SILICON CLEAN-CACHE NORMAL-STEMS REGRESSION — REPRODUCED")
+
+              return 1
+
+
+          sys.exit(main())
+          PYEOF
+          echo "wrote ${ISO_ROOT}/run_test.py"
+
+      - name: Run clean-cache catalog validation against real production code
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          source "${ISO_ROOT}/venv/bin/activate"
+          python3 "${ISO_ROOT}/run_test.py" 2>&1 | tee "${ISO_ROOT}/artifacts/testlog.txt"
+
+      - name: Copy resulting download_checks.json into artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "${MODEL_CACHE_DIR}/download_checks.json" ]; then
+            cp "${MODEL_CACHE_DIR}/download_checks.json" "${ISO_ROOT}/artifacts/download_checks.json"
+            echo "--- download_checks.json ---"
+            cat "${ISO_ROOT}/artifacts/download_checks.json"
+          else
+            echo "download_checks.json was never created" | tee "${ISO_ROOT}/artifacts/download_checks.json.MISSING.txt"
+          fi
+
+      - name: Write environment report
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "uname_a=$(uname -a)"
+            echo "uname_m=$(uname -m)"
+            sw_vers 2>/dev/null || true
+            echo "python_version=$(python3 --version)"
+            source "${ISO_ROOT}/venv/bin/activate"
+            python3 -c "import importlib.metadata as m; print('audio-separator_version=' + m.version('audio-separator'))" || true
+            python3 -c "import torch; print('torch_version=' + torch.__version__)" || true
+          } > "${ISO_ROOT}/artifacts/environment-report.txt"
+          cat "${ISO_ROOT}/artifacts/environment-report.txt"
+
+      - name: Upload evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-silicon-catalog-evidence
+          path: ${{ env.ISO_ROOT }}/artifacts
+          if-no-files-found: warn
+          retention-days: 14
+
+  intel-control:
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify architecture is x86_64
+        run: |
+          set -euo pipefail
+          ARCH="$(uname -m)"
+          echo "uname -m = ${ARCH}"
+          if [ "${ARCH}" != "x86_64" ]; then
+            echo "FAIL: expected x86_64 on macos-15-intel, got ${ARCH}"
+            exit 1
+          fi
+
+      - name: Trace the real architecture guard and prove ensure_drumsep_assets is unreachable on Intel
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          real_arch = subprocess.check_output(["uname", "-m"]).decode().strip()
+          print(f"live uname -m = {real_arch}")
+          if real_arch != "x86_64":
+              print("FAIL: not running on a real x86_64 host")
+              sys.exit(1)
+
+          script_path = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh")
+          assert script_path.is_file(), f"missing production file: {script_path}"
+          lines = script_path.read_text(encoding="utf-8").splitlines()
+
+          # Reproduce the real MAC_ARCH detection line from the production script
+          # (do not simulate Apple Silicon: this is the exact same shell
+          # expression the script itself uses, executed on this real Intel host).
+          detect_lines = [l for l in lines if l.strip().startswith("MAC_ARCH=")]
+          assert detect_lines, "could not find MAC_ARCH detection line in production script"
+          detect_line = detect_lines[0].strip()
+          print(f"production detection line: {detect_line}")
+          assert detect_line == 'MAC_ARCH="$(uname -m 2>/dev/null || echo unknown)"', (
+              f"production detection line changed unexpectedly: {detect_line!r}"
+          )
+          mac_arch = subprocess.run(
+              ["bash", "-c", f'{detect_line}; echo "$MAC_ARCH"'],
+              capture_output=True, text=True, check=True,
+          ).stdout.strip()
+          print(f"MAC_ARCH as evaluated by the real production expression = {mac_arch}")
+          assert mac_arch == "x86_64", f"expected x86_64, production expression gave {mac_arch!r}"
+
+          # Locate the specific ensure_drumsep_assets() call site (not its
+          # function definition) and the nearest preceding MAC_ARCH == x86_64
+          # guard, then prove the call sits strictly in the guard's else
+          # branch -- never in the x86_64 (Intel) branch itself.
+          call_idx = None
+          for i, line in enumerate(lines):
+              if re.search(r'ensure_drumsep_assets\s+"\$\{VENV_PY\}"', line):
+                  call_idx = i
+                  break
+          assert call_idx is not None, "could not find the ensure_drumsep_assets() call site"
+          print(f"ensure_drumsep_assets call site: line {call_idx + 1}: {lines[call_idx].strip()}")
+
+          guard_idx = None
+          for i in range(call_idx, -1, -1):
+              if re.search(r'if\s+\[\s+"\$\{MAC_ARCH\}"\s+=\s+"x86_64"\s+\]', lines[i]):
+                  guard_idx = i
+                  break
+          assert guard_idx is not None, "could not find a preceding x86_64 guard for the call site"
+          print(f"nearest preceding x86_64 guard: line {guard_idx + 1}: {lines[guard_idx].strip()}")
+
+          between = lines[guard_idx:call_idx]
+          else_idx_local = next((i for i, l in enumerate(between) if l.strip() == "else"), None)
+          assert else_idx_local is not None, (
+              "no top-level 'else' found between the x86_64 guard and the ensure_drumsep_assets call "
+              "-- the call may be unconditionally reachable"
+          )
+          then_branch = "\n".join(between[1:else_idx_local])
+          print("Intel (x86_64) branch body between guard and else:")
+          print(then_branch)
+          assert "ensure_drumsep_assets" not in then_branch, (
+              "ensure_drumsep_assets appears inside the x86_64 (Intel) branch"
+          )
+          print("Confirmed: ensure_drumsep_assets() call site is strictly after the 'else', "
+                "never inside the x86_64 (Intel) branch.")
+          print("INTEL DKS PREFETCH PATH — UNREACHABLE BY DESIGN")
+          PYEOF
