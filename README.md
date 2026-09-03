@@ -122,10 +122,9 @@ Recommended free space:
 ## Downloads
 
 ### Recommended install path
-- Existing users: ReaPack remains the preferred update path for scripts and actions.
-- New Windows users: use the Windows installer.
-- macOS users: use the `.pkg` installer or ReaPack/script setup.
-- Linux users: use ReaPack or the `STEMwerk-2.3.1.1-x86_64.AppImage` release asset.
+- Windows users: use the current Windows installer for both first-time installs and updates. ReaPack is not the recommended Windows install/update route.
+- macOS users: use the `.pkg` installer, or ReaPack for existing installs (ReaPack remains the preferred update path for scripts and actions).
+- Linux users: use ReaPack (preferred update path for scripts and actions) or the `STEMwerk-2.3.1.1-x86_64.AppImage` release asset.
 
 After install or update, use `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) when runtime verification or repair is needed, then launch `STEMwerk: Main` (`STEMwerk.lua`).
 
@@ -198,7 +197,7 @@ STEMwerk processes audio locally. It only connects to network services when requ
 5. Start the main UI with `STEMwerk: Main` (`STEMwerk.lua`).
 
 Notes:
-- On Windows, the installer is the preferred first-time setup path.
+- On Windows, the installer is the preferred path for both first-time setup and updates.
 - On macOS and Linux, `STEMwerk: Setup` is the normal in-REAPER setup and repair entry point.
 - ReaPack installs scripts and actions; runtime validation still happens through `STEMwerk: Setup`.
 
@@ -226,7 +225,7 @@ To add the repository:
 
 After installing or updating via ReaPack, run `STEMwerk: Setup` once.
 
-> **Windows note**: ReaPack is not the preferred first-time Windows install path. Use the Windows installer first, then use ReaPack for later script updates if desired.
+> **Windows note**: ReaPack is not the recommended Windows install or update route. Use the current Windows installer for both first-time installs and updates.
 
 ## Windows Notes
 - The current stable Windows target is `2.3.1.1`.
