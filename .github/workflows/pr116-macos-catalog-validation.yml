@@ -41,6 +41,13 @@ jobs:
             exit 1
           fi
 
+      - name: Install ffmpeg (required by Separator.__init__ itself, not by the catalog logic under test)
+        run: |
+          set -euo pipefail
+          brew install ffmpeg
+          command -v ffmpeg
+          ffmpeg -version | head -1
+
       - name: Set up fully isolated HOME/cache/runtime (no runner cache reused)
         run: |
           set -euo pipefail
