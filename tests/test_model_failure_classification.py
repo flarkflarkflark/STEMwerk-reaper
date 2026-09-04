@@ -1,14 +1,34 @@
 from pathlib import Path
 import importlib.util
+import shutil
+import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "reaper" / "audio_separator_process.py"
+LUA_TEST = ROOT / "tests" / "lua" / "test_model_failure_classification.lua"
 
 spec = importlib.util.spec_from_file_location("audio_separator_process", SCRIPT)
 mod = importlib.util.module_from_spec(spec)
 assert spec is not None and spec.loader is not None
 spec.loader.exec_module(mod)
+
+
+LUA_CANDIDATES = [
+    shutil.which("lua"),
+    shutil.which("lua5.4"),
+    shutil.which("luajit"),
+    r"C:\Users\Administrator\AppData\Local\Programs\Lua\bin\lua.exe",
+]
+
+
+def _lua_interpreter():
+    for candidate in LUA_CANDIDATES:
+        if candidate and Path(candidate).exists():
+            return candidate
+    return None
 
 
 def test_model_checksum_failure_classification():
@@ -100,3 +120,26 @@ def test_genuine_download_failure_is_not_reclassified_as_cuda_architecture():
     assert failure is None
     assert model_failure is not None
     assert model_failure["error_class"] == "model_download_failed"
+
+
+def test_lua_model_failure_classification_regression_suite():
+    # Issue #118: STEMwerk_Log.lua's SW_LOG.classifyModelFailure() has its own,
+    # independent classifier (not this Python one) that misclassified an
+    # unrelated CUDA kernel-support crash as model_download_failed, because a
+    # benign, successful "skipping download" line earlier in the same log
+    # satisfied a bare lower:find("download", 1, true) check. See
+    # tests/lua/test_model_failure_classification.lua for the full regression
+    # suite (mirrors this file's style, run against the real Lua module).
+    lua = _lua_interpreter()
+    if not lua:
+        pytest.skip("no Lua interpreter available")
+    proc = subprocess.run(
+        [lua, str(LUA_TEST)],
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+        timeout=120,
+    )
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 0, f"Lua model-failure classification suite failed:\n{output}"
+    assert ", 0 failed" in output, f"expected all-passing summary, got:\n{output}"
