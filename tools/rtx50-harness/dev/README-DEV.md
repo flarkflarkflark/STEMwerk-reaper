@@ -48,3 +48,27 @@ Covered by running the real tester with no simulation flag on this
 machine (a real RTX 3060 Laptop GPU, compute capability 8.6): it must
 detect `PRECHECK_PASS_NON_BLACKWELL` and exit 0 without touching any
 package.
+
+## Real STEMwerk separation smoke test (post-cu128-install validation)
+
+`make_test_audio.py` generates a short synthetic stereo WAV.
+`Run-RealSeparationSmoke.ps1` runs the REAL production separation backend
+(`..\..\..\scripts\reaper\audio_separator_process.py` - the exact script
+REAPER's Lua actions invoke) against it through the harness's own
+`Invoke-NativeProcess` helper, so captured logs are never corrupted by
+Windows PowerShell 5.1's raw-redirection stderr-to-ErrorRecord bug
+(observed firsthand when this was first tried with plain `2>`/`2>&1`
+redirection instead of the helper - see the #118 investigation notes).
+
+Usage (after installing the experimental runtime via
+`STEMwerk-RTX50-cu128-test.ps1 -SimulateBlackwell`):
+
+```
+powershell -File Run-RealSeparationSmoke.ps1 -Model htdemucs_ft -Device auto -InputWav <wav> -OutputDir <dir>
+```
+
+Checks exit code 0 and that stem WAV files were actually produced - not
+just that the UI/CLI reported progress. Output (including
+`separation_log.txt` and `phase_events.jsonl` written by the production
+script itself) is generated under `smoke_run\` at runtime and is
+git-ignored (large binary WAV output; not meant to be committed).
