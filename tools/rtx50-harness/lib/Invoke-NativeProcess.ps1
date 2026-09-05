@@ -108,7 +108,18 @@ function Invoke-NativeProcess {
 
         [string]$WorkingDirectory = $null,
 
-        [int]$TimeoutSeconds = 0
+        [int]$TimeoutSeconds = 0,
+
+        # When > 0, prints a heartbeat line (via -HeartbeatAction, default
+        # Write-Host) every this-many seconds while the process is still
+        # running, so a long-running operation (e.g. a multi-minute pip
+        # install) never looks like the harness has silently hung. This
+        # never touches stdout/stderr capture (still a single blocking
+        # ReadToEndAsync per stream, same as without heartbeat) - it only
+        # changes how the wait for exit is polled.
+        [int]$HeartbeatSeconds = 0,
+
+        [scriptblock]$HeartbeatAction = { param($ElapsedSeconds) Write-Host "  ... still running (${ElapsedSeconds}s elapsed)" }
     )
 
     $result = [PSCustomObject]@{
@@ -167,7 +178,31 @@ function Invoke-NativeProcess {
         $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
         $stderrTask = $proc.StandardError.ReadToEndAsync()
 
-        if ($TimeoutSeconds -gt 0) {
+        if ($HeartbeatSeconds -gt 0) {
+            # Poll WaitForExit(intervalMs) in a loop instead of one single
+            # blocking call, so we can print a heartbeat between polls.
+            # This does not change what's captured (stdout/stderr are
+            # still read whole via the async tasks above) - only how the
+            # wait is observed.
+            $pollMs = [Math]::Max(250, [Math]::Min($HeartbeatSeconds * 1000, 5000))
+            $nextHeartbeat = $HeartbeatSeconds
+            $exited = $false
+            while (-not $exited) {
+                $exited = $proc.WaitForExit($pollMs)
+                $elapsed = [int]$sw.Elapsed.TotalSeconds
+                if (-not $exited -and $elapsed -ge $nextHeartbeat) {
+                    & $HeartbeatAction $elapsed
+                    $nextHeartbeat += $HeartbeatSeconds
+                }
+                if (-not $exited -and $TimeoutSeconds -gt 0 -and $elapsed -ge $TimeoutSeconds) {
+                    $result.TimedOut = $true
+                    try { $proc.Kill() } catch { }
+                    $proc.WaitForExit(5000) | Out-Null
+                    $exited = $true
+                }
+            }
+        }
+        elseif ($TimeoutSeconds -gt 0) {
             $exited = $proc.WaitForExit($TimeoutSeconds * 1000)
             if (-not $exited) {
                 $result.TimedOut = $true

@@ -114,55 +114,6 @@ function Test-StemwerkVenvIdentity {
     }
 }
 
-function New-BaselineManifest {
-    <#
-        .SYNOPSIS
-        Captures the exact installed torch/torchvision/torchaudio
-        versions (and torch.version.cuda) from the verified venv, so
-        rollback restores precisely what was there - not an assumed
-        release baseline.
-    #>
-    param(
-        [Parameter(Mandatory = $true)][string]$PythonExe,
-        [Parameter(Mandatory = $true)][string]$ManifestPath
-    )
-
-    $pipShow = Invoke-NativeProcess -FilePath $PythonExe -ArgumentList @('-m', 'pip', 'list', '--format=freeze')
-    if (-not $pipShow.Success) {
-        return [PSCustomObject]@{ Ok = $false; Reason = 'pip list failed while capturing baseline manifest'; Native = $pipShow }
-    }
-
-    $packages = [ordered]@{}
-    foreach ($line in ($pipShow.StdOut -split "`r?`n")) {
-        if ($line -match '^(torch|torchvision|torchaudio)==(.+)$') {
-            $packages[$Matches[1]] = $Matches[2]
-        }
-    }
-
-    foreach ($required in @('torch', 'torchvision', 'torchaudio')) {
-        if (-not $packages.Contains($required)) {
-            return [PSCustomObject]@{ Ok = $false; Reason = "could not find installed version of '$required' in pip freeze output"; Native = $pipShow }
-        }
-    }
-
-    # Determine which CUDA wheel index tag (e.g. cu121) the currently
-    # installed torch was built against, so rollback can pull from the
-    # exact same index rather than guessing.
-    $cudaTag = $null
-    if ($packages['torch'] -match '\+cu(\d+)$') {
-        $cudaTag = "cu$($Matches[1])"
-    }
-
-    $manifest = [ordered]@{
-        captured_utc = (Get-Date).ToUniversalTime().ToString('o')
-        packages     = $packages
-        cuda_tag     = $cudaTag
-    }
-
-    $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
-    return [PSCustomObject]@{ Ok = $true; Manifest = $manifest; ManifestPath = $ManifestPath }
-}
-
 function Invoke-TorchStackInstall {
     <#
         .SYNOPSIS
@@ -175,42 +126,44 @@ function Invoke-TorchStackInstall {
         [Parameter(Mandatory = $true)][string]$TorchvisionSpec,
         [Parameter(Mandatory = $true)][string]$TorchaudioSpec,
         [Parameter(Mandatory = $true)][string]$IndexUrl,
-        [int]$TimeoutSeconds = 1800
+        [int]$TimeoutSeconds = 1800,
+        [int]$HeartbeatSeconds = 0,
+        [scriptblock]$HeartbeatAction = { param($s) Write-Host "  ... still running (${s}s elapsed)" }
     )
 
     $args = @('-m', 'pip', 'install', '--index-url', $IndexUrl, $TorchSpec, $TorchvisionSpec, $TorchaudioSpec)
-    return Invoke-NativeProcess -FilePath $PythonExe -ArgumentList $args -TimeoutSeconds $TimeoutSeconds
+    return Invoke-NativeProcess -FilePath $PythonExe -ArgumentList $args -TimeoutSeconds $TimeoutSeconds -HeartbeatSeconds $HeartbeatSeconds -HeartbeatAction $HeartbeatAction
 }
 
 function Invoke-BaselineRestore {
     <#
         .SYNOPSIS
-        Restores the exact package versions recorded in a baseline
-        manifest (produced by New-BaselineManifest), pulling from the
-        same CUDA wheel index the baseline was originally built from.
+        Restores the exact package versions recorded in a baseline object
+        (see RuntimeState.ps1's ConvertTo-BaselineObject / the durable
+        transaction record's `.baseline` field), pulling from the same
+        CUDA wheel index the baseline was originally built from. Takes the
+        baseline as an in-memory object rather than a path, so callers are
+        always restoring from the durable, trusted transaction record -
+        never from a manifest file whose freshness/trustworthiness can't
+        be verified.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$PythonExe,
-        [Parameter(Mandatory = $true)][string]$ManifestPath,
+        [Parameter(Mandatory = $true)]$Baseline,
         [int]$TimeoutSeconds = 1800
     )
 
-    if (-not (Test-Path -LiteralPath $ManifestPath)) {
-        return [PSCustomObject]@{ Ok = $false; Reason = "baseline manifest not found at $ManifestPath" }
-    }
-    $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
-
-    $cudaTag = $manifest.cuda_tag
+    $cudaTag = $Baseline.cuda_tag
     if (-not $cudaTag) {
-        return [PSCustomObject]@{ Ok = $false; Reason = 'baseline manifest has no recorded cuda_tag; refusing to guess an index URL' }
+        return [PSCustomObject]@{ Ok = $false; Reason = 'baseline record has no recorded cuda_tag; refusing to guess an index URL' }
     }
     $indexUrl = "https://download.pytorch.org/whl/$cudaTag"
 
-    $torchSpec = "torch==$($manifest.packages.torch)"
-    $torchvisionSpec = "torchvision==$($manifest.packages.torchvision)"
-    $torchaudioSpec = "torchaudio==$($manifest.packages.torchaudio)"
+    $torchSpec = "torch==$($Baseline.packages.torch)"
+    $torchvisionSpec = "torchvision==$($Baseline.packages.torchvision)"
+    $torchaudioSpec = "torchaudio==$($Baseline.packages.torchaudio)"
 
-    $native = Invoke-TorchStackInstall -PythonExe $PythonExe -TorchSpec $torchSpec -TorchvisionSpec $torchvisionSpec -TorchaudioSpec $torchaudioSpec -IndexUrl $indexUrl -TimeoutSeconds $TimeoutSeconds
+    $native = Invoke-TorchStackInstall -PythonExe $PythonExe -TorchSpec $torchSpec -TorchvisionSpec $torchvisionSpec -TorchaudioSpec $torchaudioSpec -IndexUrl $indexUrl -TimeoutSeconds $TimeoutSeconds -HeartbeatSeconds 20 -HeartbeatAction { param($s) Write-Host "  ... still restoring baseline ($s s elapsed) - this is normal, please wait" }
 
     return [PSCustomObject]@{ Ok = $native.Success; Native = $native; IndexUrl = $indexUrl; TorchSpec = $torchSpec; TorchvisionSpec = $torchvisionSpec; TorchaudioSpec = $torchaudioSpec }
 }
