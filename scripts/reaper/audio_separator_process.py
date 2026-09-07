@@ -286,6 +286,52 @@ def _emit_normal_runtime_evidence(separator: object) -> None:
         print(f"device_name={adapter}", file=sys.stderr)
 
 
+def _emit_contract_resolution_shadow_diagnostics(
+    workflow_id: str, model_id: str, requested_device: str, resolved_device: str
+) -> None:
+    """Best-effort Slice-1 contract cross-check, for diagnostics only.
+
+    Feeds the device this run already resolved (via the existing
+    _resolve_normal_runtime_device/select_device chain) back into the 2.4
+    resolver purely to confirm the two layers agree and to record whether
+    resolution went through the 2.4 contract layer. This can never change
+    which device or model the run actually uses, and never raises: the
+    Slice-0 catalog only lists htdemucs/htdemucs_ft, so a legacy-supported
+    but not-yet-catalogued model (e.g. htdemucs_6s, hdemucs_mmi) is expected
+    to be reported as out of contract scope here, not treated as a failure.
+    """
+    try:
+        from stemwerk_core.runtime_resolution import CapabilityProbe, ResolutionError, resolve_execution_plan
+
+        catalog_dir = Path(__file__).resolve().parent / "catalog"
+        already_resolved = {"id": resolved_device, "name": ""}
+        probe = CapabilityProbe(
+            get_available_devices=lambda: [already_resolved],
+            select_device=lambda _requested: (resolved_device, ""),
+            runtime_kind_for_device=core_devices.runtime_kind_for_device,
+            is_unexpected_cpu_downgrade=_is_unexpected_cpu_downgrade,
+            resolve_auto_device=lambda _live: already_resolved,
+        )
+        try:
+            plan = resolve_execution_plan(
+                workflow_id, model_id, requested_device, catalog_dir=catalog_dir, probe=probe
+            )
+        except ResolutionError as exc:
+            print(f"STEMWERK_DIAG contract_resolution_failed_code={exc.code}", file=sys.stderr)
+            print(f"STEMWERK_DIAG contract_resolution_failed_detail={exc.detail}", file=sys.stderr)
+            return
+        print(f"STEMWERK_DIAG contract_source={plan.contract_source}", file=sys.stderr)
+        print(f"STEMWERK_DIAG contract_workflow_id={plan.workflow_id}", file=sys.stderr)
+        print(f"STEMWERK_DIAG contract_capability_id={plan.capability_id}", file=sys.stderr)
+        print(f"STEMWERK_DIAG contract_model_id={plan.model_id}", file=sys.stderr)
+        print(f"STEMWERK_DIAG contract_resolved_backend={plan.resolved_backend}", file=sys.stderr)
+        print(f"STEMWERK_DIAG contract_resolved_device={plan.resolved_device}", file=sys.stderr)
+        print(f"STEMWERK_DIAG contract_fallback_applied={plan.fallback_applied}", file=sys.stderr)
+        print(f"STEMWERK_DIAG contract_reason_code={plan.reason_code}", file=sys.stderr)
+    except Exception as exc:
+        print(f"STEMWERK_DIAG contract_resolution_error={type(exc).__name__}", file=sys.stderr)
+
+
 def _read_benchmark_dks_stage2_cap_request() -> tuple[Optional[int], str]:
     raw = str(os.environ.get("STEMWERK_BENCH_DKS_STAGE2_CAP") or "").strip()
     if raw == "":
@@ -4633,6 +4679,7 @@ def main():
     print(f"model_name={run_model}", file=sys.stderr)
     print(f"device={resolved_device}", file=sys.stderr)
     print(f"backend={backend}", file=sys.stderr)
+    _emit_contract_resolution_shadow_diagnostics("normal_stems", run_model, device_preference, resolved_device)
     if _is_unexpected_cpu_downgrade(device_preference, preview_device_id):
         print("normal_workflow_backend_fallback_reason=live_runtime_cpu_only", file=sys.stderr)
         print(
