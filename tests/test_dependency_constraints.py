@@ -5,6 +5,7 @@ import json
 import ntpath
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -15,11 +16,26 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from stemwerk_runtime_diagnostics import managed_runtime_python  # noqa: E402
+
 
 EXPECTED_TORCH = "2.5.1"
 EXPECTED_TORCHVISION = "0.20.1"
 EXPECTED_TORCHAUDIO = "2.5.1"
 EXPECTED_AUDIO_SEPARATOR = "0.23.0"
+
+
+def _bootstrap_var(script_path: str, name: str) -> str:
+    """Reads a `NAME="value"` shell-variable declaration directly out of a
+    canonical bootstrap script -- the actual repository pin source -- rather
+    than depending on whatever torch/etc happens to be importable in the
+    Python running pytest (which may be bare system Python, not a
+    bootstrapped STEMwerk managed runtime)."""
+    text = _read_utf8(script_path)
+    match = re.search(rf'^{re.escape(name)}="([^"]*)"', text, re.MULTILINE)
+    assert match, f"{name} not declared in {script_path}"
+    return match.group(1)
 
 
 def _load_audio_separator_process_module():
@@ -106,27 +122,43 @@ def _version_or_fail(dist_name):
 
 
 def test_dependency_diagnostics():
-    import audio_separator
-    import onnxruntime
-    import stemwerk_core
-    import torch
-    import torchvision
-    import torchaudio
+    """Managed-runtime integration (class B): prints a real diagnostic dump
+    from STEMwerk's own bootstrapped managed venv, explicitly located via
+    managed_runtime_python() -- never the ambient Python running pytest,
+    which may be bare system Python with unrelated package versions (or
+    none at all) installed. Skips with a precise reason when no managed
+    runtime has been bootstrapped on this machine."""
+    python = managed_runtime_python()
+    if python is None:
+        pytest.skip("no bootstrapped STEMwerk managed runtime found on this machine")
+
+    probe = (
+        "import json, platform, sys\n"
+        "result = {'python_executable': sys.executable, 'python_version': platform.python_version()}\n"
+        "for mod_name, key in (('torch', 'torch_version'), ('torchvision', 'torchvision_version'), "
+        "('torchaudio', 'torchaudio_version'), ('onnxruntime', 'onnxruntime_version'), "
+        "('audio_separator', 'audio_separator_import'), ('stemwerk_core', 'stemwerk_core_import')):\n"
+        "    try:\n"
+        "        mod = __import__(mod_name)\n"
+        "        result[key] = getattr(mod, '__version__', mod.__name__)\n"
+        "    except Exception as exc:\n"
+        "        result[key] = None\n"
+        "try:\n"
+        "    import torch\n"
+        "    result['mps_built'] = torch.backends.mps.is_built()\n"
+        "    result['mps_available'] = torch.backends.mps.is_available()\n"
+        "except Exception:\n"
+        "    result['mps_built'] = None\n"
+        "    result['mps_available'] = None\n"
+        "print(json.dumps(result))\n"
+    )
+    proc = subprocess.run([str(python), "-c", probe], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, f"managed runtime diagnostic probe failed: {proc.stderr}"
+    data = json.loads(proc.stdout.strip().splitlines()[-1])
 
     print()
-    print(f"python_executable={sys.executable}")
-    print(f"python_version={platform.python_version()}")
-    print(f"platform_system={platform.system()}")
-    print(f"platform_machine={platform.machine()}")
-    print(f"torch_version={torch.__version__}")
-    print(f"torchvision_version={torchvision.__version__}")
-    print(f"torchaudio_version={torchaudio.__version__}")
-    print(f"audio_separator_version={_version_or_fail('audio-separator')}")
-    print(f"onnxruntime_version={onnxruntime.__version__}")
-    print(f"mps_built={torch.backends.mps.is_built()}")
-    print(f"mps_available={torch.backends.mps.is_available()}")
-    print(f"audio_separator_import={audio_separator.__name__}")
-    print(f"stemwerk_core_import={stemwerk_core.__name__}")
+    for key, value in data.items():
+        print(f"{key}={value}")
 
 
 def test_runner_is_macos_arm64():
@@ -141,48 +173,63 @@ def test_runner_is_macos_arm64():
 
 
 def test_torch_pin():
-    import torch
-
-    assert _core_version(torch.__version__) == EXPECTED_TORCH, (
-        f"torch drifted from {EXPECTED_TORCH}: {torch.__version__}"
-    )
+    """Static packaging/pin contract (class A): the canonical Linux and
+    macOS (Apple Silicon) bootstrap scripts must agree on the intended base
+    torch pin. This never imports torch and does not depend on whatever
+    Python happens to run pytest -- see _bootstrap_var. The Linux ROCm-
+    specific override (ROCM7_GFX1201_TORCH_VERSION) is a deliberately
+    separate, newer pin for gfx1201-class hardware and out of scope here;
+    see docs/research/LINUX_ROCM_MAIN_RUNTIME_SLICE3_STATUS_2026-09-07.md."""
+    linux_pin = _bootstrap_var("scripts/reaper/STEMwerk_Bootstrap_Linux.sh", "PINNED_TORCH_VERSION")
+    macos_arm64_pin = _bootstrap_var("scripts/reaper/STEMwerk_Bootstrap_macOS.sh", "PINNED_TORCH_VERSION_ARM64")
+    assert linux_pin == EXPECTED_TORCH, f"Linux bootstrap torch pin drifted from {EXPECTED_TORCH}: {linux_pin}"
+    assert macos_arm64_pin == EXPECTED_TORCH, f"macOS ARM64 bootstrap torch pin drifted from {EXPECTED_TORCH}: {macos_arm64_pin}"
 
 
 def test_torchvision_pin_and_abi_match():
-    import torch
-    import torchvision
+    """Pin value is a static class-A check (see test_torch_pin). The ABI
+    cross-check (does the installed torchvision distribution declare the
+    matching torch pin as a dependency) needs a real installed torchvision
+    to inspect and is therefore class B: it runs when torchvision is
+    importable (managed runtime or ambient) and skips with a precise reason
+    otherwise, rather than hard-failing on bare system Python."""
+    linux_pin = _bootstrap_var("scripts/reaper/STEMwerk_Bootstrap_Linux.sh", "PINNED_TORCHVISION_VERSION")
+    macos_arm64_pin = _bootstrap_var("scripts/reaper/STEMwerk_Bootstrap_macOS.sh", "PINNED_TORCHVISION_VERSION_ARM64")
+    assert linux_pin == EXPECTED_TORCHVISION, f"Linux bootstrap torchvision pin drifted from {EXPECTED_TORCHVISION}: {linux_pin}"
+    assert macos_arm64_pin == EXPECTED_TORCHVISION, f"macOS ARM64 bootstrap torchvision pin drifted from {EXPECTED_TORCHVISION}: {macos_arm64_pin}"
 
-    torch_version = _core_version(torch.__version__)
-    torchvision_version = _core_version(torchvision.__version__)
+    if importlib.util.find_spec("torchvision") is None:
+        pytest.skip("torchvision is not importable in this Python; ABI cross-check needs an installed torchvision to inspect")
     torchvision_requires = distribution("torchvision").requires or []
-
-    assert torchvision_version == EXPECTED_TORCHVISION, (
-        f"torchvision drifted from {EXPECTED_TORCHVISION}: {torchvision.__version__}"
-    )
-    assert torch_version == EXPECTED_TORCH, (
-        f"torch drifted from {EXPECTED_TORCH}: {torch.__version__}"
-    )
     assert any(
         req.replace(" ", "") == f"torch(=={EXPECTED_TORCH})"
         for req in torchvision_requires
     ), (
-        f"torchvision {torchvision.__version__} does not declare torch=={EXPECTED_TORCH}; "
+        f"installed torchvision does not declare torch=={EXPECTED_TORCH}; "
         f"requires={torchvision_requires!r}"
     )
 
 
 def test_torchaudio_pin_and_abi_match():
+    """Pin value is a static class-A check (see test_torch_pin). The
+    major.minor cross-check against the actually-installed torch needs both
+    packages importable and is therefore class B: skips with a precise
+    reason when either is absent from this Python, rather than hard-failing
+    on bare system Python."""
+    linux_pin = _bootstrap_var("scripts/reaper/STEMwerk_Bootstrap_Linux.sh", "PINNED_TORCHAUDIO_VERSION")
+    macos_arm64_pin = _bootstrap_var("scripts/reaper/STEMwerk_Bootstrap_macOS.sh", "PINNED_TORCHAUDIO_VERSION_ARM64")
+    assert linux_pin == EXPECTED_TORCHAUDIO, f"Linux bootstrap torchaudio pin drifted from {EXPECTED_TORCHAUDIO}: {linux_pin}"
+    assert macos_arm64_pin == EXPECTED_TORCHAUDIO, f"macOS ARM64 bootstrap torchaudio pin drifted from {EXPECTED_TORCHAUDIO}: {macos_arm64_pin}"
+
+    if importlib.util.find_spec("torch") is None or importlib.util.find_spec("torchaudio") is None:
+        pytest.skip("torch and/or torchaudio are not importable in this Python; ABI cross-check needs both installed")
     import torch
     import torchaudio
 
     torch_version = _core_version(torch.__version__)
     torchaudio_version = _core_version(torchaudio.__version__)
-
-    assert torchaudio_version == EXPECTED_TORCHAUDIO, (
-        f"torchaudio drifted from {EXPECTED_TORCHAUDIO}: {torchaudio.__version__}"
-    )
     assert torchaudio_version.rsplit(".", 1)[0] == torch_version.rsplit(".", 1)[0], (
-        f"torch {torch.__version__} and torchaudio {torchaudio.__version__} "
+        f"installed torch {torch.__version__} and torchaudio {torchaudio.__version__} "
         "major.minor mismatch"
     )
 
@@ -225,10 +272,22 @@ def test_onnxruntime_imports():
 
 
 def test_torch_wheel_has_mps_support_built():
+    """MPS support is a compile-time property of macOS torch wheels only --
+    Linux/Windows torch wheels never have it, so this is NOT_APPLICABLE
+    (skipped, not failed) on those platforms rather than a real regression.
+    This checks whether the torch wheel was BUILT with MPS support, not
+    whether MPS hardware is actually available at runtime (a torch build
+    can be MPS-built without Apple Silicon present) -- that distinction is
+    also represented by the portable harness (tools/stemwerk_runtime_
+    diagnostics.py)'s separate torch_mps_built/torch_mps_available fields."""
+    if platform.system() != "Darwin":
+        pytest.skip("torch MPS support is a macOS-only wheel property; not applicable on this platform")
+    if importlib.util.find_spec("torch") is None:
+        pytest.skip("torch is not importable in this Python; cannot inspect its MPS build flag")
     import torch
 
     assert torch.backends.mps.is_built() is True, (
-        "Expected torch wheel with MPS support built in"
+        "Expected macOS torch wheel with MPS support built in"
     )
 
 
@@ -1435,22 +1494,35 @@ def test_windows_setup_overview_ignores_stale_failed_capabilities_when_bootstrap
     assert "verification = \"\"" in setup_internal
 
 
-def test_windows_setup_overview_ignores_stale_running_and_failed_bootstrap_state_when_ready_is_ok():
+def test_windows_setup_overview_keeps_current_bootstrap_status_authoritative_but_self_heals_verification_when_ready_is_ok():
+    """Commit 994ab5cc ("fix(setup): keep current failures authoritative")
+    deliberately removed the staleRunning/staleGuardFailed/staleFailedState
+    override block this test used to assert -- silently rewriting a CURRENT
+    "running"/"failed" bootstrap.env STATUS to "ok" from a cached
+    readyHealthy snapshot was itself a release-blocking false-positive bug,
+    per the surrounding code comment. This test's old name and assertions
+    described exactly that removed (buggy) behavior; it is rewritten here
+    to pin the current, accepted contract instead: status/reason stay
+    authoritative (read straight from bootstrap.env, never overridden), and
+    the one narrow self-heal that *does* remain is verification being
+    treated as "ok" when it's empty and the cached ready-state is healthy."""
     setup_internal = _read_utf8("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua")
 
-    assert 'local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"' in setup_internal
-    assert 'local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"' in setup_internal
-    assert 'local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)' in setup_internal
+    assert 'local status = trim(state.STATUS or "")' in setup_internal
+    assert 'local reason = trim(state.STATUS_REASON or "")' in setup_internal
     assert 'local readyHealthy = (' in setup_internal
     assert 'trim(readyState.READY_TO_GO_STATUS or "") == "ok"' in setup_internal
     assert 'trim(readyState.MAIN_RUNTIME_STATUS or "") == "ok"' in setup_internal
-    assert 'local staleRunning = (status == "running") and (not pid) and (not guardBusy) and readyHealthy' in setup_internal
-    assert 'local staleGuardFailed = (trim(guard.STATUS or "") == "failed") and readyHealthy and bootstrapComplete and (not guardBusy)' in setup_internal
-    assert 'local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running")' in setup_internal
-    assert 'and readyHealthy and bootstrapComplete and not runtimePolicyRequiresRebuild(state)' in setup_internal
-    assert 'if staleRunning or staleGuardFailed or staleFailedState then' in setup_internal
-    assert 'status = "ok"' in setup_internal
-    assert 'reason = ""' in setup_internal
+    assert "are no longer overridden here; a running state stays running, a" in setup_internal
+    assert "failed state stays failed with its exact current reason" in setup_internal
+    assert 'if verification == "" and readyHealthy then' in setup_internal
+    assert 'verification = "ok"' in setup_internal
+    for stale_symbol in ("staleRunning", "staleGuardFailed", "staleFailedState"):
+        assert stale_symbol not in setup_internal, (
+            f"{stale_symbol} reappeared in STEMwerk_Setup_Internal.lua -- this was the "
+            "release-blocking false-positive status override that 994ab5cc removed; "
+            "see this test's docstring"
+        )
 
 
 def test_windows_setup_overview_labels_unchecked_deps_and_keeps_homebrew_ffmpeg_guidance_off_windows():
