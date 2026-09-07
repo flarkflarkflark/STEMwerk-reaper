@@ -1,9 +1,8 @@
-"""Slice-1 contract-driven runtime resolver.
+"""Contract-driven runtime resolver (Slice 1 + Slice 2).
 
-Bridges the Slice-0 declarative catalogs (see ``workflow_contracts``) to
-backend/device capability resolution, producing a small immutable
-``ExecutionPlan`` that runtime code can validate ahead of expensive
-processing.
+Bridges the declarative catalogs (see ``workflow_contracts``) to backend/
+device capability resolution, producing small immutable execution plans
+that runtime code can validate ahead of expensive processing.
 
 Like ``workflow_contracts``, this module is intentionally pure: it never
 imports ``audio_separator_process.py`` or any other legacy runtime script,
@@ -11,8 +10,13 @@ never probes real hardware itself, and never encodes GPU backend-priority
 policy. All hardware-facing behaviour is supplied by the caller through a
 ``CapabilityProbe`` -- production wiring that reproduces the exact legacy
 Auto device-preference policy (e.g. the Linux AMD-name scoring in
-``audio_separator_process._prefer_linux_amd_device``) lives in
-``scripts/reaper/_internal/stemwerk_runtime_seam.py``, not here.
+``audio_separator_process._prefer_linux_amd_device``, or the DrumSep
+runtime-selection policy in ``audio_separator_process._select_drumsep_runtime``)
+lives in ``scripts/reaper/_internal/stemwerk_runtime_seam.py``, not here.
+
+Backend permission (``permitted_backends``) is read directly from each
+resolved capability's catalog entry -- there is no separate Python-side
+policy table to keep in sync with the catalog.
 """
 
 from __future__ import annotations
@@ -31,20 +35,12 @@ REASON_UNKNOWN_MODEL = "unknown_model"
 REASON_UNKNOWN_CAPABILITY = "unknown_capability"
 REASON_MODEL_CAPABILITY_MISMATCH = "model_capability_mismatch"
 REASON_UNSUPPORTED_STAGE_COUNT = "unsupported_stage_count"
+REASON_STAGE_REQUEST_COUNT_MISMATCH = "stage_request_count_mismatch"
 REASON_CONTRACT_LOAD_ERROR = "contract_load_error"
 REASON_BACKEND_NOT_PERMITTED = "backend_not_permitted"
 REASON_BACKEND_UNAVAILABLE = "backend_unavailable"
 
 CONTRACT_SOURCE = "2.4_contract"
-
-# Derived from the current 2.3 runtime: stemwerk_core.separator.StemSeparator
-# places no per-model backend restriction on htdemucs/htdemucs_ft, so every
-# backend kind stemwerk_core.devices can report is permitted for the sole
-# Slice-0 capability. Extend this table (never the priority logic itself)
-# when a future slice adds a capability with real backend restrictions.
-DEFAULT_BACKEND_POLICY: Mapping[str, frozenset] = {
-    "normal_stems_4": frozenset({"cpu", "cuda", "rocm", "mps", "directml"}),
-}
 
 
 class ResolutionError(ValueError):
@@ -71,6 +67,16 @@ class ExecutionPlan:
     fallback_applied: bool
     reason_code: str
     detail: str
+    contract_source: str = CONTRACT_SOURCE
+
+
+@dataclass(frozen=True)
+class WorkflowExecutionPlan:
+    """Immutable, contract-resolved plan for every stage of a workflow, in order."""
+
+    workflow_id: str
+    schema_version: str
+    stages: tuple
     contract_source: str = CONTRACT_SOURCE
 
 
@@ -110,6 +116,18 @@ DEFAULT_CAPABILITY_PROBE = CapabilityProbe(
 )
 
 
+@dataclass(frozen=True)
+class StageRequest:
+    """One stage's concrete model/device request, paired with the probe that
+    resolves its backend/device. Different stages typically need different
+    probes -- e.g. a Normal-Stems-style stage and a DrumSep-style stage use
+    entirely different hardware-selection machinery."""
+
+    model_id: str
+    requested_device: str
+    probe: CapabilityProbe = DEFAULT_CAPABILITY_PROBE
+
+
 def _load_catalogs(catalog_dir: str | Path) -> Mapping[str, Sequence[Mapping[str, Any]]]:
     try:
         return workflow_contracts.validate_catalogs(catalog_dir)
@@ -147,80 +165,34 @@ def _resolve_backend_and_device(requested: str, probe: CapabilityProbe) -> tuple
     return resolved_device, resolved_backend, fallback_applied, detail
 
 
-def resolve_execution_plan(
-    workflow_id: str,
-    model_id: str,
-    requested_device: str,
-    *,
-    catalog_dir: str | Path,
-    probe: CapabilityProbe = DEFAULT_CAPABILITY_PROBE,
-    backend_policy: Mapping[str, frozenset] = DEFAULT_BACKEND_POLICY,
-) -> ExecutionPlan:
-    """Resolve one workflow's single stage to a concrete backend/device plan.
-
-    Fails closed (raises ``ResolutionError``) for any unknown or
-    contradictory contract reference, and for any backend that is either not
-    permitted for the resolved capability or not actually available on this
-    machine. Never guesses: an explicit non-auto/non-cpu request that would
-    silently downgrade to CPU is rejected rather than substituted, mirroring
-    the existing 2.3 ``_is_unexpected_cpu_downgrade`` guard.
-    """
-
-    catalogs = _load_catalogs(catalog_dir)
-    return _resolve_from_catalogs(
-        catalogs, workflow_id, model_id, requested_device, probe=probe, backend_policy=backend_policy
-    )
-
-
-def _resolve_from_catalogs(
+def _resolve_single_stage(
     catalogs: Mapping[str, Sequence[Mapping[str, Any]]],
     workflow_id: str,
+    stage: Mapping[str, Any],
     model_id: str,
     requested_device: str,
-    *,
     probe: CapabilityProbe,
-    backend_policy: Mapping[str, frozenset],
 ) -> ExecutionPlan:
-    """Resolve against already-validated, already-parsed catalog data.
-
-    Split out from ``resolve_execution_plan`` so the cross-reference checks
-    below (model/capability/stage-shape) can be unit-tested directly against
-    hand-built catalog fixtures, independent of ``validate_catalogs``'s own
-    Slice-0 minimality lock, which forbids constructing any on-disk catalog
-    fixture that deviates from the exact shipped normal_stems/htdemucs set.
-    """
-
-    workflow = _lookup(
-        catalogs["workflows"], "workflow_id", workflow_id,
-        REASON_UNKNOWN_WORKFLOW, f"unknown workflow_id: {workflow_id!r}",
-    )
-    stages = workflow.get("ordered_stages") or []
-    if len(stages) != 1:
-        raise ResolutionError(
-            REASON_UNSUPPORTED_STAGE_COUNT,
-            f"workflow {workflow_id!r} has {len(stages)} stages; "
-            "the Slice-1 resolver supports single-stage workflows only",
-        )
-    stage = stages[0]
-    capability_id = stage["capability_id"]
-
-    _lookup(
-        catalogs["capabilities"], "capability_id", capability_id,
-        REASON_UNKNOWN_CAPABILITY,
-        f"workflow {workflow_id!r} stage {stage['stage_id']!r} references "
-        f"unknown capability_id: {capability_id!r}",
-    )
+    stage_id = stage["stage_id"]
+    permitted_capability_ids = list(stage["capability_ids"])
 
     model = _lookup(
         catalogs["models"], "model_id", model_id,
         REASON_UNKNOWN_MODEL, f"unknown model_id: {model_id!r}",
     )
-    if model["capability_id"] != capability_id:
+    model_capability_id = model["capability_id"]
+    if model_capability_id not in permitted_capability_ids:
         raise ResolutionError(
             REASON_MODEL_CAPABILITY_MISMATCH,
-            f"model {model_id!r} provides capability {model['capability_id']!r}, "
-            f"which does not match workflow {workflow_id!r} stage capability {capability_id!r}",
+            f"model {model_id!r} provides capability {model_capability_id!r}, which is not "
+            f"among stage {stage_id!r}'s permitted capabilities {sorted(permitted_capability_ids)}",
         )
+
+    capability = _lookup(
+        catalogs["capabilities"], "capability_id", model_capability_id,
+        REASON_UNKNOWN_CAPABILITY,
+        f"workflow {workflow_id!r} stage {stage_id!r} references unknown capability_id: {model_capability_id!r}",
+    )
 
     requested = str(requested_device or "auto")
     resolved_device, resolved_backend, fallback_applied, detail = _resolve_backend_and_device(requested, probe)
@@ -232,19 +204,19 @@ def _resolve_from_catalogs(
             "refusing to silently downgrade to cpu",
         )
 
-    permitted = backend_policy.get(capability_id, frozenset())
-    if resolved_backend not in permitted:
+    permitted_backends = frozenset(capability.get("permitted_backends") or ())
+    if resolved_backend not in permitted_backends:
         raise ResolutionError(
             REASON_BACKEND_NOT_PERMITTED,
-            f"backend {resolved_backend!r} is not permitted for capability {capability_id!r} "
-            f"(permitted: {sorted(permitted)})",
+            f"backend {resolved_backend!r} is not permitted for capability {model_capability_id!r} "
+            f"(permitted: {sorted(permitted_backends)})",
         )
 
     return ExecutionPlan(
-        workflow_id=workflow["workflow_id"],
+        workflow_id=workflow_id,
         schema_version=workflow_contracts.SCHEMA_VERSION,
-        stage_id=stage["stage_id"],
-        capability_id=capability_id,
+        stage_id=stage_id,
+        capability_id=model_capability_id,
         model_id=model["model_id"],
         requested_device=requested,
         resolved_backend=resolved_backend,
@@ -252,4 +224,83 @@ def _resolve_from_catalogs(
         fallback_applied=fallback_applied,
         reason_code=REASON_OK_AUTO if requested == "auto" else REASON_OK_EXPLICIT,
         detail=detail,
+    )
+
+
+def resolve_execution_plan(
+    workflow_id: str,
+    model_id: str,
+    requested_device: str,
+    *,
+    catalog_dir: str | Path,
+    probe: CapabilityProbe = DEFAULT_CAPABILITY_PROBE,
+) -> ExecutionPlan:
+    """Resolve a single-stage workflow to a concrete backend/device plan.
+
+    Fails closed (raises ``ResolutionError``) for any unknown or
+    contradictory contract reference, and for any backend that is either not
+    permitted for the resolved capability or not actually available on this
+    machine. Never guesses: an explicit non-auto/non-cpu request that would
+    silently downgrade to CPU is rejected rather than substituted, mirroring
+    the existing 2.3 ``_is_unexpected_cpu_downgrade`` guard.
+
+    Raises ``ResolutionError(REASON_UNSUPPORTED_STAGE_COUNT, ...)`` for a
+    workflow with more than one stage -- use ``resolve_workflow_plan`` for
+    those (e.g. Drum Split).
+    """
+
+    catalogs = _load_catalogs(catalog_dir)
+    workflow = _lookup(
+        catalogs["workflows"], "workflow_id", workflow_id,
+        REASON_UNKNOWN_WORKFLOW, f"unknown workflow_id: {workflow_id!r}",
+    )
+    stages = workflow.get("ordered_stages") or []
+    if len(stages) != 1:
+        raise ResolutionError(
+            REASON_UNSUPPORTED_STAGE_COUNT,
+            f"workflow {workflow_id!r} has {len(stages)} stage(s); resolve_execution_plan only "
+            "supports single-stage workflows -- use resolve_workflow_plan for multi-stage workflows",
+        )
+    return _resolve_single_stage(catalogs, workflow["workflow_id"], stages[0], model_id, requested_device, probe)
+
+
+def resolve_workflow_plan(
+    workflow_id: str,
+    stage_requests: Sequence[StageRequest],
+    *,
+    catalog_dir: str | Path,
+) -> WorkflowExecutionPlan:
+    """Resolve every stage of a (possibly multi-stage) workflow, in order.
+
+    Each stage resolves independently against its own ``StageRequest``
+    (model/device/probe); ``validate_catalogs`` has already proven, at
+    catalog-load time, that any ``stage_output``-kind stage's producer
+    reference is valid, so no additional inter-stage plumbing is needed here
+    beyond resolving each stage against its own catalog entry.
+    """
+
+    catalogs = _load_catalogs(catalog_dir)
+    workflow = _lookup(
+        catalogs["workflows"], "workflow_id", workflow_id,
+        REASON_UNKNOWN_WORKFLOW, f"unknown workflow_id: {workflow_id!r}",
+    )
+    stages = workflow.get("ordered_stages") or []
+    if len(stage_requests) != len(stages):
+        raise ResolutionError(
+            REASON_STAGE_REQUEST_COUNT_MISMATCH,
+            f"workflow {workflow_id!r} has {len(stages)} stage(s); {len(stage_requests)} "
+            "stage request(s) were provided",
+        )
+
+    resolved_stages = tuple(
+        _resolve_single_stage(
+            catalogs, workflow["workflow_id"], stage,
+            stage_request.model_id, stage_request.requested_device, stage_request.probe,
+        )
+        for stage, stage_request in zip(stages, stage_requests)
+    )
+    return WorkflowExecutionPlan(
+        workflow_id=workflow["workflow_id"],
+        schema_version=workflow_contracts.SCHEMA_VERSION,
+        stages=resolved_stages,
     )

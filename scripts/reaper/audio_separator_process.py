@@ -286,48 +286,153 @@ def _emit_normal_runtime_evidence(separator: object) -> None:
         print(f"device_name={adapter}", file=sys.stderr)
 
 
-def _emit_contract_resolution_shadow_diagnostics(
-    workflow_id: str, model_id: str, requested_device: str, resolved_device: str
-) -> None:
-    """Best-effort Slice-1 contract cross-check, for diagnostics only.
+# Slice 2: the 2.4 contract layer's model_id must be a lowercase stable id,
+# which the real DrumSep checkpoint filename is not. "drumsep_mdx23c" is the
+# 2.4 canonical id for that single fixed model; both legacy spellings
+# _resolve_direct_dks_model_catalog_entry() accepts map to it. Mirrored in
+# scripts/reaper/_internal/stemwerk_runtime_seam.py for external callers.
+_LEGACY_TO_CONTRACT_DRUMSEP_MODEL_ID = {
+    "MDX23C-DrumSep-aufr33-jarredou.ckpt": "drumsep_mdx23c",
+    "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt": "drumsep_mdx23c",
+}
+_DRUMSEP_RUNTIME_KINDS = frozenset({"cpu", "cuda", "rocm", "directml"})
 
-    Feeds the device this run already resolved (via the existing
-    _resolve_normal_runtime_device/select_device chain) back into the 2.4
-    resolver purely to confirm the two layers agree and to record whether
-    resolution went through the 2.4 contract layer. This can never change
-    which device or model the run actually uses, and never raises: the
-    Slice-0 catalog only lists htdemucs/htdemucs_ft, so a legacy-supported
-    but not-yet-catalogued model (e.g. htdemucs_6s, hdemucs_mmi) is expected
-    to be reported as out of contract scope here, not treated as a failure.
+
+def _contract_drumsep_model_id(legacy_model_id: str) -> str:
+    return _LEGACY_TO_CONTRACT_DRUMSEP_MODEL_ID.get(legacy_model_id, legacy_model_id)
+
+
+def _drumsep_backend_classifier(device_id) -> str:
+    device = str(device_id or "")
+    return device if device in _DRUMSEP_RUNTIME_KINDS else "unavailable"
+
+
+def _echo_capability_probe(resolved_device: str, backend_classifier):
+    """A read-only CapabilityProbe that never independently resolves
+    anything; it just echoes back a device/backend already decided
+    elsewhere. Used for shadow-mode cross-checking, where the goal is only
+    to prove the contract layer agrees with (not drive) an already-completed
+    legacy decision -- see the module docstring on _emit_drum_kit_contract_shadow_diagnostics.
+    """
+    from stemwerk_core.runtime_resolution import CapabilityProbe
+
+    already_resolved = {"id": resolved_device, "name": ""}
+    return CapabilityProbe(
+        get_available_devices=lambda: [already_resolved],
+        select_device=lambda _requested: (resolved_device, ""),
+        runtime_kind_for_device=backend_classifier,
+        is_unexpected_cpu_downgrade=lambda _requested, _resolved: False,
+        resolve_auto_device=lambda _live: already_resolved,
+    )
+
+
+def _normal_stems_capability_probe():
+    """Real (non-echo) probe for the Normal Stems authoritative contract
+    gate, built from this module's own already-loaded functions. Mirrors
+    scripts/reaper/_internal/stemwerk_runtime_seam.py's
+    build_normal_stems_capability_probe(), which external callers (tests,
+    tooling) use instead -- that version has to reach this script via
+    importlib since it runs from outside it; from here, inside the script
+    itself, calling the sibling functions directly avoids a redundant
+    re-import/re-exec of this same ~4700-line module.
+    """
+    from stemwerk_core.runtime_resolution import CapabilityProbe
+
+    def resolve_auto_device(_live_devices):
+        _requested, _resolved, preview, _live_ids = _resolve_normal_runtime_device("auto")
+        preview_id, _, preview_name = preview.partition("|")
+        return {"id": preview_id, "name": preview_name}
+
+    return CapabilityProbe(
+        get_available_devices=core_devices.get_available_devices,
+        select_device=select_device,
+        runtime_kind_for_device=core_devices.runtime_kind_for_device,
+        is_unexpected_cpu_downgrade=_is_unexpected_cpu_downgrade,
+        resolve_auto_device=resolve_auto_device,
+    )
+
+
+def _emit_plan_diagnostics(plan) -> None:
+    print(f"STEMWERK_DIAG contract_source={plan.contract_source}", file=sys.stderr)
+    print(f"STEMWERK_DIAG contract_workflow_id={plan.workflow_id}", file=sys.stderr)
+    print(f"STEMWERK_DIAG contract_stage_id={plan.stage_id}", file=sys.stderr)
+    print(f"STEMWERK_DIAG contract_capability_id={plan.capability_id}", file=sys.stderr)
+    print(f"STEMWERK_DIAG contract_model_id={plan.model_id}", file=sys.stderr)
+    print(f"STEMWERK_DIAG contract_resolved_backend={plan.resolved_backend}", file=sys.stderr)
+    print(f"STEMWERK_DIAG contract_resolved_device={plan.resolved_device}", file=sys.stderr)
+    print(f"STEMWERK_DIAG contract_fallback_applied={plan.fallback_applied}", file=sys.stderr)
+    print(f"STEMWERK_DIAG contract_reason_code={plan.reason_code}", file=sys.stderr)
+
+
+def _enforce_normal_stems_contract(model_id: str, requested_device: str, resolved_device: str) -> Optional[str]:
+    """Authoritative pre-execution contract gate for Normal Stems.
+
+    Resolves the 2.4 contract plan through an independent, real capability
+    probe (the same underlying _resolve_normal_runtime_device/select_device
+    chain the caller already used) and requires it to both succeed and
+    agree with the device the legacy engine already selected. Returns None
+    when the run may proceed; returns a human-readable abort reason
+    otherwise. Never silently continues on contract/runtime disagreement.
     """
     try:
-        from stemwerk_core.runtime_resolution import CapabilityProbe, ResolutionError, resolve_execution_plan
+        from stemwerk_core.runtime_resolution import ResolutionError, resolve_execution_plan
 
         catalog_dir = Path(__file__).resolve().parent / "catalog"
-        already_resolved = {"id": resolved_device, "name": ""}
-        probe = CapabilityProbe(
-            get_available_devices=lambda: [already_resolved],
-            select_device=lambda _requested: (resolved_device, ""),
-            runtime_kind_for_device=core_devices.runtime_kind_for_device,
-            is_unexpected_cpu_downgrade=_is_unexpected_cpu_downgrade,
-            resolve_auto_device=lambda _live: already_resolved,
-        )
         try:
             plan = resolve_execution_plan(
-                workflow_id, model_id, requested_device, catalog_dir=catalog_dir, probe=probe
+                "normal_stems", model_id, requested_device,
+                catalog_dir=catalog_dir, probe=_normal_stems_capability_probe(),
             )
         except ResolutionError as exc:
             print(f"STEMWERK_DIAG contract_resolution_failed_code={exc.code}", file=sys.stderr)
             print(f"STEMWERK_DIAG contract_resolution_failed_detail={exc.detail}", file=sys.stderr)
+            return f"contract resolution failed ({exc.code}): {exc.detail}"
+
+        _emit_plan_diagnostics(plan)
+        actual_backend = core_devices.runtime_kind_for_device(resolved_device)
+        agrees = plan.resolved_device == resolved_device and plan.resolved_backend == actual_backend
+        print(f"STEMWERK_DIAG contract_runtime_agrees={agrees}", file=sys.stderr)
+        if not agrees:
+            return (
+                f"contract plan ({plan.resolved_backend}/{plan.resolved_device}) disagrees with "
+                f"the legacy runtime's actual selection ({actual_backend}/{resolved_device})"
+            )
+        return None
+    except Exception as exc:
+        print(f"STEMWERK_DIAG contract_resolution_error={type(exc).__name__}", file=sys.stderr)
+        return f"contract resolution machinery raised {type(exc).__name__}: {exc}"
+
+
+def _emit_drum_kit_contract_shadow_diagnostics(workflow_id: str, stage_specs) -> None:
+    """Best-effort shadow-mode contract cross-check for Direct Kit / Drum
+    Split, for diagnostics only -- never gates, never raises. Drum Kit
+    routes are newly catalogued in Slice 2 (see workflow_id "drum_kit_direct"
+    / "drum_kit_split") but not yet promoted to authoritative: unlike Normal
+    Stems, they have no prior shadow-mode track record on real hardware, so
+    this slice proves agreement first rather than gating immediately. Each
+    entry in `stage_specs` is (model_id, requested_device, resolved_device,
+    backend_classifier), one per catalog stage in order.
+    """
+    try:
+        from stemwerk_core.runtime_resolution import ResolutionError, StageRequest, resolve_workflow_plan
+
+        catalog_dir = Path(__file__).resolve().parent / "catalog"
+        stage_requests = [
+            StageRequest(
+                model_id=model_id,
+                requested_device=requested_device,
+                probe=_echo_capability_probe(resolved_device, backend_classifier),
+            )
+            for model_id, requested_device, resolved_device, backend_classifier in stage_specs
+        ]
+        try:
+            plan = resolve_workflow_plan(workflow_id, stage_requests, catalog_dir=catalog_dir)
+        except ResolutionError as exc:
+            print(f"STEMWERK_DIAG contract_resolution_failed_code={exc.code}", file=sys.stderr)
+            print(f"STEMWERK_DIAG contract_resolution_failed_detail={exc.detail}", file=sys.stderr)
             return
-        print(f"STEMWERK_DIAG contract_source={plan.contract_source}", file=sys.stderr)
-        print(f"STEMWERK_DIAG contract_workflow_id={plan.workflow_id}", file=sys.stderr)
-        print(f"STEMWERK_DIAG contract_capability_id={plan.capability_id}", file=sys.stderr)
-        print(f"STEMWERK_DIAG contract_model_id={plan.model_id}", file=sys.stderr)
-        print(f"STEMWERK_DIAG contract_resolved_backend={plan.resolved_backend}", file=sys.stderr)
-        print(f"STEMWERK_DIAG contract_resolved_device={plan.resolved_device}", file=sys.stderr)
-        print(f"STEMWERK_DIAG contract_fallback_applied={plan.fallback_applied}", file=sys.stderr)
-        print(f"STEMWERK_DIAG contract_reason_code={plan.reason_code}", file=sys.stderr)
+        for stage_plan in plan.stages:
+            _emit_plan_diagnostics(stage_plan)
     except Exception as exc:
         print(f"STEMWERK_DIAG contract_resolution_error={type(exc).__name__}", file=sys.stderr)
 
@@ -2510,6 +2615,11 @@ def _select_drumsep_runtime(
         return None, reason, info
 
     if explicit_cuda and sys.platform.startswith("linux"):
+        # Fails closed on failure, matching every other explicit-device
+        # branch in this function (explicit_directml, Windows explicit_cuda,
+        # explicit mps): an explicit request must not silently downgrade to
+        # CPU. Linux was previously the sole outlier here -- see
+        # tests/test_linux_drumsep_rocm_fallback_chain.py.
         print("drumsep_runtime_selection_policy=explicit_cuda", file=sys.stderr)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
         selected_cuda_python, cuda_detail, cuda_payload, cuda_attempts = _probe_drumsep_runtime_candidates(
@@ -2526,33 +2636,13 @@ def _select_drumsep_runtime(
             info["cuda_python_attempts"] = cuda_attempts
             return selected_cuda_python, "cuda", info
 
-        print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
-        selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(
-            cpu_candidates,
-            require_gpu=False,
-        )
-        print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_end detail={cpu_detail}", file=sys.stderr)
-        if selected_cpu_python is not None:
-            info = dict(cpu_payload or {})
-            info["kind"] = "cpu"
-            info["detail"] = cpu_detail
-            info["fallback_reason"] = f"cuda_skipped:{cuda_detail}"
-            info["selection_policy"] = "fallback_cpu"
-            info["cpu_python_attempts"] = cpu_attempts
-            info["cuda_python_attempts"] = cuda_attempts
-            return selected_cpu_python, "cpu", info
-
         info = {
             "cuda_detail": cuda_detail,
-            "cpu_detail": cpu_detail,
             "cuda_python": str(cpu_python),
-            "cpu_python": str(cpu_python),
             "cuda_python_attempts": cuda_attempts,
-            "cpu_python_attempts": cpu_attempts,
-            "selection_policy": "fallback_cpu",
-            "normalized_request": normalized_request,
+            "selection_policy": "explicit_cuda",
         }
-        reason = "missing" if cuda_detail == "missing" and cpu_detail == "missing" else "broken"
+        reason = "missing" if cuda_detail == "missing" else "broken"
         return None, reason, info
 
     if bench_helper_device == "cuda" and sys.platform.startswith("linux"):
@@ -2598,6 +2688,19 @@ def _select_drumsep_runtime(
         info["selection_policy"] = selection_policy
         info["rocm_python_attempts"] = rocm_attempts
         return selected_rocm_python, "rocm", info
+
+    if explicit_rocm:
+        # Fails closed on failure, matching every other explicit-device
+        # branch in this function: an explicit ROCm request must not
+        # silently downgrade to CPU. This was previously the other Linux
+        # outlier -- see tests/test_linux_drumsep_rocm_fallback_chain.py.
+        info = dict(rocm_payload or {})
+        info["kind"] = "rocm"
+        info["detail"] = rocm_detail
+        info["selection_policy"] = "explicit_rocm"
+        info["rocm_python_attempts"] = rocm_attempts
+        reason = "missing" if rocm_detail == "missing" else "broken"
+        return None, reason, info
 
     cuda_detail = "skipped"
     cuda_attempts: List[Dict[str, Any]] = []
@@ -4423,6 +4526,16 @@ def main():
         if _is_unexpected_cpu_downgrade(stage1_requested, stage1_preview_device):
             stage1_fallback_reason = "live_runtime_cpu_only"
             print(f"dks_extract_stage1_fallback_reason={stage1_fallback_reason}", file=sys.stderr)
+        _emit_drum_kit_contract_shadow_diagnostics(
+            "drum_kit_split",
+            [
+                (
+                    stage1_model, stage1_requested, stage1_preview_device or stage1_resolved,
+                    lambda device_id: core_devices.runtime_kind_for_device(device_id),
+                ),
+                (_contract_drumsep_model_id(run_model), device_preference, runtime_kind, _drumsep_backend_classifier),
+            ],
+        )
         try:
             print("PROGRESS:1:Extracting drums...", flush=True)
             emit_phase("stage1_parent_start")
@@ -4615,6 +4728,10 @@ def main():
             if write_done:
                 write_done("ERROR")
             return _finish_benchmark_run(benchmark_sampler, 1)
+        _emit_drum_kit_contract_shadow_diagnostics(
+            "drum_kit_direct",
+            [(_contract_drumsep_model_id(run_model), device_preference, runtime_kind, _drumsep_backend_classifier)],
+        )
         output_root = Path(args.output_dir).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         emit_phase("separate_start")
@@ -4679,7 +4796,14 @@ def main():
     print(f"model_name={run_model}", file=sys.stderr)
     print(f"device={resolved_device}", file=sys.stderr)
     print(f"backend={backend}", file=sys.stderr)
-    _emit_contract_resolution_shadow_diagnostics("normal_stems", run_model, device_preference, resolved_device)
+    contract_abort_reason = _enforce_normal_stems_contract(run_model, device_preference, resolved_device)
+    if contract_abort_reason is not None:
+        print(f"STEMWERK_DIAG contract_abort_reason={contract_abort_reason}", file=sys.stderr)
+        print(
+            f"Runtime device fallback blocked: the 2.4 contract layer rejected this run: {contract_abort_reason}",
+            file=sys.stderr,
+        )
+        return 2
     if _is_unexpected_cpu_downgrade(device_preference, preview_device_id):
         print("normal_workflow_backend_fallback_reason=live_runtime_cpu_only", file=sys.stderr)
         print(

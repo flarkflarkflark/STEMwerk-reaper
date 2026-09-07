@@ -1,13 +1,19 @@
 """Regression pin for the Linux ROCm -> CUDA -> CPU fallback chain in
 `_select_drumsep_runtime` (Direct Drum Kit Split, stage-2 runtime resolution).
 
-This does NOT change behavior. It only pins the existing, unmodified control
-flow of the default (non-Windows, non-macOS-arm64, non-explicit-cpu,
-non-explicit-cuda) branch of `_select_drumsep_runtime` in
-scripts/reaper/audio_separator_process.py, including a known legacy quirk:
-the CUDA fallback attempt in that branch probes `cpu_candidates` (not
-`cuda_candidates`), and an explicit "rocm" request can still silently end up
-on CPU if ROCm verification fails.
+Pins the existing, unmodified control flow of the default (non-Windows,
+non-macOS-arm64, non-explicit-cpu) branch of `_select_drumsep_runtime` in
+scripts/reaper/audio_separator_process.py for the Auto/generic-gpu path,
+including a known legacy quirk: the CUDA fallback attempt in that branch
+probes `cpu_candidates` (not `cuda_candidates`).
+
+Slice 2 changed one thing (policy fix, not a quirk pin): an explicit
+`"rocm"` or `"cuda:N"`-on-Linux request that fails now fails CLOSED (returns
+`(None, reason, info)`) instead of silently falling through to CPU. This
+brings Linux in line with every other explicit-device branch in the same
+function (explicit_directml, Windows explicit_cuda, explicit mps), all of
+which already failed closed -- Linux's ROCm/CUDA branches were the sole
+outliers. See the Slice 2 report for the evidence trail.
 
 `_probe_drumsep_runtime_candidates` is monkeypatched directly so no real
 python interpreters, subprocesses, or torch/onnxruntime imports are needed.
@@ -159,32 +165,72 @@ def test_rocm_and_cuda_failure_falls_back_to_cpu(linux_module, tmp_path):
     assert len(calls["cpu"]) == 1
 
 
-def test_explicit_rocm_request_failure_skips_cuda_and_falls_back_to_cpu(linux_module, tmp_path):
-    """Pins the known legacy behavior: even a literal `requested_device="rocm"`
-    request silently ends up on CPU if ROCm verification fails - CUDA is
-    never attempted for an explicit rocm request (only the implicit
-    auto/gpu-normalized path probes CUDA as a fallback), but the CPU probe
-    still runs unconditionally. This is deliberately not "fixed" here."""
+def test_explicit_rocm_request_failure_fails_closed_not_cpu(linux_module, tmp_path):
+    """Slice 2 policy fix: a literal `requested_device="rocm"` request that
+    fails ROCm verification must fail closed, not silently end up on CPU.
+    CUDA is never attempted either (only the implicit auto/gpu-normalized
+    path probes CUDA as a fallback)."""
     module = linux_module
-    cpu_python = Path("/fake/.venv-drumsep/bin/python")
     fake_probe, calls = _fake_probe(
         rocm_responses=[(None, "rocm_no_hip", {}, [])],
-        cpu_response=(cpu_python, "ok", {}, []),
-        # cuda_response intentionally left None: if the CUDA probe is invoked
-        # at all for an explicit "rocm" request, the fake raises and the
-        # test fails.
+        # cuda_response and cpu_response intentionally left None: if either
+        # probe is invoked at all for an explicit "rocm" request, the fake
+        # raises and the test fails.
     )
     module._probe_drumsep_runtime_candidates = fake_probe
 
-    selected, kind, info = module._select_drumsep_runtime("rocm", tmp_path)
+    selected, reason, info = module._select_drumsep_runtime("rocm", tmp_path)
 
-    assert (selected, kind) == (cpu_python, "cpu")
-    assert info["selection_policy"] == "fallback_cpu"
-    assert info["fallback_reason"] == "rocm_skipped:rocm_no_hip"
-    assert "cuda_skipped" not in info["fallback_reason"]
+    assert selected is None
+    assert reason == "broken"
+    assert info["selection_policy"] == "explicit_rocm"
+    assert info["kind"] == "rocm"
     assert len(calls["rocm"]) == 1
     assert calls["cuda"] == []
-    assert len(calls["cpu"]) == 1
+    assert calls["cpu"] == []
+
+
+def test_explicit_rocm_request_missing_fails_closed_with_missing_reason(linux_module, tmp_path):
+    module = linux_module
+    fake_probe, calls = _fake_probe(rocm_responses=[(None, "missing", {}, [])])
+    module._probe_drumsep_runtime_candidates = fake_probe
+
+    selected, reason, info = module._select_drumsep_runtime("rocm", tmp_path)
+
+    assert selected is None
+    assert reason == "missing"
+    assert info["selection_policy"] == "explicit_rocm"
+    assert calls["cpu"] == []
+
+
+def test_explicit_cuda_on_linux_success_returns_cuda(linux_module, tmp_path):
+    module = linux_module
+    cuda_python = Path("/fake/.venv-drumsep/bin/python")
+    fake_probe, calls = _fake_probe(cuda_response=(cuda_python, "ok", {"torch_cuda_available": True}, []))
+    module._probe_drumsep_runtime_candidates = fake_probe
+
+    selected, kind, info = module._select_drumsep_runtime("cuda:0", tmp_path)
+
+    assert (selected, kind) == (cuda_python, "cuda")
+    assert info["selection_policy"] == "explicit_cuda"
+    assert calls["rocm"] == []
+    assert calls["cpu"] == []
+
+
+def test_explicit_cuda_on_linux_failure_fails_closed_not_cpu(linux_module, tmp_path):
+    """Slice 2 policy fix: matches the Windows explicit_cuda branch, which
+    already failed closed -- Linux's explicit_cuda branch was the outlier."""
+    module = linux_module
+    fake_probe, calls = _fake_probe(cuda_response=(None, "cuda_unavailable", {}, []))
+    module._probe_drumsep_runtime_candidates = fake_probe
+
+    selected, reason, info = module._select_drumsep_runtime("cuda:0", tmp_path)
+
+    assert selected is None
+    assert reason == "broken"
+    assert info["selection_policy"] == "explicit_cuda"
+    assert calls["rocm"] == []
+    assert calls["cpu"] == []
 
 
 @pytest.mark.parametrize("transient_detail", ["rocm_cuda_unavailable", "rocm_no_device_names"])
