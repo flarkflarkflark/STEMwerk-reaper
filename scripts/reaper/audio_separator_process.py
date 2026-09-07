@@ -307,25 +307,6 @@ def _drumsep_backend_classifier(device_id) -> str:
     return device if device in _DRUMSEP_RUNTIME_KINDS else "unavailable"
 
 
-def _echo_capability_probe(resolved_device: str, backend_classifier):
-    """A read-only CapabilityProbe that never independently resolves
-    anything; it just echoes back a device/backend already decided
-    elsewhere. Used for shadow-mode cross-checking, where the goal is only
-    to prove the contract layer agrees with (not drive) an already-completed
-    legacy decision -- see the module docstring on _emit_drum_kit_contract_shadow_diagnostics.
-    """
-    from stemwerk_core.runtime_resolution import CapabilityProbe
-
-    already_resolved = {"id": resolved_device, "name": ""}
-    return CapabilityProbe(
-        get_available_devices=lambda: [already_resolved],
-        select_device=lambda _requested: (resolved_device, ""),
-        runtime_kind_for_device=backend_classifier,
-        is_unexpected_cpu_downgrade=lambda _requested, _resolved: False,
-        resolve_auto_device=lambda _live: already_resolved,
-    )
-
-
 def _normal_stems_capability_probe():
     """Real (non-echo) probe for the Normal Stems authoritative contract
     gate, built from this module's own already-loaded functions. Mirrors
@@ -403,15 +384,87 @@ def _enforce_normal_stems_contract(model_id: str, requested_device: str, resolve
         return f"contract resolution machinery raised {type(exc).__name__}: {exc}"
 
 
-def _emit_drum_kit_contract_shadow_diagnostics(workflow_id: str, stage_specs) -> None:
-    """Best-effort shadow-mode contract cross-check for Direct Kit / Drum
-    Split, for diagnostics only -- never gates, never raises. Drum Kit
-    routes are newly catalogued in Slice 2 (see workflow_id "drum_kit_direct"
-    / "drum_kit_split") but not yet promoted to authoritative: unlike Normal
-    Stems, they have no prior shadow-mode track record on real hardware, so
-    this slice proves agreement first rather than gating immediately. Each
-    entry in `stage_specs` is (model_id, requested_device, resolved_device,
-    backend_classifier), one per catalog stage in order.
+def _drumsep_is_unexpected_cpu_downgrade(requested_device: str, resolved_device: str) -> bool:
+    requested = str(requested_device or "auto").strip().lower()
+    resolved = str(resolved_device or "").strip().lower()
+    if resolved not in ("cpu", "unavailable"):
+        return False
+    return requested not in ("", "auto", "cpu")
+
+
+def _drum_kit_capability_probe_from_result(python_path, runtime_kind: str):
+    """CapabilityProbe wrapping an ALREADY-COMPUTED _select_drumsep_runtime
+    result -- never re-invokes it.
+
+    DrumSep runtime selection performs real subprocess venv verification,
+    so per the Slice-4 mandate ("do not perform expensive duplicate probes
+    merely to compare two independent decisions") it is probed at most once
+    per run: both this contract gate and the actual execution consume this
+    same single (python_path, runtime_kind) result. There is deliberately
+    no independent second decision here to disagree with -- agreement is
+    structural, by construction, not something to duplicate the probe to
+    re-verify. Mirrors scripts/reaper/_internal/stemwerk_runtime_seam.py's
+    build_drum_kit_capability_probe(), which instead probes for real (for
+    external callers -- tests, tooling -- that have no already-computed
+    result to reuse).
+    """
+    from stemwerk_core.runtime_resolution import CapabilityProbe
+
+    resolved = runtime_kind if (python_path is not None and runtime_kind in _DRUMSEP_RUNTIME_KINDS) else "unavailable"
+    already_resolved = {"id": resolved, "name": resolved}
+
+    return CapabilityProbe(
+        get_available_devices=lambda: [already_resolved],
+        select_device=lambda _requested: (resolved, resolved),
+        runtime_kind_for_device=_drumsep_backend_classifier,
+        is_unexpected_cpu_downgrade=_drumsep_is_unexpected_cpu_downgrade,
+        resolve_auto_device=lambda _live: already_resolved,
+    )
+
+
+def _enforce_drum_kit_direct_contract(
+    model_id: str, requested_device: str, drumsep_python, runtime_kind: str
+) -> Optional[str]:
+    """Authoritative pre-execution contract gate for Direct Kit (single
+    stage, workflow_id "drum_kit_direct"). Consumes the already-computed
+    _select_drumsep_runtime result; never re-probes it. Returns None when
+    the run may proceed; a human-readable abort reason otherwise.
+    """
+    try:
+        from stemwerk_core.runtime_resolution import ResolutionError, resolve_execution_plan
+
+        catalog_dir = Path(__file__).resolve().parent / "catalog"
+        try:
+            plan = resolve_execution_plan(
+                "drum_kit_direct", _contract_drumsep_model_id(model_id), requested_device,
+                catalog_dir=catalog_dir,
+                probe=_drum_kit_capability_probe_from_result(drumsep_python, runtime_kind),
+            )
+        except ResolutionError as exc:
+            print(f"STEMWERK_DIAG contract_resolution_failed_code={exc.code}", file=sys.stderr)
+            print(f"STEMWERK_DIAG contract_resolution_failed_detail={exc.detail}", file=sys.stderr)
+            return f"contract resolution failed ({exc.code}): {exc.detail}"
+
+        _emit_plan_diagnostics(plan)
+        return None
+    except Exception as exc:
+        print(f"STEMWERK_DIAG contract_resolution_error={type(exc).__name__}", file=sys.stderr)
+        return f"contract resolution machinery raised {type(exc).__name__}: {exc}"
+
+
+def _enforce_drum_kit_split_contract(
+    stage1_model: str, stage1_requested_device: str, stage1_actual_resolved_device: str,
+    stage2_legacy_model: str, stage2_requested_device: str, stage2_python, stage2_runtime_kind: str,
+) -> Optional[str]:
+    """Authoritative pre-execution contract gate for Drum Split (two stages,
+    workflow_id "drum_kit_split"). Stage 1 (Demucs) uses a real, independent
+    probe -- the same cheap device-enumeration chain Normal Stems already
+    uses, cross-checked for agreement exactly like _enforce_normal_stems_contract
+    does, since re-probing it is inexpensive. Stage 2 (DrumSep) consumes the
+    already-computed _select_drumsep_runtime result, for the same
+    probe-once reason documented on _drum_kit_capability_probe_from_result.
+    Returns None when the run may proceed; a human-readable abort reason
+    otherwise.
     """
     try:
         from stemwerk_core.runtime_resolution import ResolutionError, StageRequest, resolve_workflow_plan
@@ -419,22 +472,42 @@ def _emit_drum_kit_contract_shadow_diagnostics(workflow_id: str, stage_specs) ->
         catalog_dir = Path(__file__).resolve().parent / "catalog"
         stage_requests = [
             StageRequest(
-                model_id=model_id,
-                requested_device=requested_device,
-                probe=_echo_capability_probe(resolved_device, backend_classifier),
-            )
-            for model_id, requested_device, resolved_device, backend_classifier in stage_specs
+                model_id=stage1_model, requested_device=stage1_requested_device,
+                probe=_normal_stems_capability_probe(),
+            ),
+            StageRequest(
+                model_id=_contract_drumsep_model_id(stage2_legacy_model),
+                requested_device=stage2_requested_device,
+                probe=_drum_kit_capability_probe_from_result(stage2_python, stage2_runtime_kind),
+            ),
         ]
         try:
-            plan = resolve_workflow_plan(workflow_id, stage_requests, catalog_dir=catalog_dir)
+            plan = resolve_workflow_plan("drum_kit_split", stage_requests, catalog_dir=catalog_dir)
         except ResolutionError as exc:
             print(f"STEMWERK_DIAG contract_resolution_failed_code={exc.code}", file=sys.stderr)
             print(f"STEMWERK_DIAG contract_resolution_failed_detail={exc.detail}", file=sys.stderr)
-            return
+            return f"contract resolution failed ({exc.code}): {exc.detail}"
+
         for stage_plan in plan.stages:
             _emit_plan_diagnostics(stage_plan)
+
+        stage1_plan = plan.stages[0]
+        stage1_actual_backend = core_devices.runtime_kind_for_device(stage1_actual_resolved_device)
+        stage1_agrees = (
+            stage1_plan.resolved_device == stage1_actual_resolved_device
+            and stage1_plan.resolved_backend == stage1_actual_backend
+        )
+        print(f"STEMWERK_DIAG contract_stage1_runtime_agrees={stage1_agrees}", file=sys.stderr)
+        if not stage1_agrees:
+            return (
+                f"stage 1 contract plan ({stage1_plan.resolved_backend}/{stage1_plan.resolved_device}) "
+                f"disagrees with the legacy runtime's actual selection "
+                f"({stage1_actual_backend}/{stage1_actual_resolved_device})"
+            )
+        return None
     except Exception as exc:
         print(f"STEMWERK_DIAG contract_resolution_error={type(exc).__name__}", file=sys.stderr)
+        return f"contract resolution machinery raised {type(exc).__name__}: {exc}"
 
 
 def _read_benchmark_dks_stage2_cap_request() -> tuple[Optional[int], str]:
@@ -1355,6 +1428,20 @@ def _emit_direct_dks_stage2_runtime_markers(reason: str, python_path: Path, deta
     else:
         print("Direct Drum Kit Split runtime is broken.", file=sys.stderr)
     print(guidance, file=sys.stderr)
+
+
+def _emit_direct_dks_contract_rejected_markers(reason_code: str, detail: str) -> None:
+    print("error_stage=contract_preflight", file=sys.stderr)
+    print("error_reason=drumsep_contract_rejected", file=sys.stderr)
+    print(f"contract_reason_code={reason_code}", file=sys.stderr)
+    if detail:
+        print(f"detail={detail}", file=sys.stderr)
+    print(
+        "guidance=The 2.4 contract layer rejected this Direct Drum Kit run before "
+        "processing started; see the STEMWERK_DIAG contract_* lines above for the exact reason.",
+        file=sys.stderr,
+    )
+    print(f"Direct Drum Kit contract check failed: {detail or reason_code}", file=sys.stderr)
 
 
 def _emit_direct_dks_helper_failure_markers(reason: str, stage: str, requested_model: str, resolved_model: str, detail: str = "") -> None:
@@ -4526,16 +4613,17 @@ def main():
         if _is_unexpected_cpu_downgrade(stage1_requested, stage1_preview_device):
             stage1_fallback_reason = "live_runtime_cpu_only"
             print(f"dks_extract_stage1_fallback_reason={stage1_fallback_reason}", file=sys.stderr)
-        _emit_drum_kit_contract_shadow_diagnostics(
-            "drum_kit_split",
-            [
-                (
-                    stage1_model, stage1_requested, stage1_preview_device or stage1_resolved,
-                    lambda device_id: core_devices.runtime_kind_for_device(device_id),
-                ),
-                (_contract_drumsep_model_id(run_model), device_preference, runtime_kind, _drumsep_backend_classifier),
-            ],
+        contract_abort_reason = _enforce_drum_kit_split_contract(
+            stage1_model, stage1_requested, stage1_preview_device or stage1_resolved,
+            run_model, device_preference, drumsep_python, runtime_kind,
         )
+        if contract_abort_reason is not None:
+            print(f"STEMWERK_DIAG contract_abort_reason={contract_abort_reason}", file=sys.stderr)
+            _emit_direct_dks_contract_rejected_markers("contract_rejected", contract_abort_reason)
+            emit_phase("python_error")
+            if write_done:
+                write_done("ERROR")
+            return _finish_benchmark_run(benchmark_sampler, 1)
         try:
             print("PROGRESS:1:Extracting drums...", flush=True)
             emit_phase("stage1_parent_start")
@@ -4728,10 +4816,14 @@ def main():
             if write_done:
                 write_done("ERROR")
             return _finish_benchmark_run(benchmark_sampler, 1)
-        _emit_drum_kit_contract_shadow_diagnostics(
-            "drum_kit_direct",
-            [(_contract_drumsep_model_id(run_model), device_preference, runtime_kind, _drumsep_backend_classifier)],
-        )
+        contract_abort_reason = _enforce_drum_kit_direct_contract(run_model, device_preference, drumsep_python, runtime_kind)
+        if contract_abort_reason is not None:
+            print(f"STEMWERK_DIAG contract_abort_reason={contract_abort_reason}", file=sys.stderr)
+            _emit_direct_dks_contract_rejected_markers("contract_rejected", contract_abort_reason)
+            emit_phase("python_error")
+            if write_done:
+                write_done("ERROR")
+            return _finish_benchmark_run(benchmark_sampler, 1)
         output_root = Path(args.output_dir).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         emit_phase("separate_start")

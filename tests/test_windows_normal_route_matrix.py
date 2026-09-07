@@ -25,6 +25,13 @@ WINDOWS_BACKENDS = [
 ]
 NORMAL_MODELS = ["htdemucs", "htdemucs_ft", "htdemucs_6s"]
 
+# _select_drumsep_runtime's real (2nd tuple element) return values are
+# always a clean backend-kind string ("cpu"/"cuda"/"rocm"/"directml"),
+# never a device-index-shaped id -- the DKS-authoritative contract gate
+# (Slice 4) classifies anything outside that vocabulary as "unavailable",
+# so a fake echoing the raw device string (e.g. "cuda:0") no longer passes.
+_DRUMSEP_RUNTIME_KIND_FOR_DEVICE = {"cpu": "cpu", "directml": "directml", "cuda:0": "cuda"}
+
 
 def _load_audio_separator_process():
     spec = importlib.util.spec_from_file_location("audio_separator_process", PROCESS_SCRIPT)
@@ -173,6 +180,10 @@ def test_windows_dks_extract_stage1_reuses_normal_route_mapping_across_backends(
     monkeypatch.setattr(module, "_setup_reaper_io", lambda _output_dir: (lambda _status: None))
     monkeypatch.setattr(module, "_require_core", lambda: None)
     module._core_loaded = True
+    from stemwerk_core import devices as _core_devices
+
+    module.core_devices = _core_devices
+    module.select_device = lambda _requested: (resolved_device, _device_label)
     monkeypatch.setattr(module, "emit_phase", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(module, "_configure_ffmpeg_runtime", lambda: (None, None, None))
     monkeypatch.setattr(module, "_configure_model_cache_runtime", lambda: str(tmp_path / "models"))
@@ -181,7 +192,11 @@ def test_windows_dks_extract_stage1_reuses_normal_route_mapping_across_backends(
         "_resolve_normal_runtime_device",
         lambda requested: (requested, resolved_device, f"{resolved_device}|Preview", [resolved_device]),
     )
-    monkeypatch.setattr(module, "_select_drumsep_runtime", lambda _requested: ("python", requested_device, {}))
+    monkeypatch.setattr(
+        module,
+        "_select_drumsep_runtime",
+        lambda _requested: ("python", _DRUMSEP_RUNTIME_KIND_FOR_DEVICE[requested_device], {}),
+    )
     monkeypatch.setattr(module, "_should_use_drumsep_mps_direct_demix", lambda *_args, **_kwargs: (False, ""))
     monkeypatch.setattr(
         module,
@@ -235,7 +250,7 @@ def test_windows_dks_extract_stage1_reuses_normal_route_mapping_across_backends(
 
     assert exit_code == 0
     assert stem_separator_inits == [(model_name, resolved_device)]
-    assert helper_calls[0]["backend_runtime"] == requested_device
+    assert helper_calls[0]["backend_runtime"] == _DRUMSEP_RUNTIME_KIND_FOR_DEVICE[requested_device]
 
 
 @pytest.mark.parametrize("requested_device,_resolved_device,_device_label", WINDOWS_BACKENDS)
@@ -254,7 +269,11 @@ def test_windows_direct_dks_route_stays_on_drumsep_helper_per_backend(
     monkeypatch.setattr(module, "emit_phase", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(module, "_configure_ffmpeg_runtime", lambda: (None, None, None))
     monkeypatch.setattr(module, "_configure_model_cache_runtime", lambda: str(tmp_path / "models"))
-    monkeypatch.setattr(module, "_select_drumsep_runtime", lambda _requested: ("python", requested_device, {}))
+    monkeypatch.setattr(
+        module,
+        "_select_drumsep_runtime",
+        lambda _requested: ("python", _DRUMSEP_RUNTIME_KIND_FOR_DEVICE[requested_device], {}),
+    )
     monkeypatch.setattr(module, "_should_use_drumsep_mps_direct_demix", lambda *_args, **_kwargs: (False, ""))
     monkeypatch.setattr(
         module,
@@ -301,5 +320,5 @@ def test_windows_direct_dks_route_stays_on_drumsep_helper_per_backend(
 
     assert exit_code == 0
     helper_args, helper_kwargs = helper_calls[0]
-    assert helper_kwargs["backend_runtime"] == requested_device
+    assert helper_kwargs["backend_runtime"] == _DRUMSEP_RUNTIME_KIND_FOR_DEVICE[requested_device]
     assert helper_args[5] == "MDX23C-DrumSep-aufr33-jarredou.ckpt"
