@@ -133,3 +133,48 @@ production runtime at `~/.local/share/STEMwerk/` was read-only inspected,
 never written to. All package installs happened in a disposable venv under
 this session's scratch directory. DrumSep, Direct Kit/Split contract
 authority, and macOS/Windows constraint files are unchanged.
+
+## Addendum (completion pass) — CPU, remaining models, hdemucs_mmi catalog entry
+
+Closes the real-validation gaps left open above.
+
+**Real CPU separation.** Same isolated venv, `device="cpu"` explicit:
+`resolve_execution_plan` resolves `requested_device="cpu"`,
+`resolved_backend="cpu"`, `resolved_device="cpu"`; the real
+`StemSeparator(model="htdemucs", device="cpu")` run produced
+`device_used="cpu"` and all four expected stems (`vocals`, `drums`, `bass`,
+`other`), non-empty files, no GPU backend touched. 7.0s for a 20s clip.
+
+**htdemucs_ft and htdemucs_6s — locally available, both proven for real on
+ROCm.** Both have complete local weights in the real production model
+cache (`htdemucs_ft.yaml` + its 4-file bag; `htdemucs_6s.yaml` + its single
+file). Copied (not moved/linked) into per-test scratch, `device="auto"`:
+both resolve `rocm`/`cuda:0` and the real separator run's `device_used`
+matches exactly. `htdemucs_ft` produced the expected 4 stems (10.9s);
+`htdemucs_6s` produced the expected 6 stems -- `vocals`, `drums`, `bass`,
+`other`, `guitar`, `piano` (1.7s).
+
+**hdemucs_mmi — still not locally available, now with one more layer of
+evidence.** The production model cache's own `download_checks.json` (part
+of audio-separator's model registry, not something this slice wrote) lists
+`"Demucs v4: hdemucs_mmi"` as a single file,
+`75fc33f5-1941ce65.th` (`dl.fbaipublicfiles.com/demucs/hybrid_transformer/...`,
+the same URL family as plain `htdemucs`'s single `955717e8-...th`, not the
+4-file `htdemucs_ft` bag and not distinctly "6s"-labeled like
+`htdemucs_6s`). Neither that file nor `hdemucs_mmi.yaml` exists locally --
+this is a download manifest entry, not proof of the model's actual stem
+output, and per instruction was not downloaded to find out. This is
+consistent with, but does not upgrade, the Slice 2 catalog entry's
+4-stem/`role: internal` classification. The gap remains explicitly
+recorded (`test_hdemucs_mmi_local_availability_is_recorded`) rather than
+silently dropped.
+
+**Production hygiene note.** `audio_separator`'s `Separator` writes/updates
+a `download_checks.json` in whatever `AUDIO_SEPARATOR_MODEL_DIR` points at,
+even when loading an already-local model -- observed directly when it
+appeared unprompted in the scratch model directory after the first
+htdemucs run. The completion-pass tests now always stage a copy of the
+needed model files into a pytest-owned `tmp_path` and point execution at
+that copy, never at the live model cache directly, so no test run can
+write into `~/.local/share/STEMwerk/models/`. Confirmed after this pass:
+every file under that directory retains its original 2026-09-03 mtime.
