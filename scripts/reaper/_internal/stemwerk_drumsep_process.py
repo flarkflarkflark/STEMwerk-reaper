@@ -34,6 +34,10 @@ REAPER_FILENAMES = {
 DIRECT_DEMIX_KEYS = ("Kick", "Snare", "Toms", "Hh", "Ride", "Crash")
 LOW_VRAM_THRESHOLD_BYTES = 6 * 1024 * 1024 * 1024
 CUDA_FAILURE_GUIDANCE = "CUDA Drum Kit Split failed on this GPU. Try CPU/low-VRAM mode or rebuild/repair runtime."
+CUDA_ARCHITECTURE_UNSUPPORTED_GUIDANCE = (
+    "This GPU's compute architecture is not supported by the installed CUDA runtime. "
+    "Run STEMwerk Repair to install a matched runtime, or use CPU/DirectML mode."
+)
 
 
 class DirectDemixValidationError(RuntimeError):
@@ -145,7 +149,27 @@ def _probe_gpu_device(device: str) -> tuple[bool, str, dict[str, str]]:
             return False, "cuda_runtime_is_rocm", {"torch_hip": hip, "torch_cuda": cuda_version}
         if not available:
             return False, "torch_cuda_unavailable", {"torch_hip": hip, "torch_cuda": cuda_version}
-        tensor = torch.ones(1, device="cuda:0")
+        compute_capability = ""
+        conv_device = ""
+        if requested == "cuda":
+            try:
+                major, minor = torch.cuda.get_device_capability(0)
+                compute_capability = f"{major}.{minor}"
+            except Exception:
+                compute_capability = ""
+            # torch.cuda.is_available() only proves the driver is visible; a cu121-era
+            # build on a Blackwell (sm_120) GPU still reports available=True and then
+            # fails at real inference with "no kernel image is available for execution
+            # on the device". Launch a real conv2d kernel so that failure is caught here.
+            # (ROCm is out of scope for this Windows Blackwell fix and keeps its
+            # existing bare-allocation probe below unchanged.)
+            tensor = torch.ones((1, 1, 8, 8), dtype=torch.float32, device="cuda:0")
+            weight = torch.ones((1, 1, 3, 3), dtype=torch.float32, device="cuda:0")
+            output = torch.nn.functional.conv2d(tensor, weight)
+            torch.cuda.synchronize()
+            conv_device = str(output.device)
+        else:
+            tensor = torch.ones(1, device="cuda:0")
         total_memory = 0
         try:
             props = torch.cuda.get_device_properties(0)
@@ -155,7 +179,9 @@ def _probe_gpu_device(device: str) -> tuple[bool, str, dict[str, str]]:
         return True, "ok", {
             "torch_hip": hip,
             "torch_cuda": cuda_version,
+            "compute_capability": compute_capability,
             "tensor_device": str(tensor.device),
+            "conv_device": conv_device,
             "device_name": str(torch.cuda.get_device_name(0)),
             "total_memory_bytes": str(total_memory or ""),
             "total_memory_gib": f"{(total_memory / float(1024 ** 3)):.1f}" if total_memory else "",
@@ -170,6 +196,8 @@ def _classify_runtime_exception(exc: Exception, device: str, gpu_probe: dict[str
     lower = text.lower()
     requested = str(device or "").strip().lower()
     if requested == "cuda":
+        if "no kernel image is available for execution on the device" in lower:
+            return "cuda_architecture_unsupported", CUDA_ARCHITECTURE_UNSUPPORTED_GUIDANCE
         if "illegal memory access was encountered" in lower:
             return "cuda_illegal_memory_access", CUDA_FAILURE_GUIDANCE
         if "cuda out of memory" in lower:
@@ -645,12 +673,17 @@ def run(args: argparse.Namespace) -> int:
     print(f"drumsep_helper_gpu_probe_low_vram={gpu_probe.get('low_vram', '')}", file=sys.stderr)
     print(f"drumsep_helper_gpu_probe_onnx_provider={gpu_probe.get('onnx_provider', '')}", file=sys.stderr)
     if not gpu_probe_ok:
+        probe_error_reason = "drumsep_helper_gpu_probe_failed"
+        probe_error_message = gpu_probe_reason
+        if "no kernel image is available for execution on the device" in gpu_probe_reason.lower():
+            probe_error_reason = "cuda_architecture_unsupported"
+            probe_error_message = CUDA_ARCHITECTURE_UNSUPPORTED_GUIDANCE
         write_result(
             result_json,
             _error_payload(
-                "drumsep_helper_gpu_probe_failed",
+                probe_error_reason,
                 "stage2_runtime",
-                gpu_probe_reason,
+                probe_error_message,
                 requested_helper_device=args.device,
                 gpu_probe=gpu_probe,
             ),

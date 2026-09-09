@@ -3836,8 +3836,12 @@ def _classify_runtime_failure(
             "details": details,
         }
 
+    is_cuda_architecture_unsupported = (
+        "no kernel image is available for execution on the device" in lower
+    )
     is_cuda_failure = (
-        "cuda error: an illegal memory access was encountered" in lower
+        is_cuda_architecture_unsupported
+        or "cuda error: an illegal memory access was encountered" in lower
         or "illegal memory access was encountered" in lower
         or "cuda out of memory" in lower
     )
@@ -3845,7 +3849,12 @@ def _classify_runtime_failure(
         return None
 
     gpu_details = _extract_gpu_memory_details(env)
-    reason = "cuda_out_of_memory" if "cuda out of memory" in lower else "cuda_illegal_memory_access"
+    if is_cuda_architecture_unsupported:
+        reason = "cuda_architecture_unsupported"
+    elif "cuda out of memory" in lower:
+        reason = "cuda_out_of_memory"
+    else:
+        reason = "cuda_illegal_memory_access"
     details = {
         "requested_device": requested_device or "",
         "selected_device": selected_device or "",
@@ -3930,6 +3939,33 @@ def _classify_model_failure_text(text: str) -> Optional[Dict[str, str]]:
             "model_path": path_match.group(1).strip() if path_match else "",
         }
     return None
+
+
+def _classify_final_failure(
+    exc: BaseException,
+    traceback_text: str,
+    requested_device: str,
+    selected_device: str,
+    model_name: str,
+    env: Optional[Dict[str, object]] = None,
+) -> Tuple[Optional[Dict[str, object]], Optional[Dict[str, str]]]:
+    """Apply the final exception-handler precedence used by ``main``."""
+    failure = _classify_runtime_failure(
+        exc,
+        traceback_text,
+        requested_device,
+        selected_device,
+        model_name,
+        env,
+    )
+    is_cuda_architecture_failure = (
+        bool(failure)
+        and failure.get("error_reason") == "cuda_architecture_unsupported"
+    )
+    model_failure = None
+    if not is_cuda_architecture_failure:
+        model_failure = _classify_model_failure_text(f"{exc}\n{traceback_text}")
+    return failure, model_failure
 
 
 def _parse_major_minor(version_text: Optional[str]) -> Tuple[int, int]:
@@ -4702,7 +4738,20 @@ def main():
             if write_done:
                 write_done("ERROR")
             return _finish_benchmark_run(benchmark_sampler, 1)
-        model_failure = _classify_model_failure_text(f"{exc}\n{traceback_text}")
+        failure, model_failure = _classify_final_failure(
+            exc,
+            traceback_text,
+            device_preference,
+            resolved_device,
+            run_model,
+            runtime_env,
+        )
+        # A proven CUDA architecture/runtime failure (e.g. "no kernel image is
+        # available for execution on the device") is an explicit, unambiguous
+        # diagnosis from the exception text itself. It must win over the
+        # model-download/VPN-firewall classifier below, which only pattern-matches
+        # loosely on network-error substrings and could otherwise coincidentally
+        # fire on the same traceback and surface a misleading download hint.
         if model_failure:
             print(f"STEMWERK_ERROR_CLASS={model_failure['error_class']}", file=sys.stderr)
             print(f"STEMWERK_ERROR_HINT={model_failure['error_hint']}", file=sys.stderr)
@@ -4711,14 +4760,6 @@ def main():
                 print(f"STEMWERK_MODEL_URL={model_failure['model_url']}", file=sys.stderr)
             if model_failure.get("model_path"):
                 print(f"STEMWERK_MODEL_PATH={model_failure['model_path']}", file=sys.stderr)
-        failure = _classify_runtime_failure(
-            exc,
-            traceback_text,
-            device_preference,
-            resolved_device,
-            run_model,
-            runtime_env,
-        )
         if failure:
             if failure.get("error_reason"):
                 print(f"error_reason={failure['error_reason']}", file=sys.stderr)

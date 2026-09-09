@@ -31,7 +31,7 @@ TARGET_ENV = {
     "extra": "",
 }
 
-CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"
+CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"
 
 SKIP_DEP_NAMES = {
     "diffq",      # non-Windows dependency
@@ -176,8 +176,8 @@ def seeded_requirements(include_cuda: bool, include_directml: bool) -> Iterable[
     ]
     if include_cuda:
         requirements += [
-            "torch==2.4.1+cu121",
-            "torchvision==0.19.1+cu121",
+            "torch==2.7.1+cu128",
+            "torchvision==0.22.1+cu128",
         ]
     else:
         requirements += [
@@ -220,7 +220,7 @@ def main() -> int:
             continue
 
         before = set(out_dir.glob("*.whl"))
-        if "+cu121" in spec:
+        if "+cu128" in spec:
             pip_download_with_index(spec, out_dir, args, CUDA_INDEX_URL)
         else:
             pip_download(spec, out_dir, args)

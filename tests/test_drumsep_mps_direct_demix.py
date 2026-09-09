@@ -290,6 +290,89 @@ def test_helper_gpu_probe_rejects_cuda_request_on_rocm(monkeypatch):
     assert reason == "cuda_runtime_is_rocm"
 
 
+class _FakeCudaTensor:
+    def __init__(self, device: str):
+        self.device = device
+
+
+def _fake_cuda_torch(*, conv2d_error: Exception | None):
+    class FakeCuda:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def get_device_name(_index):
+            return "NVIDIA GeForce RTX 5080 Laptop GPU"
+
+        @staticmethod
+        def get_device_capability(_index):
+            return (12, 0)
+
+        @staticmethod
+        def get_device_properties(_index):
+            return SimpleNamespace(total_memory=17094475776)
+
+        @staticmethod
+        def synchronize():
+            return None
+
+    def conv2d(_tensor, _weight):
+        if conv2d_error is not None:
+            raise conv2d_error
+        return _FakeCudaTensor("cuda:0")
+
+    return SimpleNamespace(
+        version=SimpleNamespace(hip=None, cuda="12.8"),
+        cuda=FakeCuda(),
+        float32="float32",
+        ones=lambda *_args, **_kwargs: _FakeCudaTensor("cuda:0"),
+        nn=SimpleNamespace(functional=SimpleNamespace(conv2d=conv2d)),
+    )
+
+
+def test_helper_gpu_probe_cuda_runs_a_real_kernel_not_just_allocation(monkeypatch):
+    helper = _load_helper()
+    monkeypatch.setitem(sys.modules, "torch", _fake_cuda_torch(conv2d_error=None))
+    ok, reason, payload = helper._probe_gpu_device("cuda")
+    assert ok is True
+    assert reason == "ok"
+    assert payload["compute_capability"] == "12.0"
+    assert payload["conv_device"] == "cuda:0"
+
+
+def test_helper_gpu_probe_cuda_rejects_blackwell_no_kernel_image(monkeypatch):
+    helper = _load_helper()
+    kernel_error = RuntimeError(
+        "CUDA error: no kernel image is available for execution on the device"
+    )
+    monkeypatch.setitem(sys.modules, "torch", _fake_cuda_torch(conv2d_error=kernel_error))
+    ok, reason, _payload = helper._probe_gpu_device("cuda")
+    assert ok is False
+    assert "no kernel image is available for execution on the device" in reason.lower()
+
+
+def test_classify_runtime_exception_recognizes_cuda_architecture_unsupported():
+    helper = _load_helper()
+    exc = RuntimeError("CUDA error: no kernel image is available for execution on the device")
+    reason, hint = helper._classify_runtime_exception(exc, "cuda", {})
+    assert reason == "cuda_architecture_unsupported"
+    assert hint == helper.CUDA_ARCHITECTURE_UNSUPPORTED_GUIDANCE
+
+
+def test_classify_runtime_exception_still_recognizes_oom_and_illegal_memory():
+    helper = _load_helper()
+    oom = RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
+    reason, hint = helper._classify_runtime_exception(oom, "cuda", {})
+    assert reason == "cuda_out_of_memory"
+    assert hint == helper.CUDA_FAILURE_GUIDANCE
+
+    illegal = RuntimeError("CUDA error: an illegal memory access was encountered")
+    reason, hint = helper._classify_runtime_exception(illegal, "cuda", {})
+    assert reason == "cuda_illegal_memory_access"
+    assert hint == helper.CUDA_FAILURE_GUIDANCE
+
+
 def test_explicit_mps_runtime_selection_uses_normal_runtime_candidates(tmp_path, monkeypatch):
     module = _load_audio_process()
     state_dir = tmp_path / "state"

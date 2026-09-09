@@ -4959,8 +4959,8 @@ def test_windows_offline_drumsep_payload_builder_and_inno_wiring_present():
 
     assert 'drumsep-wheels-nvidia' in prep
     assert 'audio-separator==0.34.1' in prep
-    assert 'onnxruntime==1.26.0' in prep
-    assert 'torchaudio==2.4.1+cu121' in prep
+    assert 'onnxruntime==1.26.0' in prep  # retained for the CPU backend spec, not nvidia
+    assert 'torchaudio==2.7.1+cu128' in prep
     assert 'torch-directml==0.2.5.dev240914' in prep
     assert 'torch==2.12.0' in prep
 
@@ -5934,25 +5934,34 @@ def test_windows_main_wheelhouse_builder_keeps_cuda_torch_stack_and_numba_llvm_c
     assert '"llvmlite==0.48.0"' in script
     assert '"numba==0.66.0"' in script
     assert 'if include_cuda:' in script
-    assert '"torch==2.4.1+cu121"' in script
-    assert '"torchvision==0.19.1+cu121"' in script
+    assert '"torch==2.7.1+cu128"' in script
+    assert '"torchvision==0.22.1+cu128"' in script
     assert 'else:' in script
     assert '"torch==2.4.1"' in script
     assert '"torchvision==0.19.1"' in script
-    assert 'CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"' in script
-    assert 'if "+cu121" in spec:' in script
+    assert 'CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"' in script
+    assert 'if "+cu128" in spec:' in script
     assert "pip_download_with_index(spec, out_dir, args, CUDA_INDEX_URL)" in script
 
 
-def test_windows_bootstrap_cuda_runtime_preserves_cu121_local_version_suffix():
+def test_windows_bootstrap_cuda_runtime_uses_independent_cu128_pin():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
 
-    assert '$torchCudaSuffix = "+cu121"' in script
-    assert '$torchCudaReq = "torch==$torchVersion$torchCudaSuffix"' in script
-    assert '$torchVisionCudaReq = "torchvision==$torchVisionVersion$torchCudaSuffix"' in script
-    assert '"torch==$torchVersion$torchCudaSuffix"' in script
-    assert '"torchvision==$torchVisionVersion$torchCudaSuffix"' in script
-    assert '"torchaudio==$torchAudioVersion$torchCudaSuffix"' in script
+    assert '$torchCudaSuffix = "+cu128"' in script
+    assert '$torchCudaVersion = "2.7.1"' in script
+    assert '$torchVisionCudaVersion = "0.22.1"' in script
+    assert '$torchAudioCudaVersion = "2.7.1"' in script
+    assert '$torchCudaReq = "torch==$torchCudaVersion$torchCudaSuffix"' in script
+    assert '$torchVisionCudaReq = "torchvision==$torchVisionCudaVersion$torchCudaSuffix"' in script
+    assert '"torch==$torchCudaVersion$torchCudaSuffix"' in script
+    assert '"torchvision==$torchVisionCudaVersion$torchCudaSuffix"' in script
+    assert '"torchaudio==$torchAudioCudaVersion$torchCudaSuffix"' in script
+    # The CUDA bump must not silently move DirectML/CPU onto the new stack:
+    # torch-directml's newest published build hard-pins torch==2.4.1/0.19.1.
+    assert '$torchVersion = "2.4.1"' in script
+    assert '$torchVisionVersion = "0.19.1"' in script
+    assert '$torchAudioVersion = "2.4.1"' in script
+    assert '"torch==$torchVersion", "torchvision==$torchVisionVersion", "torch-directml==$torchDirectMlVersion"' in script
 
 
 def test_windows_nvidia_offline_drumsep_payload_carries_required_runtime_wheels():
@@ -5961,11 +5970,15 @@ def test_windows_nvidia_offline_drumsep_payload_carries_required_runtime_wheels(
     nvidia_block = prep.split('backend="nvidia"', 1)[1].split('BackendSpec(', 1)[0]
     assert 'output_dir="drumsep-wheels-nvidia"' in nvidia_block
     assert '"audio-separator==0.34.1"' in nvidia_block
-    assert '"onnxruntime==1.26.0"' in nvidia_block
     assert '"onnxruntime-gpu==1.24.4"' in nvidia_block
-    assert '"torch==2.4.1+cu121"' in nvidia_block
-    assert '"torchvision==0.19.1+cu121"' in nvidia_block
-    assert '"torchaudio==2.4.1+cu121"' in nvidia_block
+    assert '"torch==2.7.1+cu128"' in nvidia_block
+    assert '"torchvision==0.22.1+cu128"' in nvidia_block
+    assert '"torchaudio==2.7.1+cu128"' in nvidia_block
+    # Regression guard for the proven RTX 3060 onnxruntime/onnxruntime-gpu file
+    # conflict: requesting both in the same set can silently drop
+    # CUDAExecutionProvider. The plain, CPU-only "onnxruntime" package must never
+    # reappear alongside "onnxruntime-gpu" in the NVIDIA backend's requirements.
+    assert '"onnxruntime==' not in nvidia_block
 
 
 def test_windows_bootstrap_offline_drumsep_mode_uses_local_payload_only():
