@@ -2,8 +2,16 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.3.1.1" author="flarkAUDIO" time="1787738400">
+      <version name="2.3.1.2" author="flarkAUDIO" time="1789041600">
         <changelog><![CDATA[
+STEMwerk 2.3.1.2 - Windows NVIDIA Blackwell (RTX 50-series) hotfix (issue #118)
+
+- The Windows CUDA backend (Normal Stems and the separate Drum Kit Split CUDA runtime) now installs torch 2.7.1+cu128, torchvision 0.22.1+cu128 and torchaudio 2.7.1+cu128, adding the compiled kernels Blackwell (sm_120) GPUs need; the previous 2.4.1+cu121 stack lacked them. Windows CPU and DirectML keep their existing, independently-pinned torch stacks.
+- Setup/Repair now detects an existing 2.3.1.1-era cu121 CUDA install and rebuilds it to the matched cu128 stack automatically; an already-correct cu128 runtime is verified and left alone instead of being reinstalled on every Repair.
+- CUDA readiness verification launches a real kernel instead of only checking torch.cuda.is_available(), so a stale or broken CUDA runtime is caught and repaired before a separation run starts instead of failing partway through.
+- A CUDA architecture/kernel failure is now classified and surfaced as such, instead of falling through as a generic error or being confused with a model-download/network failure.
+- Fixed an offline Drum Kit Split NVIDIA payload defect where both onnxruntime and onnxruntime-gpu could be requested together, which could silently leave CUDA acceleration unavailable.
+
 STEMwerk 2.3.1.1 - macOS Apple Silicon FFmpeg hotfix (issue #111)
 
 - The bundled Apple Silicon package includes portable, self-contained arm64 FFmpeg and ffprobe built from pinned LGPL FFmpeg 8.0.3 source; Setup no longer depends on Homebrew or MacPorts for these tools.

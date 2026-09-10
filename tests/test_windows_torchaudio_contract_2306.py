@@ -105,6 +105,168 @@ def test_torchaudio_repair_does_not_replace_healthy_torch() -> None:
     assert "torchvision==" not in function
 
 
+def _cuda_backend_check_code() -> str:
+    text = _bootstrap()
+    function_start = text.index("function TestCudaBackendAlreadyHealthy")
+    code_start = text.index("$code = @'", function_start) + len("$code = @'")
+    return text[code_start : text.index("\n'@", code_start)].lstrip("\r\n")
+
+
+def _run_cuda_backend_check(
+    tmp_path: Path,
+    torch_version: str,
+    vision_version: str | None,
+    *,
+    conv2d_ok: bool = True,
+    expected_torch: str = "2.7.1",
+    expected_vision: str = "0.22.1",
+    expected_tag: str = "cu128",
+) -> int:
+    modules = tmp_path / "modules"
+    torch_pkg = modules / "torch"
+    torch_pkg.mkdir(parents=True)
+    (torch_pkg / "__init__.py").write_text(
+        f'''
+__version__ = "{torch_version}"
+
+class _Cuda:
+    @staticmethod
+    def is_available():
+        return True
+
+    @staticmethod
+    def device_count():
+        return 1
+
+    @staticmethod
+    def synchronize():
+        return None
+
+class _Tensor:
+    device = "cuda:0"
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def sum(self):
+        return self
+
+    def item(self):
+        return 1.0
+
+def _ones(*_args, **_kwargs):
+    return _Tensor()
+
+def _conv2d(*_args, **_kwargs):
+    if not {conv2d_ok!r}:
+        raise RuntimeError("CUDA error: no kernel image is available for execution on the device")
+    return _Tensor()
+
+class _Functional:
+    conv2d = staticmethod(_conv2d)
+
+class _NN:
+    functional = _Functional()
+
+cuda = _Cuda()
+nn = _NN()
+ones = _ones
+float32 = "float32"
+''',
+        encoding="utf-8",
+    )
+    if vision_version is not None:
+        vision = modules / "torchvision"
+        vision.mkdir()
+        (vision / "__init__.py").write_text(
+            f'__version__ = "{vision_version}"\n', encoding="utf-8"
+        )
+    else:
+        (modules / "torchvision.py").write_text(
+            'raise ImportError("torchvision intentionally unavailable")\n', encoding="utf-8"
+        )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHONPATH": str(modules),
+            "STEMWERK_CUDA_CHECK_TORCH": expected_torch,
+            "STEMWERK_CUDA_CHECK_VISION": expected_vision,
+            "STEMWERK_CUDA_CHECK_TAG": expected_tag,
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", _cuda_backend_check_code()], env=env
+    )
+    return completed.returncode
+
+
+def test_cuda_backend_runtime_repair_runs_before_audio_separator_install() -> None:
+    # A broken CUDA torch install (package metadata present but the native
+    # extension missing/corrupted) must be detected and repaired by
+    # InstallBackendRuntime before InstallAndVerifyAudioSeparator's own
+    # dependency install and torchaudio-matching step ever touches it --
+    # otherwise EnsureMatchedTorchaudioRuntime correctly refuses to repair
+    # torchaudio without a healthy torch, and the whole backend silently
+    # falls back to CPU without ever reaching the real CUDA repair logic.
+    text = _bootstrap()
+    install_backend_call = text.index('if (-not (InstallBackendRuntime $python $requestedBackend))')
+    audio_separator_call = text.index('InstallAndVerifyAudioSeparator $python $backend $package "Install audio-separator"')
+    assert install_backend_call < audio_separator_call
+    # Exactly one such gate must exist now (previously CUDA had its own,
+    # duplicate, incorrectly-ordered copy of this block after audio-separator).
+    assert text.count('if (-not (InstallBackendRuntime $python $requestedBackend))') == 1
+    assert 'if ($status -eq "ok" -and $backend -ne "cpu") {' in text
+
+
+def test_install_backend_runtime_skips_reinstall_when_already_healthy() -> None:
+    text = _bootstrap()
+    start = text.index("function InstallBackendRuntime")
+    end = text.index("function VerifyBackendRuntime", start)
+    function = text[start:end]
+    assert "TestCudaBackendAlreadyHealthy $PythonPath" in function
+    assert "skipping reinstall" in function.lower()
+
+
+def test_cuda_backend_already_healthy_check_accepts_exact_cu128_with_real_kernel(
+    tmp_path: Path,
+) -> None:
+    assert _run_cuda_backend_check(tmp_path, "2.7.1+cu128", "0.22.1+cu128") == 0
+
+
+def test_cuda_backend_already_healthy_check_rejects_stale_cu121(tmp_path: Path) -> None:
+    assert _run_cuda_backend_check(tmp_path / "a", "2.4.1+cu121", "0.19.1+cu121") != 0
+
+
+def test_cuda_backend_already_healthy_check_rejects_wrong_build_tag_same_version(
+    tmp_path: Path,
+) -> None:
+    # Same base version, wrong build tag (e.g. a CPU-only wheel with a
+    # coincidentally matching version number) must not be accepted.
+    assert _run_cuda_backend_check(tmp_path / "b", "2.7.1+cpu", "0.22.1+cpu") != 0
+
+
+def test_cuda_backend_already_healthy_check_rejects_missing_torchvision(
+    tmp_path: Path,
+) -> None:
+    assert _run_cuda_backend_check(tmp_path / "c", "2.7.1+cu128", None) != 0
+
+
+def test_cuda_backend_already_healthy_check_rejects_broken_kernel_despite_correct_version(
+    tmp_path: Path,
+) -> None:
+    # Correct pinned version/build but a broken/incomplete install that cannot
+    # actually launch a kernel (requirement: broken runtimes must be repaired,
+    # never declared healthy on version match alone).
+    assert (
+        _run_cuda_backend_check(tmp_path / "d", "2.7.1+cu128", "0.22.1+cu128", conv2d_ok=False)
+        != 0
+    )
+
+
 def test_cuda_backend_install_uses_the_complete_matched_stack() -> None:
     text = _bootstrap()
     start = text.index("function InstallBackendRuntime")

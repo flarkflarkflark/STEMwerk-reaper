@@ -5239,7 +5239,7 @@ def _assert_readme_release_contract(readme, target_version):
 
 def test_shipped_readme_identifies_current_public_2311_release_and_assets():
     repository_version = Path("VERSION").read_text(encoding="utf-8").strip()
-    assert repository_version == "2.3.1.1"
+    assert repository_version == "2.3.1.2"
     target_version = repository_version
 
     readme = Path("README.md").read_text(encoding="utf-8")
@@ -5255,7 +5255,7 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
     deliberately-unpublished Linux native packages or the separate-channel
     offline/allmodels pkg advertised as release assets, and dropped published
     rows."""
-    assert Path("VERSION").read_text(encoding="utf-8").strip() == "2.3.1.1"
+    assert Path("VERSION").read_text(encoding="utf-8").strip() == "2.3.1.2"
     target_version = Path("VERSION").read_text(encoding="utf-8").strip()
     real_readme = Path("README.md").read_text(encoding="utf-8")
 

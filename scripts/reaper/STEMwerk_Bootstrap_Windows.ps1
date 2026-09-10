@@ -1038,11 +1038,73 @@ function InstallBundledDrumsepPackages([string]$PythonPath, [string[]]$InstallAr
     return (InstallWithPipOfflineSources $PythonPath $InstallArgs $Description @($bundledWheelsDir, $bundledDrumsepWheelsDir))
 }
 
+function TestCudaBackendAlreadyHealthy([string]$PythonPath) {
+    # A stale/incompatible CUDA torch build (e.g. a 2.3.1.1-era cu121 install on
+    # a Blackwell GPU) must never short-circuit the reinstall below, so this
+    # checks the EXACT pinned version/build tag in addition to a real kernel
+    # launch -- torch.cuda.is_available() alone would also pass for a stale
+    # but still-functional cu121 install on non-Blackwell hardware.
+    if ([string]::IsNullOrWhiteSpace($PythonPath) -or -not (Test-Path $PythonPath)) { return $false }
+    $code = @'
+import os
+import sys
+try:
+    import torch
+    import torchvision
+except Exception:
+    sys.exit(1)
+
+def split_version(value):
+    text = str(value or "")
+    core, sep, build = text.partition("+")
+    return core, (build.lower() if sep else "")
+
+torch_core, torch_build = split_version(getattr(torch, "__version__", ""))
+vision_core, vision_build = split_version(getattr(torchvision, "__version__", ""))
+expected_torch = os.environ.get("STEMWERK_CUDA_CHECK_TORCH", "")
+expected_vision = os.environ.get("STEMWERK_CUDA_CHECK_VISION", "")
+expected_tag = os.environ.get("STEMWERK_CUDA_CHECK_TAG", "")
+if torch_core != expected_torch or torch_build != expected_tag:
+    sys.exit(1)
+if vision_core != expected_vision or vision_build != expected_tag:
+    sys.exit(1)
+if not bool(torch.cuda.is_available()) or int(torch.cuda.device_count()) <= 0:
+    sys.exit(1)
+try:
+    tensor = torch.ones((1, 1, 8, 8), dtype=torch.float32, device="cuda:0")
+    weight = torch.ones((1, 1, 3, 3), dtype=torch.float32, device="cuda:0")
+    out = torch.nn.functional.conv2d(tensor, weight)
+    torch.cuda.synchronize()
+    _ = float(out.detach().cpu().sum().item())
+except Exception:
+    sys.exit(1)
+sys.exit(0)
+'@
+    $previousTorch = $env:STEMWERK_CUDA_CHECK_TORCH
+    $previousVision = $env:STEMWERK_CUDA_CHECK_VISION
+    $previousTag = $env:STEMWERK_CUDA_CHECK_TAG
+    try {
+        $env:STEMWERK_CUDA_CHECK_TORCH = $torchCudaVersion
+        $env:STEMWERK_CUDA_CHECK_VISION = $torchVisionCudaVersion
+        $env:STEMWERK_CUDA_CHECK_TAG = $torchCudaTag
+        RunHidden $PythonPath @("-c", $code) "Check existing CUDA runtime" | Out-Null
+    } finally {
+        $env:STEMWERK_CUDA_CHECK_TORCH = $previousTorch
+        $env:STEMWERK_CUDA_CHECK_VISION = $previousVision
+        $env:STEMWERK_CUDA_CHECK_TAG = $previousTag
+    }
+    return ($LASTEXITCODE -eq 0)
+}
+
 function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
     if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
     if ([string]::IsNullOrWhiteSpace($BackendName) -or $BackendName -eq "cpu") { return $true }
 
     if ($BackendName -eq "cuda") {
+        if (TestCudaBackendAlreadyHealthy $PythonPath) {
+            LogProgress "Existing CUDA runtime already matches the required torch build; skipping reinstall"
+            return $true
+        }
         LogProgress "Installing PyTorch CUDA runtime"
         $torchCudaReq = "torch==$torchCudaVersion$torchCudaSuffix"
         $torchVisionCudaReq = "torchvision==$torchVisionCudaVersion$torchCudaSuffix"
@@ -3231,7 +3293,14 @@ if (Test-Path $venvPy) {
         }
     }
 
-    if ($status -eq "ok" -and $backend -ne "cpu" -and $backend -ne "cuda") {
+    # CUDA and DirectML both need their backend-specific torch stack proven
+    # healthy (and repaired/reinstalled if stale or broken) BEFORE audio-separator's
+    # own dependency install and torchaudio-matching step ever touches torch --
+    # otherwise a broken CUDA install (e.g. package metadata present but the
+    # native extension missing/corrupted) gets treated as "torch import failed,
+    # cannot repair" by the audio-separator path and silently falls back to CPU
+    # without ever reaching the real CUDA reinstall/repair logic below.
+    if ($status -eq "ok" -and $backend -ne "cpu") {
         $requestedBackend = $backend
         if (-not (InstallBackendRuntime $python $requestedBackend)) {
             LogLine ("Backend runtime install failed for " + $requestedBackend + "; falling back to CPU")
@@ -3262,21 +3331,6 @@ if (Test-Path $venvPy) {
         }
         if (-not $audioSeparatorOk) {
             Set-Status "deps_failed" $audioInstallResult
-        }
-    }
-
-    if ($status -eq "ok" -and $backend -eq "cuda") {
-        $requestedBackend = $backend
-        if (-not (InstallBackendRuntime $python $requestedBackend)) {
-            LogLine ("Backend runtime install failed for " + $requestedBackend + "; falling back to CPU")
-            $profile = "windows-cpu"
-            $backend = "cpu"
-            $backendReason = "backend_runtime_install_failed"
-        } elseif (-not (VerifyBackendRuntime $python $requestedBackend)) {
-            LogLine ("Backend runtime verify failed for " + $requestedBackend + "; falling back to CPU")
-            $profile = "windows-cpu"
-            $backend = "cpu"
-            $backendReason = "backend_runtime_verify_failed"
         }
     }
 
