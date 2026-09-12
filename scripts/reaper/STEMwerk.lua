@@ -20369,6 +20369,57 @@ _sep.runSingleTrackSeparation = function(trackList)
     _sep.showMultiTrackProgressWindow()
 end
 
+-- Linux-only gfx1031 ROCm compatibility override (issue #123): some gfx1031
+-- cards run real GPU kernels under the current ROCm/PyTorch stack only when
+-- HSA_OVERRIDE_GFX_VERSION=10.3.0 is set before HIP initializes, because
+-- gfx1031 isn't in that stack's officially supported gfx target list. This
+-- must stay narrowly scoped to gfx1031 on the ROCm backend; every other
+-- platform/backend/GPU (including RX 9070/gfx1201) keeps today's behavior
+-- untouched, and a value the user already set is never overridden. Result is
+-- cached on multiTrackQueue for the life of the REAPER session since the
+-- underlying hardware/environment cannot change mid-session.
+function resolveGfx1031RocmOverrideEnv()
+    if OS ~= "Linux" then
+        return nil, "not_linux"
+    end
+    if multiTrackQueue and multiTrackQueue.gfx1031OverrideResolved then
+        return multiTrackQueue.gfx1031OverrideValue, multiTrackQueue.gfx1031OverrideSource
+    end
+
+    local value, source = nil, "not_applicable"
+    if tostring(os.getenv("HSA_OVERRIDE_GFX_VERSION") or "") ~= "" then
+        source = "user_environment"
+    else
+        local cap = type(readCapabilities) == "function" and readCapabilities() or nil
+        local backend = cap and cap.kv and string.lower(tostring(cap.kv.BACKEND or "")) or ""
+        if backend == "rocm" then
+            local probe = io.popen(
+                "env -u HSA_OVERRIDE_GFX_VERSION -u HIP_VISIBLE_DEVICES -u ROCR_VISIBLE_DEVICES"
+                    .. " -u CUDA_VISIBLE_DEVICES rocminfo 2>/dev/null"
+            )
+            if probe then
+                local out = probe:read("*a") or ""
+                probe:close()
+                if out:lower():find("gfx1031", 1, true) then
+                    value = "10.3.0"
+                    source = "stemwerk_compatibility_rule"
+                else
+                    source = "rocm_backend_not_gfx1031"
+                end
+            else
+                source = "rocminfo_probe_failed"
+            end
+        end
+    end
+
+    if multiTrackQueue then
+        multiTrackQueue.gfx1031OverrideResolved = true
+        multiTrackQueue.gfx1031OverrideValue = value
+        multiTrackQueue.gfx1031OverrideSource = source
+    end
+    return value, source
+end
+
 -- Start a separation process for one job (no window, just background process)
 -- segmentSize: optional, defaults to 25 for parallel, 40 for sequential
 _sep.startSeparationProcessForJob = function(job, segmentSize)
@@ -20630,6 +20681,7 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         end
     else
         -- Unix: background sh launcher that writes pid.txt and done.txt.
+        local gfx1031OverrideValue, gfx1031OverrideSource = resolveGfx1031RocmOverrideEnv()
         local launcherPath = job.trackDir .. PATH_SEP .. "run_bg.sh"
         local script = io.open(launcherPath, "w")
           if script then
@@ -20679,6 +20731,14 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
             script:write("  done\n")
             script:write("  export LD_LIBRARY_PATH\n")
             script:write("fi\n")
+            if gfx1031OverrideValue or gfx1031OverrideSource == "user_environment" then
+                if gfx1031OverrideValue then
+                    script:write("HSA_OVERRIDE_GFX_VERSION=" .. quoteArg(gfx1031OverrideValue) .. "\n")
+                    script:write("export HSA_OVERRIDE_GFX_VERSION\n")
+                end
+                script:write("STEMWERK_GFX1031_OVERRIDE_SOURCE=" .. quoteArg(tostring(gfx1031OverrideSource or "")) .. "\n")
+                script:write("export STEMWERK_GFX1031_OVERRIDE_SOURCE\n")
+            end
             script:write("(\n")
             script:write('  set -- "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE"\n')
             script:write('  if [ -n "$WORKFLOW_MODE" ]; then set -- "$@" --workflow-mode "$WORKFLOW_MODE"; fi\n')
@@ -20704,8 +20764,16 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
             os.execute(cmd)
         else
             -- Fallback: run in foreground
+            local gfx1031OverridePrefix = ""
+            if gfx1031OverrideValue then
+                gfx1031OverridePrefix = "HSA_OVERRIDE_GFX_VERSION=" .. quoteArg(gfx1031OverrideValue) .. " "
+            end
+            if gfx1031OverrideValue or gfx1031OverrideSource == "user_environment" then
+                gfx1031OverridePrefix = gfx1031OverridePrefix
+                    .. "STEMWERK_GFX1031_OVERRIDE_SOURCE=" .. quoteArg(tostring(gfx1031OverrideSource or "")) .. " "
+            end
             local cmd = string.format(
-                'STEMWERK_PROCESSING_MAY_DOWNLOAD=no STEMWERK_RUN_ID=%s STEMWERK_JOB_ID=%s STEMWERK_RUN_DIR_NAME=%s STEMWERK_RUN_STARTED_UTC=%s %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                gfx1031OverridePrefix .. 'STEMWERK_PROCESSING_MAY_DOWNLOAD=no STEMWERK_RUN_ID=%s STEMWERK_JOB_ID=%s STEMWERK_RUN_DIR_NAME=%s STEMWERK_RUN_STARTED_UTC=%s %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
                 quoteArg(runIdArg),
                 quoteArg(jobIdArg),
                 quoteArg(runDirNameArg),

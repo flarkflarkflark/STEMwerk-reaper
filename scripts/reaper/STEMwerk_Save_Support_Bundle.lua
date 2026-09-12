@@ -1548,6 +1548,7 @@ local function runPythonProbe(bundleDir, pythonPath)
 
     local probeScriptPath = joinPath(bundleDir, "_python_probe.py")
     local probeScript = table.concat({
+        "import os",
         "import platform",
         "import sys",
         "import importlib",
@@ -1605,6 +1606,8 @@ local function runPythonProbe(bundleDir, pythonPath)
         "    emit('torch_cuda_device_count', torch.cuda.device_count() if torch.cuda.is_available() else 0)",
         "    emit('torch_cuda_version', getattr(getattr(torch, 'version', None), 'cuda', ''))",
         "    emit('torch_hip_version', getattr(getattr(torch, 'version', None), 'hip', ''))",
+        "    emit('hsa_override_gfx_version', os.environ.get('HSA_OVERRIDE_GFX_VERSION', ''))",
+        "    emit('stemwerk_gfx1031_override_source', os.environ.get('STEMWERK_GFX1031_OVERRIDE_SOURCE', ''))",
         "    backends = getattr(torch, 'backends', None)",
         "    mps = getattr(backends, 'mps', None) if backends else None",
         "    emit('torch_mps_built', mps.is_built() if mps and hasattr(mps, 'is_built') else '')",

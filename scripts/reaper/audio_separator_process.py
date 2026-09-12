@@ -4194,6 +4194,15 @@ def main():
     write_done = _setup_reaper_io(args.output_dir if args.output_dir else None)
     _write_worker_context(args.output_dir if args.output_dir else None)
     emit_phase("python_start")
+    if sys.platform.startswith("linux"):
+        _hsa_override_gfx_version = os.environ.get("HSA_OVERRIDE_GFX_VERSION", "")
+        if _hsa_override_gfx_version:
+            print(f"STEMWERK_DIAG hsa_override_gfx_version={_hsa_override_gfx_version}", file=sys.stderr)
+            print(
+                "STEMWERK_DIAG hsa_override_gfx_version_source="
+                f"{os.environ.get('STEMWERK_GFX1031_OVERRIDE_SOURCE') or 'user_environment'}",
+                file=sys.stderr,
+            )
     ffmpeg_path, ffmpeg_wrapper, ffmpeg_path_prefix = _configure_ffmpeg_runtime()
     model_cache_dir = _configure_model_cache_runtime()
     if ffmpeg_path is not None:
