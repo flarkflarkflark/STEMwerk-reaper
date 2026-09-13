@@ -806,6 +806,14 @@ def run(args: argparse.Namespace) -> int:
             "model_file_dir": str(model_dir),
             "output_dir": str(output_dir),
             "output_format": "WAV",
+            # Preserve full-scale model input: audio-separator's own default
+            # (0.9) pre-attenuates any input mix already at/near full scale
+            # before MDXC inference ever sees it. 1.0 keeps such sources
+            # unscaled while still retaining the library's >1.0 downscale
+            # safety behavior. Investigated and proven safe (no clipping,
+            # max observed stem peak ~0.98) in the DrumSep normalization
+            # experiment.
+            "normalization_threshold": 1.0,
         }
         init_params = inspect.signature(Separator.__init__).parameters
         accepts_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in init_params.values())
