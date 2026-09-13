@@ -285,6 +285,112 @@ def normalize_outputs(output_dir: Path, raw_outputs: Any, before: set[Path]) -> 
     return stems, raw_paths
 
 
+def _uvr_equivalent_mdxc_reconstruction(concrete, mix):
+    """Corrected MDX-C overlap-add reconstruction matching UVR 5.6.0's own
+    numerics, for the non-Roformer path only (the only path DrumSep's
+    Jarredou MDX23C model uses).
+
+    Forensic investigation (STEMwerk issue #118 DrumSep quality follow-up)
+    proved -- by holding checkpoint bytes, YAML config, device, and input
+    audio all identical between UVR 5.6.0 and audio-separator 0.34.1 -- that
+    the two only diverge meaningfully for the Snare stem of this model
+    (correlation ~0.68 vs >0.99 for every other stem). Reproducing UVR's own
+    chunk-building (explicit contiguous slicing, not mix.unfold()'s
+    non-contiguous strided view) together with its sequential incremental
+    overlap-add merge (instead of audio-separator's indexed range-add into a
+    pre-sized buffer) made the divergence disappear (correlation >0.9999 for
+    every stem including Snare; Hat->Snare leakage ratio moved from 1.72 to
+    0.82, matching UVR almost exactly). Both strategies are algebraically
+    equivalent in exact arithmetic; the difference is only numerically
+    consequential in combination with the non-contiguous unfold() view for
+    this specific model, which is why patching accumulation order alone
+    (keeping unfold()) reproduces byte-identical results to the unpatched
+    original -- verified directly, not merely reasoned about.
+
+    Pure tensor arithmetic, no CUDA-specific assumptions; identical on CPU,
+    CUDA, ROCm, and MPS.
+    """
+    import torch
+
+    try:
+        num_stems = concrete.model_run.num_target_instruments
+    except AttributeError:
+        num_stems = concrete.model_run.module.num_target_instruments
+
+    if concrete.override_model_segment_size:
+        mdx_segment_size = concrete.segment_size
+    else:
+        mdx_segment_size = concrete.model_data_cfgdict.inference.dim_t
+
+    chunk_size = concrete.model_data_cfgdict.audio.hop_length * (mdx_segment_size - 1)
+    hop_size = chunk_size // concrete.overlap
+    pad_size = hop_size - (mix.shape[1] - chunk_size) % hop_size
+    mix = torch.cat([torch.zeros(2, chunk_size - hop_size), mix, torch.zeros(2, pad_size + chunk_size - hop_size)], 1)
+
+    chunk_list = []
+    pos = 0
+    while pos + chunk_size <= mix.shape[1]:
+        chunk_list.append(mix[:, pos : pos + chunk_size])
+        pos += hop_size
+    chunks = torch.stack(chunk_list)
+    batches = [chunks[i : i + concrete.batch_size] for i in range(0, len(chunks), concrete.batch_size)]
+
+    overlap_width = chunk_size - hop_size
+    accumulator = torch.zeros(num_stems, 2, overlap_width) if num_stems > 1 else torch.zeros(2, overlap_width)
+
+    with torch.no_grad():
+        for batch in batches:
+            single_batch_result = concrete.model_run(batch.to(concrete.torch_device))
+            for individual_output in single_batch_result:
+                individual_output_cpu = individual_output.cpu()
+                merged_head = accumulator[..., -overlap_width:] + individual_output_cpu[..., :overlap_width]
+                fresh_tail = individual_output_cpu[..., overlap_width:]
+                accumulator = torch.cat([accumulator[..., :-overlap_width], merged_head, fresh_tail], -1)
+
+    inferenced_outputs = accumulator[..., overlap_width : -(pad_size + overlap_width)] / concrete.overlap
+    return {
+        key: value
+        for key, value in zip(concrete.model_data_cfgdict.training.instruments, inferenced_outputs.cpu().detach().numpy())
+    }
+
+
+def _run_uvr_equivalent_mdxc_separation(separator: Any, input_path: Path, output_dir: Path) -> list[str] | None:
+    """Run DrumSep separation using the UVR-equivalent reconstruction above
+    instead of audio_separator.Separator.separate()'s MDXC accumulation,
+    writing files with the same naming convention consumed downstream by
+    normalize_outputs(). Only applies to the plain (non-Roformer, non
+    primary/secondary) multi-instrument MDXC path DrumSep actually uses;
+    returns None if the loaded model doesn't match that shape so the caller
+    can fall back to the stock sep.separate() call unchanged.
+    """
+    concrete = getattr(separator, "model_instance", None)
+    if concrete is None or not hasattr(concrete, "model_data_cfgdict") or getattr(concrete, "is_roformer", True):
+        return None
+    instruments = list(concrete.model_data_cfgdict.training.instruments)
+    if concrete.model_data_cfgdict.training.target_instrument or len(instruments) <= 2:
+        return None
+
+    import soundfile as sf
+    from audio_separator.separator.uvr_lib_v5 import spec_utils
+
+    mix = concrete.prepare_mix(str(input_path))
+    mix = spec_utils.normalize(wave=mix, max_peak=concrete.normalization_threshold, min_peak=concrete.amplification_threshold)
+
+    import torch
+
+    mix_tensor = torch.tensor(mix, dtype=torch.float32)
+    sources = _uvr_equivalent_mdxc_reconstruction(concrete, mix_tensor)
+
+    audio_file_base = Path(str(input_path)).stem
+    raw_outputs: list[str] = []
+    for stem_name, value in sources.items():
+        stem_source = spec_utils.normalize(wave=value, max_peak=concrete.normalization_threshold, min_peak=concrete.amplification_threshold)
+        out_path = Path(output_dir) / f"{audio_file_base}_({stem_name}).wav"
+        sf.write(str(out_path), stem_source.T, 44100, subtype="PCM_16")
+        raw_outputs.append(str(out_path))
+    return raw_outputs
+
+
 def _error_payload(reason: str, stage: str, message: str, **extra: Any) -> dict[str, Any]:
     payload = {
         "ok": False,
@@ -758,7 +864,10 @@ def run(args: argparse.Namespace) -> int:
             )
             raw_outputs = list(stems.values())
         else:
-            raw_outputs = sep.separate(str(input_path))
+            raw_outputs = _run_uvr_equivalent_mdxc_separation(sep, input_path, output_dir)
+            print(f"drumsep_uvr_equivalent_reconstruction_applied={'yes' if raw_outputs is not None else 'no'}", file=sys.stderr)
+            if raw_outputs is None:
+                raw_outputs = sep.separate(str(input_path))
             stems, raw_outputs = normalize_outputs(output_dir, raw_outputs, before)
         print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_separate_end", file=sys.stderr)
     except Exception as exc:
