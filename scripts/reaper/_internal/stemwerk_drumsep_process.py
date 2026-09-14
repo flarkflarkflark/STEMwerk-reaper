@@ -836,7 +836,13 @@ def run(args: argparse.Namespace) -> int:
         sep = Separator(**separator_kwargs)
         if model_resolution.action != "none":
             _configure_managed_drumsep_checkpoint(sep, model_resolution)
-        if args.route in {"mps-direct-demix", "direct-demix"}:
+        managed_macos_wrapper = (
+            args.route == "wrapper"
+            and model_resolution.action != "none"
+            and sys.platform == "darwin"
+            and args.device in {"cpu", "mps"}
+        )
+        if args.route in {"mps-direct-demix", "direct-demix"} or managed_macos_wrapper:
             _apply_separator_requested_device(sep, str(args.device or "cpu"))
         sep.load_model(model_name)
         print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_model_load_end", file=sys.stderr)

@@ -70,13 +70,13 @@ def _gate(module, runtime_info=None, requested_device="mps", model=None):
     )
 
 
-def test_gate_accepts_only_explicit_apple_silicon_mps(monkeypatch):
+def test_managed_apple_silicon_mps_routes_to_uvr_equivalent_wrapper(monkeypatch):
     module = _load_audio_process()
     monkeypatch.setattr(module.sys, "platform", "darwin")
     monkeypatch.setattr(module.platform, "machine", lambda: "arm64")
     monkeypatch.delenv(module.MPS_FALLBACK_ENV, raising=False)
 
-    assert _gate(module) == (True, "ok")
+    assert _gate(module) == (False, module.DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON)
 
 
 @pytest.mark.parametrize(
@@ -142,14 +142,20 @@ def test_auto_linux_and_rocm_do_not_activate_direct_demix(monkeypatch):
     monkeypatch.setattr(module.sys, "platform", "darwin")
     auto_mps = _valid_runtime_info()
     auto_mps["kind"] = "mps"
-    assert _gate(module, runtime_info=auto_mps, requested_device="auto") == (True, "ok")
+    assert _gate(module, runtime_info=auto_mps, requested_device="auto") == (
+        False,
+        module.DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON,
+    )
 
     cpu_runtime = _valid_runtime_info()
     cpu_runtime["kind"] = "cpu"
     cpu_runtime["mps_built"] = False
     cpu_runtime["mps_available"] = False
     cpu_runtime["mps_experimental"] = False
-    assert _gate(module, runtime_info=cpu_runtime, requested_device="cpu") == (True, "ok")
+    assert _gate(module, runtime_info=cpu_runtime, requested_device="cpu") == (
+        False,
+        module.DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON,
+    )
 
     monkeypatch.setattr(module.sys, "platform", "linux")
     rocm = _valid_runtime_info()
@@ -160,7 +166,36 @@ def test_auto_linux_and_rocm_do_not_activate_direct_demix(monkeypatch):
     assert helper_signature.parameters["device"].default == "cpu"
     source = AUDIO_PROCESS.read_text(encoding="utf-8")
     assert 'route="direct-demix" if use_direct_demix else "wrapper"' in source
-    assert 'device=direct_demix_device if use_direct_demix else helper_device' in source
+    assert "use_managed_wrapper = direct_demix_reason == DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON" in source
+    assert 'device=direct_demix_device if use_direct_demix else (managed_wrapper_device or helper_device)' in source
+
+
+@pytest.mark.parametrize(
+    ("sys_platform", "machine", "runtime_kind", "requested_device"),
+    [
+        ("win32", "AMD64", "cuda", "cuda:0"),
+        ("win32", "AMD64", "directml", "directml"),
+        ("linux", "x86_64", "cuda", "cuda:0"),
+        ("linux", "x86_64", "rocm", "rocm"),
+    ],
+)
+def test_windows_and_linux_accelerators_remain_on_wrapper(
+    monkeypatch,
+    sys_platform,
+    machine,
+    runtime_kind,
+    requested_device,
+):
+    module = _load_audio_process()
+    monkeypatch.setattr(module.sys, "platform", sys_platform)
+    monkeypatch.setattr(module.platform, "machine", lambda: machine)
+    info = _valid_runtime_info()
+    info["kind"] = runtime_kind
+
+    assert _gate(module, runtime_info=info, requested_device=requested_device) == (
+        False,
+        "platform_not_darwin",
+    )
 
 
 def test_benchmark_helper_device_defaults_to_cpu_and_rejects_invalid(monkeypatch, capsys):
@@ -735,6 +770,86 @@ def test_wrapper_helper_result_uses_runtime_and_requested_device_markers(tmp_pat
     assert payload["model_device"] == "cuda:0"
     assert payload["drumsep_mps_all_targets_route"] == ""
     assert payload["direct_demix_keys"] == []
+
+
+@pytest.mark.parametrize(
+    ("requested_device", "initial_device", "expected_model_device"),
+    [
+        ("mps", "mps", "mps:0"),
+        ("cpu", "mps", "cpu"),
+    ],
+)
+def test_managed_macos_wrapper_applies_device_and_reconstruction_marker(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    requested_device,
+    initial_device,
+    expected_model_device,
+):
+    helper = _load_helper()
+    monkeypatch.setattr(helper.sys, "platform", "darwin")
+    monkeypatch.setattr(helper.metadata, "version", lambda _name: "0.23.0")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / helper.DRUMSEP_MODEL_FILENAME).write_bytes(b"managed-checkpoint")
+    (model_dir / helper.DRUMSEP_MODEL_YAML).write_text("training: {}\n", encoding="utf-8")
+    captured = {}
+
+    class FakeSeparator:
+        def __init__(self, **kwargs):
+            self.output_dir = Path(kwargs["output_dir"])
+            self.torch_device = initial_device
+            self.torch_device_cpu = "cpu"
+            self.torch_device_mps = "mps"
+            self.onnx_execution_provider = ["CoreMLExecutionProvider"]
+            self.model_instance = _FakeModel(_complete_sources(), "mps:0")
+            self.download_model_files = lambda model_name: model_name
+
+        def load_model(self, _model_name):
+            model_device = "mps:0" if str(self.torch_device) == "mps" else str(self.torch_device)
+            self.model_instance = _FakeModel(_complete_sources(), model_device)
+            captured["load_device"] = str(self.torch_device)
+            captured["onnx_provider"] = list(self.onnx_execution_provider)
+
+    fake_package, fake_separator_module = _fake_audio_separator_package(FakeSeparator)
+    monkeypatch.setitem(sys.modules, "audio_separator", fake_package)
+    monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_separator_module)
+
+    def fake_reconstruction(_separator, _input_path, output_dir):
+        outputs = []
+        for stem_name, filename in helper.REAPER_FILENAMES.items():
+            path = Path(output_dir) / filename
+            path.write_bytes(stem_name.encode("ascii"))
+            outputs.append(str(path))
+        return outputs
+
+    monkeypatch.setattr(helper, "_run_uvr_equivalent_mdxc_separation", fake_reconstruction)
+    result_json = tmp_path / "result.json"
+    args = SimpleNamespace(
+        input=str(tmp_path / "input.wav"),
+        output_dir=str(tmp_path / "out"),
+        model_dir=str(model_dir),
+        model=helper.DRUMSEP_MODEL_ALIAS,
+        result_json=str(result_json),
+        log_file="",
+        route="wrapper",
+        device=requested_device,
+        requested_device=requested_device,
+        backend_runtime=requested_device,
+    )
+
+    rc = helper.run(args)
+    payload = json.loads(result_json.read_text(encoding="utf-8"))
+
+    assert rc == 0
+    assert payload["ok"] is True
+    assert captured["load_device"] == requested_device
+    assert payload["effective_device"] == requested_device
+    assert payload["model_device"] == expected_model_device
+    if requested_device == "cpu":
+        assert captured["onnx_provider"] == ["CPUExecutionProvider"]
+    assert "drumsep_uvr_equivalent_reconstruction_applied=yes" in capsys.readouterr().err
 
 
 def test_direct_demix_helper_result_keeps_mps_markers(tmp_path, monkeypatch):

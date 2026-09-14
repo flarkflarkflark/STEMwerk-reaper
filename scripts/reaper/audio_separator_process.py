@@ -39,6 +39,7 @@ MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
 MPS_DEMUCS_SEGMENT_SIZE = 2
 MPS_SEGMENT_POLICY = "universal_safe_segment_2"
 DRUMSEP_RUNTIME_LIMIT_REASON = "audio_separator_mdxc_runtime_primary_secondary_only"
+DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON = "uvr_equivalent_wrapper_required"
 DIRECT_DKS_MODEL_ALIAS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 DIRECT_DKS_MODEL_FILENAME = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 DIRECT_DKS_MODEL_YAML = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -229,7 +230,11 @@ def _should_use_drumsep_mps_direct_demix(
             return False, "pytorch_mps_fallback_env_set"
         if not bool(info.get("mps_experimental")):
             return False, "mps_experimental_policy_inactive"
-    return True, "ok"
+    # The managed helper now reconstructs all six MDXC targets itself on the
+    # wrapper route. Keep the narrowly qualified legacy direct-demix route
+    # available in the helper, but do not let this product workflow bypass the
+    # UVR-equivalent reconstruction.
+    return False, DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON
 
 
 def _resolve_normal_workflow_backend(selected_device: Optional[str]) -> str:
@@ -1628,7 +1633,7 @@ def _direct_dks_preflight_check(
     model_name: str,
     model_cache_dir: Path,
     runtime_info: Optional[Dict[str, Any]] = None,
-    allow_direct_demix: bool = False,
+    allow_six_stem_helper: bool = False,
     allow_downloads: bool = True,
 ) -> Tuple[bool, str, str, Optional[str]]:
     # Force an explicit model-catalog lookup before normal workflow setup.
@@ -1676,7 +1681,7 @@ def _direct_dks_preflight_check(
         return False, requested_model, resolved_model, yaml_detail
     model_meta = _load_direct_dks_yaml_metadata(asset_map, model_cache_dir)
     skip_backend_limit = (
-        allow_direct_demix
+        allow_six_stem_helper
         and requested_model == DIRECT_DKS_MODEL_ALIAS
         and resolved_model == DIRECT_DKS_MODEL_FILENAME
     )
@@ -4375,7 +4380,9 @@ def main():
             runtime_info,
             requested_stage2_model,
         )
+        use_managed_wrapper = direct_demix_reason == DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON
         direct_demix_device = runtime_kind if use_direct_demix and runtime_kind in {"cpu", "mps"} else ""
+        managed_wrapper_device = runtime_kind if use_managed_wrapper and runtime_kind in {"cpu", "mps"} else ""
         print(f"drumsep_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
         print(f"drumsep_direct_demix_gate_reason={direct_demix_reason}", file=sys.stderr)
         print(f"drumsep_mps_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
@@ -4384,7 +4391,7 @@ def main():
             requested_stage2_model,
             model_cache_dir,
             runtime_info=runtime_info,
-            allow_direct_demix=use_direct_demix,
+            allow_six_stem_helper=(use_direct_demix or use_managed_wrapper),
             allow_downloads=False,
         )
         if not ok:
@@ -4460,7 +4467,7 @@ def main():
                     requested_stage2_model,
                     run_model,
                     route="direct-demix" if use_direct_demix else "wrapper",
-                    device=direct_demix_device if use_direct_demix else helper_device,
+                    device=direct_demix_device if use_direct_demix else (managed_wrapper_device or helper_device),
                     requested_device=device_preference,
                     backend_runtime=direct_demix_device if use_direct_demix else stage2_backend,
                 )
@@ -4563,7 +4570,9 @@ def main():
             runtime_info,
             run_model,
         )
+        use_managed_wrapper = direct_demix_reason == DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON
         direct_demix_device = runtime_kind if use_direct_demix and runtime_kind in {"cpu", "mps"} else ""
+        managed_wrapper_device = runtime_kind if use_managed_wrapper and runtime_kind in {"cpu", "mps"} else ""
         print(f"drumsep_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
         print(f"drumsep_direct_demix_gate_reason={direct_demix_reason}", file=sys.stderr)
         print(f"drumsep_mps_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
@@ -4573,7 +4582,7 @@ def main():
                 run_model,
                 model_cache_dir,
                 runtime_info=runtime_info,
-                allow_direct_demix=use_direct_demix,
+                allow_six_stem_helper=(use_direct_demix or use_managed_wrapper),
                 allow_downloads=False,
             )
             if not ok:
@@ -4619,7 +4628,7 @@ def main():
             requested_stage2_model,
             run_model,
             route="direct-demix" if use_direct_demix else "wrapper",
-            device=direct_demix_device if use_direct_demix else helper_device,
+            device=direct_demix_device if use_direct_demix else (managed_wrapper_device or helper_device),
             requested_device=device_preference,
             backend_runtime=direct_demix_device if use_direct_demix else stage2_backend,
         )

@@ -1014,7 +1014,8 @@ def test_drumsep_benchmark_helper_device_override_is_probe_only_and_scheduler_vi
     assert 'return "cpu", "not_requested"' in process
     assert 'require_cuda=True' in process
     assert 'route="direct-demix" if use_direct_demix else "wrapper"' in process
-    assert 'device=direct_demix_device if use_direct_demix else helper_device' in process
+    assert "use_managed_wrapper = direct_demix_reason == DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON" in process
+    assert 'device=direct_demix_device if use_direct_demix else (managed_wrapper_device or helper_device)' in process
     assert 'def _probe_gpu_device(device: str)' in helper
     assert 'choices=["cpu", "cuda", "rocm", "mps", "directml"]' in helper
     assert '"drumsep_helper_gpu_probe_status"' in support
