@@ -507,6 +507,23 @@ def _direct_demix_model_device(separator: Any) -> str:
         return "unknown"
 
 
+def _apply_drumsep_amplification_policy(separator: Any) -> None:
+    """Force-disable low-peak stem amplification, version-independently.
+
+    audio-separator's own constructor default for amplification_threshold
+    has drifted across versions (0.6 in 0.23.0, 0.0 in 0.34.1), and 0.23.0's
+    constructor rejects an explicit 0.0 outright (it requires > 0). Applying
+    the value as a plain attribute write here -- after Separator() returns
+    but before load_model() -- skips __init__'s validation entirely while
+    still reaching the architecture model: load_model() reads the current
+    value of this attribute (not one captured at construction time) into
+    the common_config it hands to the concrete separator class. Proven
+    directly against both 0.23.0 and 0.34.1 source/runtime; do not gate this
+    on version or platform.
+    """
+    separator.amplification_threshold = 0.0
+
+
 def _apply_separator_requested_device(separator: Any, requested_device: str) -> None:
     requested = str(requested_device or "").strip().lower()
     if requested == "cpu":
@@ -834,6 +851,9 @@ def run(args: argparse.Namespace) -> int:
                 }
             )
         sep = Separator(**separator_kwargs)
+        _apply_drumsep_amplification_policy(sep)
+        print(f"amplification_threshold={sep.amplification_threshold}", file=sys.stderr)
+        print("amplification_policy=stemwerk_explicit_preload", file=sys.stderr)
         if model_resolution.action != "none":
             _configure_managed_drumsep_checkpoint(sep, model_resolution)
         managed_macos_wrapper = (
