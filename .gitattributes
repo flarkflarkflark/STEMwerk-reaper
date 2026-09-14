@@ -14,3 +14,6 @@ installer/linux/arch/*.install text eol=lf
 # CRLF/LF endings and forcing eol=crlf on those would cause line-ending
 # churn on next checkout.
 installer/windows/fetch_runtime_assets.ps1 text eol=crlf
+
+# Predominantly CRLF already; same rationale as fetch_runtime_assets.ps1 above.
+installer/README.md text eol=crlf

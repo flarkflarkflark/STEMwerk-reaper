@@ -12,7 +12,8 @@ STEMwerk-reaper is a REAPER script package that runs high-quality stem separatio
 This README describes STEMwerk `2.3.1.2`, the current release.
 
 - `2.3.1.2` is the current release for the 2.3 line.
-- It is a Windows-focused hotfix: the Windows NVIDIA CUDA backend (Normal Stems and the separate Drum Kit Split CUDA runtime) now installs torch `2.7.1+cu128` (matched torchvision/torchaudio) instead of `2.4.1+cu121`, restoring support for Blackwell (RTX 50-series, sm_120) GPUs. Setup/Repair automatically detects and migrates a cu121 install from the previous `2.3.1.1` release; an already-correct cu128 install is left alone. Windows CPU and DirectML are unaffected.
+- Its headline fix is Windows-focused: the Windows NVIDIA CUDA backend (Normal Stems and the separate Drum Kit Split CUDA runtime) now installs torch `2.7.1+cu128` (matched torchvision/torchaudio) instead of `2.4.1+cu121`, restoring support for Blackwell (RTX 50-series, sm_120) GPUs. Setup/Repair automatically detects and migrates a cu121 install from the previous `2.3.1.1` release; an already-correct cu128 install is left alone. Windows CPU and DirectML are unaffected.
+- It also carries cross-platform DrumSep/Kit Split correctness fixes validated on real hardware: UVR-equivalent MDXC reconstruction, corrected full-scale normalization, corrected macOS DrumSep routing, a Kit Split stem-mapping fix, and a version-neutral low-level amplification fix. See "What's new in `2.3.1.2`" below for details.
 - The current official macOS artifacts are `STEMwerk-2.3.1.2.pkg` and `STEMwerk-2.3.1.2-bundled-apple-silicon.pkg`. The bundled artifact is runtime-only and contains no models.
 - `2.3.1.2` has not yet been published as a tagged GitHub Release. Previous release artifacts must not be treated as the current `2.3.1.2` macOS artifacts.
 - `2.3.1.1` was a macOS Apple Silicon FFmpeg hotfix (pinned, self-contained Apple Silicon FFmpeg/ffprobe payload and fail-closed package audits); it is now the previous 2.3 release baseline.
@@ -37,6 +38,13 @@ Windows NVIDIA Blackwell (RTX 50-series) hotfix (issue #118):
 - CUDA readiness verification now launches a real kernel (not just `torch.cuda.is_available()`), so a stale or broken CUDA runtime is caught and repaired before a separation run starts instead of failing partway through.
 - A CUDA architecture/kernel failure is now classified and surfaced as such, instead of falling through as a generic error or being confused with a model-download/network failure.
 - Fixed an offline Drum Kit Split NVIDIA payload defect where both `onnxruntime` and `onnxruntime-gpu` could be requested together, which could silently leave CUDA acceleration unavailable.
+
+DrumSep / Kit Split correctness fixes (all platforms):
+- UVR-equivalent DrumSep MDXC reconstruction: forensic A/B testing against real UVR 5.6.0 output (byte-identical checkpoint, YAML config, source audio, and settings) found the DrumSep MDXC path (the Jarredou MDX23C model) diverged meaningfully only on the Snare stem. Reproducing UVR's own chunk-building and accumulation strategy for that path closes the gap: Snare correlation against real UVR output moves from 0.68 to 0.9998, verified on real CUDA hardware through both the direct helper CLI and the production Direct Kit / Kit Split entrypoints.
+- DrumSep no longer pre-attenuates already near-full-scale source audio before separation: `normalization_threshold` is now explicitly set to `1.0` (audio-separator's previous default of `0.9` discarded headroom with no clipping-prevention benefit), matching UVR's own default of no output-level renormalization.
+- macOS DrumSep now always routes through the same UVR-equivalent MDXC reconstruction used on Windows/Linux, instead of a legacy direct-demix path that bypassed it.
+- Kit Split (Drum Kit extraction) now identifies each separator output by the generator's own stem token instead of substring-matching the output filename, so a source file whose name happens to contain a stem-like word can no longer be misclassified.
+- A stem-amplification default that silently drifted across audio-separator versions (`0.6` on macOS's bundled `0.23.0`, `0.0` on Windows/Linux's `0.34.1`) is now explicitly disabled everywhere, version-neutrally, so naturally-quiet DrumSep stems (Toms/Ride/Crash) are no longer force-amplified on macOS while Windows/Linux left them untouched.
 
 ## What's new in 2.3.0.6 / 2.3.0.7
 2.3.0.6 (narrow corrective release on the official 2.3.0.4 line):
