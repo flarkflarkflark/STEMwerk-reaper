@@ -3240,27 +3240,17 @@ def _is_unexpected_cpu_downgrade(requested_device: str, preview_device: str) -> 
 
 
 def _map_reaper_stems_from_result(result: Any, output_root: Path) -> Dict[str, str]:
-    stem_mapping = {
-        "vocals": ["vocals", "vocal", "Vocals"],
-        "drums": ["drums", "drum", "Drums"],
-        "bass": ["bass", "Bass"],
-        "other": ["other", "Other", "no_vocals", "instrumental", "Instrumental"],
-        "guitar": ["guitar", "Guitar"],
-        "piano": ["piano", "Piano", "keys", "Keys"],
-    }
-
     reaper_stems: Dict[str, str] = {}
     for stem_name, stem_path in result.stems.items():
         abs_path = _resolve_stem_path(output_root, stem_path)
         if not abs_path.exists():
             raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
 
-        filename = abs_path.stem.lower()
-        target_name = stem_name
-        for map_name, patterns in stem_mapping.items():
-            if any(p.lower() in filename for p in patterns):
-                target_name = map_name
-                break
+        target_name = str(stem_name).strip().casefold()
+        if not target_name:
+            raise ValueError(f"Separated stem has an empty identity: {abs_path}")
+        if target_name in reaper_stems:
+            raise ValueError(f"Duplicate separated stem identity: {target_name}")
 
         new_path = abs_path.parent / f"{target_name}.wav"
         if abs_path != new_path:
@@ -4444,6 +4434,12 @@ def main():
                 emit_phase("separate_start")
                 stage1_result = stage1_sep.separate(args.input, str(stage1_root), stems=["drums"])
                 emit_phase("separate_end")
+            print("stage1_mapping_source=generated_stem_token", file=sys.stderr)
+            for identity, stem_path in sorted(stage1_result.stems.items()):
+                print(
+                    f"stage1_output_identity={identity}|{Path(stem_path).name}",
+                    file=sys.stderr,
+                )
             stage1_stems = _map_reaper_stems_from_result(stage1_result, stage1_root)
             drums_input = Path(stage1_stems.get("drums", stage1_root / "drums.wav")).resolve()
             if not drums_input.exists():
