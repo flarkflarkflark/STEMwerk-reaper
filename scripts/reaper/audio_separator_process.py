@@ -49,16 +49,30 @@ DIRECT_DKS_MODEL_DEAD_CKPT_URL = (
     "aufr33-jarredou_MDX23C_DrumSep_model_v0.1/"
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 )
+# Pinned to immutable upstream commits rather than "main" -- both verified
+# (2026-09-15) to still serve the exact validated bytes below; a future
+# upstream change to either "main" branch can no longer silently change what
+# gets installed. See DIRECT_DKS_MODEL_EXPECTED_SHA256 for the fail-closed
+# content check applied after every download.
 DIRECT_DKS_MODEL_MIRROR_CKPT_URL = (
-    "https://huggingface.co/Sucial/MSST-WebUI/resolve/main/"
+    "https://huggingface.co/Sucial/MSST-WebUI/resolve/"
+    "90b617b15bd0dc0b784f3d361faca1b51173fe44/"
     "All_Models/multi_stem_models/"
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 )
 DIRECT_DKS_MODEL_YAML_URL = (
-    "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
+    "https://raw.githubusercontent.com/TRvlvr/application_data/"
+    "adea29c9fdbd2fa115a208965d00a6f03cdfde96/"
     "mdx_model_data/mdx_c_configs/"
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 )
+DIRECT_DKS_MODEL_CKPT_SHA256 = "d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0"
+DIRECT_DKS_MODEL_YAML_SHA256 = "440a13f67461b2cdad2bb1cb86c08ff27a8ec53093c4a24d4d7fc2c19cb9f5f5"
+DIRECT_DKS_MODEL_EXPECTED_SHA256 = {
+    DIRECT_DKS_MODEL_FILENAME: DIRECT_DKS_MODEL_CKPT_SHA256,
+    DIRECT_DKS_MODEL_YAML: DIRECT_DKS_MODEL_YAML_SHA256,
+}
+DRUMSEP_ASSET_INTEGRITY_MISMATCH_REASON = "asset_integrity_mismatch"
 DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
 DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
 DRUMSEP_RUNTIME_CUDA_DIRNAME = ".venv-drumsep-cuda"
@@ -1125,6 +1139,23 @@ def _is_known_drumsep_runtime_unsupported_error(exc: Exception, traceback_text: 
     )
 
 
+def _classify_direct_dks_preflight_reason(known_err_lower: str) -> str:
+    """Map a _direct_dks_preflight_check detail string to a user-facing
+    error_reason. An asset-integrity (checksum) mismatch is reported
+    distinctly from an ordinary download/network failure -- retrying the
+    same network path won't fix a corrupted/tampered download, so it must
+    not be misreported as a generic connectivity problem."""
+    if DRUMSEP_ASSET_INTEGRITY_MISMATCH_REASON in known_err_lower:
+        return "drumsep_model_integrity_failed"
+    if (
+        "not found in supported model files" in known_err_lower
+        or known_err_lower.startswith("catalog_")
+        or known_err_lower.startswith("unsupported_")
+    ):
+        return "drumsep_model_missing"
+    return "drumsep_model_download_failed"
+
+
 def _emit_direct_dks_preflight_markers(reason: str, requested_model: str, resolved_model: str = "", detail: str = "") -> None:
     print("error_stage=stage2_preflight", file=sys.stderr)
     print(f"error_reason={reason}", file=sys.stderr)
@@ -1463,11 +1494,51 @@ def _direct_dks_yaml_filename(asset_map: Dict[str, str]) -> str:
     return ""
 
 
+def _expected_direct_dks_sha256(filename: str) -> Optional[str]:
+    return DIRECT_DKS_MODEL_EXPECTED_SHA256.get(str(filename))
+
+
+def _direct_dks_asset_hash_ok(target: Path, filename: str) -> Tuple[bool, str]:
+    """Verify target's content against the pinned expected SHA-256 for filename.
+
+    A filename with no entry in DIRECT_DKS_MODEL_EXPECTED_SHA256 is treated as
+    unpinned and passes (the asset_map this is called against always carries
+    exactly the two DrumSep filenames in practice, but this stays permissive
+    for any other entry rather than failing closed on an unrelated file)."""
+    expected = _expected_direct_dks_sha256(filename)
+    if expected is None:
+        return True, "no_expected_hash"
+    if not target.exists():
+        return False, "missing"
+    actual = hashlib.sha256(target.read_bytes()).hexdigest()
+    if actual != expected:
+        return False, f"{DRUMSEP_ASSET_INTEGRITY_MISMATCH_REASON}:{filename}:expected={expected}:actual={actual}"
+    return True, "ok"
+
+
+def _evict_direct_dks_asset_if_hash_mismatched(target: Path, filename: str) -> bool:
+    """Return True if target is present and hash-valid (or unpinned).
+
+    A present-but-mismatched file is deleted here so it can never be silently
+    reused as a valid cache hit -- the caller re-downloads it instead."""
+    if not target.exists():
+        return False
+    ok, detail = _direct_dks_asset_hash_ok(target, filename)
+    if ok:
+        return True
+    print(f"drumsep_cache_integrity_failed target={target} detail={detail}", file=sys.stderr)
+    try:
+        target.unlink()
+    except OSError:
+        pass
+    return False
+
+
 def _direct_dks_assets_ready(model_cache_dir: Path, asset_map: Dict[str, str]) -> Tuple[bool, List[str]]:
     missing_targets: List[str] = []
     for filename in asset_map:
         target = model_cache_dir / str(filename)
-        if not target.exists():
+        if not _evict_direct_dks_asset_if_hash_mismatched(target, str(filename)):
             missing_targets.append(str(target))
     return len(missing_targets) == 0, missing_targets
 
@@ -1604,7 +1675,7 @@ def _format_direct_dks_backend_limit_detail(payload: Dict[str, Any]) -> str:
 def _download_direct_dks_assets(model_cache_dir: Path, asset_map: Dict[str, str]) -> Tuple[bool, str]:
     for filename, url in asset_map.items():
         target = model_cache_dir / filename
-        if target.exists():
+        if _evict_direct_dks_asset_if_hash_mismatched(target, str(filename)):
             print(f"drumsep_cache_target={target}", file=sys.stderr)
             print("drumsep_cache_status=exists", file=sys.stderr)
             continue
@@ -1616,12 +1687,22 @@ def _download_direct_dks_assets(model_cache_dir: Path, asset_map: Dict[str, str]
             target.parent.mkdir(parents=True, exist_ok=True)
             with urllib.request.urlopen(url, timeout=120) as response:
                 data = response.read()
+            digest = hashlib.sha256(data).hexdigest()
+            expected = _expected_direct_dks_sha256(filename)
+            if expected is not None and digest != expected:
+                print(
+                    f"drumsep_cache_error={filename}|{url}|{DRUMSEP_ASSET_INTEGRITY_MISMATCH_REASON}: "
+                    f"expected={expected} actual={digest}",
+                    file=sys.stderr,
+                )
+                return False, (
+                    f"{DRUMSEP_ASSET_INTEGRITY_MISMATCH_REASON}:{filename}:"
+                    f"expected={expected}:actual={digest}:source={url}"
+                )
             tmp = target.with_suffix(target.suffix + ".part")
             tmp.write_bytes(data)
             tmp.replace(target)
-            if target.suffix.lower() == ".ckpt":
-                digest = hashlib.sha256(target.read_bytes()).hexdigest()
-                print(f"drumsep_cache_sha256={digest}", file=sys.stderr)
+            print(f"drumsep_cache_sha256={digest}", file=sys.stderr)
             print(f"drumsep_cache_asset={target}", file=sys.stderr)
         except Exception as exc:
             print(f"drumsep_cache_error={filename}|{url}|{type(exc).__name__}: {exc}", file=sys.stderr)
@@ -4394,11 +4475,7 @@ def main():
                     known_err_text[len("backend_limited:"):],
                 )
             else:
-                reason = (
-                    "drumsep_model_missing"
-                    if "not found in supported model files" in known_err_lower or known_err_lower.startswith("catalog_") or known_err_lower.startswith("unsupported_")
-                    else "drumsep_model_download_failed"
-                )
+                reason = _classify_direct_dks_preflight_reason(known_err_lower)
                 _emit_direct_dks_preflight_markers(reason, requested_model or requested_stage2_model, resolved_model or "", known_err_text)
             emit_phase("python_error")
             if write_done:
@@ -4591,12 +4668,7 @@ def main():
                         known_err_text[len("backend_limited:"):],
                     )
                 else:
-                    reason = (
-                        "drumsep_model_missing"
-                        if "not found in supported model files" in known_err_lower
-                        or known_err_lower.startswith("catalog_")
-                        else "drumsep_model_download_failed"
-                    )
+                    reason = _classify_direct_dks_preflight_reason(known_err_lower)
                     _emit_direct_dks_preflight_markers(reason, requested_model or run_model, resolved_model or "", known_err_text)
                 emit_phase("python_error")
                 if write_done:

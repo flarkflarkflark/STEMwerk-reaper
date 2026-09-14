@@ -2185,6 +2185,10 @@ if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
       READY_RUNTIME_STATUS="missing"
       READY_DRUMSEP_MODEL_STATUS="missing"
       case "${DRUMSEP_PREFETCH_DETAIL:-}" in
+        asset_integrity_mismatch:*)
+          READY_DETAIL="drumsep_model_integrity_failed"
+          set_status "deps_failed" "drumsep_model_integrity_failed"
+          ;;
         asset_download_failed:*|download_checks_write_failed:*|runtime_download_checks_missing|drumsep_yaml_filename_missing|builtin_fallback|catalog_entry_missing)
           READY_DETAIL="drumsep_model_download_failed"
           set_status "deps_failed" "drumsep_model_download_failed"

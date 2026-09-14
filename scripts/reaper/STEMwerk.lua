@@ -1681,18 +1681,24 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
     end
     if lowerLog:find("error_stage=stage2_preflight", 1, true)
         and (lowerLog:find("error_reason=drumsep_model_missing", 1, true)
-            or lowerLog:find("error_reason=drumsep_model_download_failed", 1, true)) then
+            or lowerLog:find("error_reason=drumsep_model_download_failed", 1, true)
+            or lowerLog:find("error_reason=drumsep_model_integrity_failed", 1, true)) then
         local reason = tostring(logSnippet or ""):match("error_reason=([^\r\n]+)") or "drumsep_model_missing"
         local requested = tostring(logSnippet or ""):match("requested_model=([^\r\n]+)") or DKS_WORKFLOW.DIRECT_DKS_MODEL
         local resolved = tostring(logSnippet or ""):match("resolved_model=([^\r\n]+)") or ""
+        local guidance = "The current audio-separator model catalog/runtime cannot resolve this Drum Kit model.\n"
+            .. "Update/repair the STEMwerk runtime model catalog, then retry."
+        if reason == "drumsep_model_integrity_failed" then
+            guidance = "A downloaded Drum Kit model file did not match its expected checksum and was discarded.\n"
+                .. "This is not a network/VPN/firewall problem by itself. Run Setup/Repair to download it again."
+        end
         local msg = "Direct Drum Kit Split preflight failed.\n"
             .. "Reason: " .. tostring(reason) .. "\n"
             .. "Requested model: " .. tostring(requested)
             .. (resolved ~= "" and ("\nResolved model: " .. tostring(resolved)) or "")
             .. "\nerror_stage=stage2_preflight\n"
             .. "error_reason=" .. tostring(reason)
-            .. "\n\nThe current audio-separator model catalog/runtime cannot resolve this Drum Kit model.\n"
-            .. "Update/repair the STEMwerk runtime model catalog, then retry."
+            .. "\n\n" .. guidance
             .. "\n\nExit code: " .. tostring(exitCode or "unknown")
             .. "\nCommand: " .. tostring(cmdLine or "unknown")
             .. "\nPython log (" .. tostring(logPath or "unknown") .. "):\n"

@@ -220,8 +220,10 @@ ensure_drumsep_assets() {
   [ -n "${_py}" ] && [ -x "${_py}" ] || return 1
   mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 1
   copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/drumsep-models" "${_model_dir}" || return 1
-  "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
+  _detail_file="$(mktemp "${TMPDIR:-/tmp}/stemwerk-drumsep-prefetch.XXXXXX")" || return 1
+  STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 import importlib.util
+import os
 from pathlib import Path
 
 script_path = Path(r"${SCRIPT_DIR}") / "audio_separator_process.py"
@@ -233,10 +235,20 @@ ok, _requested, _resolved, detail = module._direct_dks_preflight_check(
     module.DIRECT_DKS_MODEL_ALIAS,
     Path(r"${_model_dir}"),
 )
+detail_path = os.environ.get("STEMWERK_DRUMSEP_DETAIL_FILE", "").strip()
+if detail_path:
+    Path(detail_path).write_text(str(detail or ""), encoding="utf-8")
 if not ok:
     raise SystemExit(str(detail or "drumsep_prefetch_failed"))
 print("STEMWERK_DRUMSEP_MODEL_PREFETCH ok")
 PY
+  _rc=$?
+  DRUMSEP_PREFETCH_DETAIL=""
+  if [ -f "${_detail_file}" ]; then
+    DRUMSEP_PREFETCH_DETAIL="$(cat "${_detail_file}" 2>/dev/null || true)"
+  fi
+  rm -f "${_detail_file}" 2>/dev/null || true
+  return "${_rc}"
 }
 
 write_ready_to_go_state() {
@@ -1451,7 +1463,14 @@ install_drumsep_rocm_runtime() {
 
   set_progress "5" "${STEP_TOTAL}" "Verifying DrumSep ROCm runtime"
   if ! ensure_drumsep_assets "${_py}" "$(model_cache_dir)"; then
-    write_drumsep_rocm_state "install_failed" "missing" "model_download_failed"
+    case "${DRUMSEP_PREFETCH_DETAIL:-}" in
+      asset_integrity_mismatch:*)
+        write_drumsep_rocm_state "install_failed" "missing" "model_integrity_failed"
+        ;;
+      *)
+        write_drumsep_rocm_state "install_failed" "missing" "model_download_failed"
+        ;;
+    esac
     return 1
   fi
   if ! verify_drumsep_rocm_runtime; then
@@ -1513,7 +1532,14 @@ install_drumsep_runtime() {
 
   set_drumsep_substep_progress "4" "${_drumsep_step_total}" "Verifying DrumSep runtime"
   if ! ensure_drumsep_assets "${_drumsep_py}" "$(model_cache_dir)"; then
-    write_drumsep_state "install_failed" "missing" "model_download_failed"
+    case "${DRUMSEP_PREFETCH_DETAIL:-}" in
+      asset_integrity_mismatch:*)
+        write_drumsep_state "install_failed" "missing" "model_integrity_failed"
+        ;;
+      *)
+        write_drumsep_state "install_failed" "missing" "model_download_failed"
+        ;;
+    esac
     return 1
   fi
   if ! verify_drumsep_runtime; then

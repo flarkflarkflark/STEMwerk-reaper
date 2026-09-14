@@ -3722,6 +3722,10 @@ def test_drumsep_runtime_selector_reports_missing_for_stale_ok_without_existing_
 
 def test_direct_dks_preflight_rewrites_dead_ckpt_url_and_downloads_assets(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
+    # This test exercises catalog/URL resolution with synthetic fixture bytes,
+    # not asset-content integrity (see tests/test_drumsep_asset_integrity.py
+    # for that); disable the pinned-hash gate so fixture bytes aren't rejected.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "model cache with spaces"
     repo_checks = tmp_path / "download_checks.json"
     yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -3793,6 +3797,9 @@ def test_direct_dks_preflight_rewrites_dead_ckpt_url_and_downloads_assets(tmp_pa
 
 def test_direct_dks_preflight_uses_builtin_catalog_fallback_when_download_checks_are_missing(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
+    # Fixture-bytes test, not an integrity test -- see comment on the
+    # sibling test above.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "fresh model cache"
     monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: None)
 
@@ -3842,6 +3849,9 @@ def test_direct_dks_preflight_uses_builtin_catalog_fallback_when_download_checks
 
 def test_direct_dks_preflight_skips_download_when_assets_already_exist(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
+    # Fixture-bytes test, not an integrity test -- the pinned-hash gate would
+    # otherwise evict this test's synthetic "existing" cache as corrupt.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "model cache with spaces"
     model_cache_dir.mkdir(parents=True, exist_ok=True)
     yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -3887,6 +3897,10 @@ def test_direct_dks_preflight_skips_download_when_assets_already_exist(tmp_path,
 
 def test_direct_dks_preflight_flags_audio_separator_0230_runtime_as_backend_limited(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
+    # Fixture-bytes test (backend-limit detection), not an integrity test --
+    # without this, the mismatched "existing" cache would be evicted and
+    # (with no urlopen mock in this test) a real network call would follow.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "model cache with spaces"
     model_cache_dir.mkdir(parents=True, exist_ok=True)
     yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -3936,6 +3950,9 @@ def test_direct_dks_preflight_flags_audio_separator_0230_runtime_as_backend_limi
 
 def test_direct_dks_preflight_allows_linux_rocm_runtime_with_six_output_capable_backend(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
+    # Fixture-bytes test, not an integrity test -- see comment on the
+    # sibling backend-limited test above.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "model cache with spaces"
     model_cache_dir.mkdir(parents=True, exist_ok=True)
     yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -4030,6 +4047,10 @@ def test_direct_dks_preflight_reports_source_and_target_on_download_failure(tmp_
 
 def test_direct_dks_preflight_reports_yaml_schema_details_on_invalid_yaml(tmp_path, monkeypatch, capsys):
     module = _load_audio_separator_process_module()
+    # This test is about YAML schema validation, not asset-content integrity;
+    # disable the pinned-hash gate so the deliberately-invalid-schema fixture
+    # yaml (and the fake ckpt bytes) reach that validation step at all.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "model cache with spaces"
     repo_checks = tmp_path / "download_checks.json"
     yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"

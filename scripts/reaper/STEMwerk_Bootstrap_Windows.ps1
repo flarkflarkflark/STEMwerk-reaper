@@ -107,10 +107,16 @@ $drumsepDirectMlSoundFileVersion = "0.14.0"
 $drumsepModelEntryName = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
 $drumsepModelFileName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 $drumsepModelYamlName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+# Both URLs are pinned to immutable upstream commits (not "main"/floating
+# refs); both verified (2026-09-15) to still serve the exact validated
+# bytes in $drumsepModelCkptSha256/$drumsepModelYamlSha256 below, which
+# EnsureDrumsepAssets enforces fail-closed after every download.
 $drumsepModelCkptUrl = "https://huggingface.co/KitsuneX07/Music_Source_Sepetration_Models/resolve/8309883c6b3fecc360fff24c932dcc588f8c23c2/multi_stem_models/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt?download=true"
-$drumsepModelYamlUrl = "https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+$drumsepModelYamlUrl = "https://raw.githubusercontent.com/TRvlvr/application_data/adea29c9fdbd2fa115a208965d00a6f03cdfde96/mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 $drumsepModelCkptMinimumBytes = 104857600
 $drumsepModelYamlMinimumBytes = 128
+$drumsepModelCkptSha256 = "d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0"
+$drumsepModelYamlSha256 = "440a13f67461b2cdad2bb1cb86c08ff27a8ec53093c4a24d4d7fc2c19cb9f5f5"
 # NVIDIA CUDA is deliberately pinned through its own $torchCuda*/$torchCudaSuffix
 # variables, independent of $torchVersion/$torchVisionVersion/$torchAudioVersion
 # below. The newest published torch-directml build (0.2.5.dev240914) hard-pins
@@ -2402,7 +2408,25 @@ function DownloadFileWithRetry([string]$Url, [string]$TargetPath, [string]$Label
     return $false
 }
 
+function Test-Sha256Match([string]$Path, [string]$ExpectedSha256) {
+    if ([string]::IsNullOrWhiteSpace($ExpectedSha256)) { return $true }
+    if (-not (Test-Path $Path)) { return $false }
+    try {
+        $actual = (Get-FileHash -Path $Path -Algorithm SHA256).Hash
+    } catch {
+        LogLine ("SHA-256 computation failed for " + $Path + ": " + $_.Exception.Message)
+        return $false
+    }
+    return ($actual.ToLowerInvariant() -eq $ExpectedSha256.ToLowerInvariant())
+}
+
+function DrumsepAssetFailureStatusDetail() {
+    if ($script:DrumsepAssetFailureReason -eq "model_integrity_failed") { return "model_integrity_failed" }
+    return "model_download_failed"
+}
+
 function EnsureDrumsepAssets([string]$ModelDir) {
+    $script:DrumsepAssetFailureReason = ""
     if ([string]::IsNullOrWhiteSpace($ModelDir)) { return $false }
     if ($offlineBundledAllmodelsMode) {
         LogProgress "Installing bundled Drum Kit model assets..."
@@ -2416,21 +2440,29 @@ function EnsureDrumsepAssets([string]$ModelDir) {
     }
 
     $assets = @(
-        @{ Path = (Join-Path $ModelDir $drumsepModelFileName); Url = $drumsepModelCkptUrl; Label = "DrumSep model checkpoint"; MinimumBytes = $drumsepModelCkptMinimumBytes },
-        @{ Path = (Join-Path $ModelDir $drumsepModelYamlName); Url = $drumsepModelYamlUrl; Label = "DrumSep model YAML"; MinimumBytes = $drumsepModelYamlMinimumBytes }
+        @{ Path = (Join-Path $ModelDir $drumsepModelFileName); Url = $drumsepModelCkptUrl; Label = "DrumSep model checkpoint"; MinimumBytes = $drumsepModelCkptMinimumBytes; Sha256 = $drumsepModelCkptSha256 },
+        @{ Path = (Join-Path $ModelDir $drumsepModelYamlName); Url = $drumsepModelYamlUrl; Label = "DrumSep model YAML"; MinimumBytes = $drumsepModelYamlMinimumBytes; Sha256 = $drumsepModelYamlSha256 }
     )
     foreach ($asset in $assets) {
         if (Test-Path $asset.Path) {
             $existingSize = (Get-Item $asset.Path).Length
-            if ($existingSize -ge $asset.MinimumBytes) {
+            if ($existingSize -ge $asset.MinimumBytes -and (Test-Sha256Match $asset.Path $asset.Sha256)) {
                 LogProgress ($asset.Label + " already present: " + $asset.Path)
                 continue
             }
-            LogProgress ($asset.Label + " is incomplete and will be re-downloaded: " + $asset.Path)
+            LogProgress ($asset.Label + " is incomplete/corrupt and will be re-downloaded: " + $asset.Path)
             Remove-Item -Path $asset.Path -Force -ErrorAction SilentlyContinue
         }
         if (-not (DownloadFileWithRetry $asset.Url $asset.Path $asset.Label $asset.MinimumBytes)) {
             LogLine ("DrumSep asset download failed: " + $asset.Url)
+            return $false
+        }
+        if (-not (Test-Sha256Match $asset.Path $asset.Sha256)) {
+            $actualHash = ""
+            try { $actualHash = (Get-FileHash -Path $asset.Path -Algorithm SHA256).Hash } catch {}
+            LogLine ("DrumSep asset failed checksum verification: " + $asset.Path + " expected=" + $asset.Sha256 + " actual=" + $actualHash + " url=" + $asset.Url)
+            Remove-Item -Path $asset.Path -Force -ErrorAction SilentlyContinue
+            $script:DrumsepAssetFailureReason = "model_integrity_failed"
             return $false
         }
     }
@@ -2766,7 +2798,7 @@ function InstallDrumsepRuntime([string]$BasePythonPath) {
 
     WriteDrumsepState "running" "missing" "model_download"
     if (-not (EnsureDrumsepAssets $modelDir)) {
-        WriteDrumsepState "install_failed" "missing" "model_download_failed"
+        WriteDrumsepState "install_failed" "missing" (DrumsepAssetFailureStatusDetail)
         return $false
     }
 
@@ -2859,7 +2891,7 @@ function InstallDrumsepDirectmlRuntime([string]$BasePythonPath) {
 
     WriteDrumsepDirectmlState "running" "missing" "model_download"
     if (-not (EnsureDrumsepAssets $modelDir)) {
-        WriteDrumsepDirectmlState "install_failed" "missing" "model_download_failed"
+        WriteDrumsepDirectmlState "install_failed" "missing" (DrumsepAssetFailureStatusDetail)
         return $false
     }
 
@@ -2973,7 +3005,7 @@ function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
 
     WriteDrumsepCudaState "running" "missing" "model_download"
     if (-not (EnsureDrumsepAssets $modelDir)) {
-        WriteDrumsepCudaState "error" "missing" "model_download_failed"
+        WriteDrumsepCudaState "error" "missing" (DrumsepAssetFailureStatusDetail)
         return $false
     }
 
