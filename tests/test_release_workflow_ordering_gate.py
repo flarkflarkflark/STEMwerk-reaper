@@ -15,6 +15,7 @@ network involved.
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import subprocess
@@ -351,3 +352,209 @@ def test_checksums_job_unchanged():
 
     upload_step = _step_by_name(checksums["steps"], "Upload checksum manifest")
     assert upload_step["with"]["name"] == "installers-checksums"
+
+
+# --- artifact-layout contract: run 34952262927 proved the macOS artifact's
+# --- nested dist/ path broke the checksums job, which expects every
+# --- installers-<platform> artifact to be flat, public-bytes-only. ---------
+
+
+def _checksums_manifest_script() -> str:
+    workflow = _load_workflow()
+    checksums = _job(workflow, "checksums")
+    return _step_by_name(checksums["steps"], "Generate combined checksum manifest")["run"]
+
+
+# 1/2: installers-macos contains only the two package files, staged flat.
+
+
+def test_macos_staging_produces_exactly_the_two_public_pkg_files_flat(tmp_path):
+    workflow = _load_workflow()
+    macos = _job(workflow, "macos-pkg")
+    stage_script = _step_by_name(macos["steps"], "Stage public macOS installer artifacts")["run"]
+
+    repo = tmp_path / "repo"
+    dist = repo / "installer" / "macos" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "STEMwerk-2.3.1.2.pkg").write_bytes(b"standard-pkg-bytes")
+    (dist / "STEMwerk-2.3.1.2-bundled-apple-silicon.pkg").write_bytes(b"bundled-pkg-bytes")
+    # Non-public evidence alongside the pkgs in the real build tree -- must
+    # NOT be swept into the staged public-installer directory.
+    (dist / "SHA256SUMS-2.3.1.2-macos.txt").write_text("evidence\n", encoding="utf-8")
+    (dist / "source").mkdir()
+    (dist / "source" / "ffmpeg-8.0.3.tar.xz").write_bytes(b"source-archive")
+
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+
+    result = subprocess.run(
+        ["bash", "-c", stage_script],
+        cwd=repo,
+        env={**os.environ, "RUNNER_TEMP": str(runner_temp), "STEMWERK_VERSION": "2.3.1.2"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    staged_dir = runner_temp / "installers-macos"
+    staged = sorted(p.name for p in staged_dir.iterdir())
+    assert staged == ["STEMwerk-2.3.1.2-bundled-apple-silicon.pkg", "STEMwerk-2.3.1.2.pkg"]
+    assert (staged_dir / "STEMwerk-2.3.1.2.pkg").read_bytes() == b"standard-pkg-bytes"
+    assert (staged_dir / "STEMwerk-2.3.1.2-bundled-apple-silicon.pkg").read_bytes() == b"bundled-pkg-bytes"
+    # No subdirectories in the staged output -- this is what makes upload-artifact
+    # root the artifact exactly here instead of a broader common ancestor.
+    assert all(p.is_file() for p in staged_dir.iterdir())
+
+
+def test_macos_installer_artifact_upload_is_a_single_flat_directory_not_a_multi_glob():
+    workflow = _load_workflow()
+    macos_upload = _step_by_name(_job(workflow, "macos-pkg")["steps"], "Upload build artifacts (macOS)")
+    assert macos_upload["with"]["name"] == "installers-macos"
+    path = macos_upload["with"]["path"]
+    # A single directory path (not a multi-line glob spanning dist/ and
+    # build/) is what keeps upload-artifact's common-ancestor root exactly
+    # at that directory, so files land flat.
+    assert path.strip() == "${{ runner.temp }}/installers-macos"
+
+
+# 3: macos-build-evidence does not match installers-*.
+
+
+def test_macos_build_evidence_artifact_name_does_not_match_installers_pattern():
+    workflow = _load_workflow()
+    macos = _job(workflow, "macos-pkg")
+    evidence_step = _step_by_name(macos["steps"], "Upload macOS build evidence")
+    name = evidence_step["with"]["name"]
+    assert name == "macos-build-evidence"
+    assert not fnmatch.fnmatch(name, "installers-*")
+
+    # And the checksums/publish download patterns (installers-*) genuinely
+    # would not select it.
+    for job_name in ("checksums", "publish"):
+        job = _job(workflow, job_name)
+        download_step_names = [s.get("name", "") for s in job["steps"] if "download" in s.get("name", "").lower()]
+        for step_name in download_step_names:
+            step = _step_by_name(job["steps"], step_name)
+            pattern = step["with"]["pattern"]
+            assert not fnmatch.fnmatch(name, pattern), (job_name, step_name, pattern)
+
+
+# 4/5: checksums receives five flat installer paths; manifest enumerates exactly those five.
+
+
+def test_checksums_generates_manifest_of_exactly_the_five_flat_installers(tmp_path):
+    script = _checksums_manifest_script()
+    workdir = tmp_path / "run"
+    artifacts = workdir / "artifacts"
+    artifacts.mkdir(parents=True)
+    contents = {
+        "STEMwerk-Setup-2.3.1.2.exe": b"win-standard",
+        "STEMwerk-Setup-2.3.1.2-bundled.exe": b"win-bundled",
+        "STEMwerk-2.3.1.2.pkg": b"macos-standard",
+        "STEMwerk-2.3.1.2-bundled-apple-silicon.pkg": b"macos-bundled",
+        "STEMwerk-2.3.1.2-x86_64.AppImage": b"linux-appimage",
+    }
+    for name, data in contents.items():
+        (artifacts / name).write_bytes(data)
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=workdir,
+        env={**os.environ, "STEMWERK_VERSION": "2.3.1.2"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    manifest_path = artifacts / "SHA256SUMS-2.3.1.2.txt"
+    assert manifest_path.exists()
+    listed = sorted(line.split(maxsplit=1)[1].strip() for line in manifest_path.read_text().splitlines() if line.strip())
+    assert listed == sorted(contents)
+
+
+def test_checksums_fails_closed_when_an_unexpected_file_is_present(tmp_path):
+    """Proves the new fail-closed guard: run 34952262927's bug (a missing
+    expected file) is one failure mode; an unexpected extra file slipping
+    into the merged directory (e.g. non-public evidence leaking in) must
+    also be rejected, not silently included in the manifest."""
+    script = _checksums_manifest_script()
+    workdir = tmp_path / "run"
+    artifacts = workdir / "artifacts"
+    artifacts.mkdir(parents=True)
+    contents = {
+        "STEMwerk-Setup-2.3.1.2.exe": b"win-standard",
+        "STEMwerk-Setup-2.3.1.2-bundled.exe": b"win-bundled",
+        "STEMwerk-2.3.1.2.pkg": b"macos-standard",
+        "STEMwerk-2.3.1.2-bundled-apple-silicon.pkg": b"macos-bundled",
+        "STEMwerk-2.3.1.2-x86_64.AppImage": b"linux-appimage",
+    }
+    for name, data in contents.items():
+        (artifacts / name).write_bytes(data)
+    (artifacts / "SHA256SUMS-2.3.1.2-macos.txt").write_text("stray evidence\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=workdir,
+        env={**os.environ, "STEMWERK_VERSION": "2.3.1.2"},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "unexpected file" in (result.stdout + result.stderr).lower()
+    assert not (artifacts / "SHA256SUMS-2.3.1.2.txt").exists()
+
+
+# 6/7/8: publication finds both pkgs at the artifacts root but cannot
+# accidentally include build evidence (audit JSON, FFmpeg source archives).
+
+
+def test_publication_globs_select_installers_only_not_build_evidence():
+    workflow = _load_workflow()
+    publish = _job(workflow, "publish")
+    files_block = _step_by_name(publish["steps"], "Publish release assets")["with"]["files"]
+    patterns = [line.strip() for line in files_block.strip().splitlines() if line.strip()]
+
+    def matches_any(path: str) -> bool:
+        return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+    must_publish = (
+        "artifacts/STEMwerk-Setup-2.3.1.2.exe",
+        "artifacts/STEMwerk-Setup-2.3.1.2-bundled.exe",
+        "artifacts/STEMwerk-2.3.1.2.pkg",
+        "artifacts/STEMwerk-2.3.1.2-bundled-apple-silicon.pkg",
+        "artifacts/STEMwerk-2.3.1.2-x86_64.AppImage",
+        "artifacts/SHA256SUMS-2.3.1.2.txt",
+    )
+    for path in must_publish:
+        assert matches_any(path), f"{path} should be published but no glob matches it"
+
+    must_not_publish = (
+        "artifacts/final-package-audit.json",
+        "artifacts/online/final-package-audit.json",
+        "artifacts/bundled-apple-silicon/final-package-audit.json",
+        "artifacts/ffmpeg-8.0.3.tar.xz",
+        "artifacts/ffmpeg-8.0.3.tar.xz.sha256",
+    )
+    for path in must_not_publish:
+        assert not matches_any(path), f"{path} must not be published but a glob matches it"
+
+
+# 9: Windows/Linux contracts remain unchanged (single flat glob each).
+
+
+def test_windows_and_linux_installer_artifacts_remain_single_flat_glob():
+    workflow = _load_workflow()
+    windows_step = _step_by_name(_job(workflow, "windows-exe")["steps"], "Upload build artifacts (Windows)")
+    assert windows_step["with"]["name"] == "installers-windows"
+    assert windows_step["with"]["path"].strip() == "installer/windows/dist/STEMwerk-Setup-*.exe"
+
+    linux_step = _step_by_name(_job(workflow, "linux-packages")["steps"], "Upload build artifacts (Linux)")
+    assert linux_step["with"]["name"] == "installers-linux"
+    assert linux_step["with"]["path"].strip() == "installer/linux/dist/*.AppImage"
+
+
+# 10: upload_release_assets still defaults false -- already proven by
+# test_upload_release_assets_defaults_to_false above; this fix touches
+# nothing in the workflow_dispatch inputs block, so no new assertion is
+# needed here beyond that existing coverage.

@@ -312,12 +312,35 @@ jobs:
               > "SHA256SUMS-$STEMWERK_VERSION-macos.txt"
           )
 
+      # installers-<platform> is a strict contract: only public release
+      # installer bytes, flat at the artifact root -- exactly what the
+      # checksums and publish jobs expect. The macOS build also produces
+      # non-public build evidence (audit JSON, FFmpeg source, a per-platform
+      # checksum file); those are staged into a separate artifact below so
+      # they can never be mistaken for a release installer.
+      - name: Stage public macOS installer artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/installers-macos"
+          mkdir -p "$STAGE"
+          cp "installer/macos/dist/STEMwerk-$STEMWERK_VERSION.pkg" "$STAGE/"
+          cp "installer/macos/dist/STEMwerk-$STEMWERK_VERSION-bundled-apple-silicon.pkg" "$STAGE/"
+
       - name: Upload build artifacts (macOS)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installers-macos
+          path: ${{ runner.temp }}/installers-macos
+          if-no-files-found: error
+
+      # Not a release artifact -- deliberately named outside the
+      # installers-* pattern so checksums/publish never download it.
+      - name: Upload macOS build evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-build-evidence
           path: |
-            installer/macos/dist/*.pkg
             installer/macos/dist/*.txt
             installer/macos/dist/source/*
             installer/macos/build/*/final-package-audit.json
@@ -390,6 +413,19 @@ jobs:
           for f in "${FILES[@]}"; do
             test -f "$f" || { echo "ERROR: expected release artifact missing: $f"; exit 1; }
           done
+
+          # Fail closed on anything beyond the five intended installers: each
+          # installers-<platform> artifact is a strict flat-public-bytes-only
+          # contract, so an extra file here means that contract was violated
+          # upstream, not a file safe to silently include in the manifest.
+          mapfile -t ACTUAL_FILES < <(find . -maxdepth 1 -type f -printf '%f\n' | sort)
+          mapfile -t EXPECTED_FILES < <(printf '%s\n' "${FILES[@]}" | sort)
+          if [[ "$(printf '%s\n' "${ACTUAL_FILES[@]}")" != "$(printf '%s\n' "${EXPECTED_FILES[@]}")" ]]; then
+            echo "ERROR: unexpected file(s) in merged installer artifacts directory:"
+            comm -23 <(printf '%s\n' "${ACTUAL_FILES[@]}") <(printf '%s\n' "${EXPECTED_FILES[@]}")
+            exit 1
+          fi
+
           sha256sum "${FILES[@]}" > "SHA256SUMS-$STEMWERK_VERSION.txt"
           cat "SHA256SUMS-$STEMWERK_VERSION.txt"
 
