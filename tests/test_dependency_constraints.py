@@ -6309,7 +6309,12 @@ def test_macos_payload_builder_requires_official_ffmpeg_and_local_runtime_source
     assert 'RUNTIME_REQUIREMENTS = (' in script
     assert '"samplerate==0.1.0"' in script
     assert 'build_stemwerk_core_wheel(repo_root, wheels_dir, python_executable)' in script
-    assert '"--no-build-isolation"' in script
+    # stemwerk-core is built under normal PEP-517 isolation restricted to the
+    # closed wheelhouse (--no-index --find-links), not --no-build-isolation:
+    # the isolated build env must source setuptools/wheel from the wheelhouse
+    # instead of assuming they're importable in the invoking host interpreter.
+    assert '"--no-build-isolation"' not in script
+    assert '_require_bootstrap_wheel(wheels_dir, pinned)' in script
     assert 'validate_official_managed_python_provenance(output_dir / "python", manifest)' in script
 
 
