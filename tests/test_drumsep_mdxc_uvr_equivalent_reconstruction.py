@@ -61,9 +61,10 @@ def test_source_does_not_use_unfold_for_mdxc_chunk_building():
 def test_run_uvr_equivalent_mdxc_separation_guards_return_none_for_unsupported_models():
     module = _load_helper()
 
-    def make_separator(*, is_roformer=False, target_instrument="", instruments=("Kick", "Snare")):
+    def make_separator(*, is_roformer=False, pitch_shift=0, target_instrument="", instruments=("Kick", "Snare")):
         concrete = SimpleNamespace(
             is_roformer=is_roformer,
+            pitch_shift=pitch_shift,
             model_data_cfgdict=SimpleNamespace(
                 training=SimpleNamespace(target_instrument=target_instrument, instruments=list(instruments))
             ),
@@ -92,8 +93,121 @@ def test_run_uvr_equivalent_mdxc_separation_guards_return_none_for_unsupported_m
         is None
     )
 
+    # A pitch-shifted model is out of scope for this fix (evidence-derived
+    # guard shared with the CUDA-specific investigation: this reconstruction
+    # was only proven against pitch_shift == 0).
+    assert (
+        module._run_uvr_equivalent_mdxc_separation(
+            make_separator(pitch_shift=1, instruments=module.DIRECT_DEMIX_KEYS), Path("x.wav"), Path(".")
+        )
+        is None
+    )
+
+    # Any instrument set other than the exact six-target DrumSep contract,
+    # in its exact order, must not be routed through this reconstruction --
+    # even if it happens to have more than two instruments.
+    assert (
+        module._run_uvr_equivalent_mdxc_separation(
+            make_separator(instruments=("Snare", "Kick", "Toms", "Hh", "Ride", "Crash")), Path("x.wav"), Path(".")
+        )
+        is None
+    )
+
     # No model_instance yet (load_model() not called) must not raise.
     assert module._run_uvr_equivalent_mdxc_separation(SimpleNamespace(model_instance=None), Path("x.wav"), Path(".")) is None
+
+
+def test_run_uvr_equivalent_mdxc_separation_is_never_conditioned_on_device():
+    # This helper script is exclusively the DrumSep stage2 process (see its
+    # module docstring); the "wrapper" route it implements has no device
+    # parameter of its own. A CUDA-only build of this same reconstruction
+    # (hotfix/2.3.1.2-windows-blackwell@631fb808) proved that gating the
+    # fix on device=="cuda" silently disables it on ROCm, regressing DrumSep
+    # quality back to the pre-fix, corrupted-Snare-stem stock reconstruction.
+    # This guards against that regression class: the dispatch to this
+    # function must never be wrapped in an args.device check.
+    script = DRUMSEP_HELPER.read_text(encoding="utf-8")
+    call_site = script.index("raw_outputs = _run_uvr_equivalent_mdxc_separation(")
+    enclosing_else = script.rindex("\n        else:\n", 0, call_site)
+    between_else_and_call = script[enclosing_else:call_site]
+    assert "args.device" not in between_else_and_call
+
+
+def test_six_target_reconstruction_matches_known_good_and_preserves_order_regardless_of_device():
+    torch = pytest.importorskip("torch")
+    module = _load_helper()
+
+    class FakeModelRun:
+        num_target_instruments = len(module.DIRECT_DEMIX_KEYS)
+
+        def __call__(self, batch):
+            outputs = torch.zeros(batch.shape[0], len(module.DIRECT_DEMIX_KEYS), *batch.shape[1:], dtype=batch.dtype)
+            for target_index in range(len(module.DIRECT_DEMIX_KEYS)):
+                outputs[:, target_index] = batch * (target_index + 1)
+            return outputs
+
+    concrete = SimpleNamespace(
+        model_run=FakeModelRun(),
+        override_model_segment_size=False,
+        model_data_cfgdict=SimpleNamespace(
+            inference=SimpleNamespace(dim_t=5),
+            audio=SimpleNamespace(hop_length=4),
+            training=SimpleNamespace(target_instrument="", instruments=list(module.DIRECT_DEMIX_KEYS)),
+        ),
+        overlap=4,
+        batch_size=2,
+        torch_device=torch.device("cpu"),
+        is_roformer=False,
+        pitch_shift=0,
+    )
+    left = torch.arange(37, dtype=torch.float32) / 4
+    right = -(torch.arange(37, dtype=torch.float32) + 1) / 8
+    mix = torch.stack([left, right])
+
+    actual = module._uvr_equivalent_mdxc_reconstruction(concrete, mix)
+
+    import numpy as np
+
+    assert tuple(actual) == module.DIRECT_DEMIX_KEYS
+    for target_index, name in enumerate(module.DIRECT_DEMIX_KEYS):
+        np.testing.assert_array_equal(actual[name], mix.numpy() * (target_index + 1))
+
+
+def test_snare_one_hot_cannot_leak_into_any_other_target():
+    torch = pytest.importorskip("torch")
+    module = _load_helper()
+
+    class FakeModelRun:
+        num_target_instruments = len(module.DIRECT_DEMIX_KEYS)
+
+        def __call__(self, batch):
+            outputs = torch.zeros(batch.shape[0], len(module.DIRECT_DEMIX_KEYS), *batch.shape[1:], dtype=batch.dtype)
+            outputs[:, 1] = batch * 2 + 20  # Snare is index 1 in DIRECT_DEMIX_KEYS
+            return outputs
+
+    concrete = SimpleNamespace(
+        model_run=FakeModelRun(),
+        override_model_segment_size=False,
+        model_data_cfgdict=SimpleNamespace(
+            inference=SimpleNamespace(dim_t=5),
+            audio=SimpleNamespace(hop_length=4),
+            training=SimpleNamespace(target_instrument="", instruments=list(module.DIRECT_DEMIX_KEYS)),
+        ),
+        overlap=4,
+        batch_size=2,
+        torch_device=torch.device("cpu"),
+    )
+    left = torch.arange(37, dtype=torch.float32) / 4
+    right = -(torch.arange(37, dtype=torch.float32) + 1) / 8
+    mix = torch.stack([left, right])
+
+    actual = module._uvr_equivalent_mdxc_reconstruction(concrete, mix)
+
+    import numpy as np
+
+    np.testing.assert_array_equal(actual["Snare"], mix.numpy() * 2 + 20)
+    for name in ("Kick", "Toms", "Hh", "Ride", "Crash"):
+        np.testing.assert_array_equal(actual[name], np.zeros((2, 37), dtype=np.float32))
 
 
 def test_uvr_equivalent_mdxc_reconstruction_accumulates_each_position_exactly_overlap_times():

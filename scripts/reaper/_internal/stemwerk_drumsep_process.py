@@ -358,16 +358,18 @@ def _run_uvr_equivalent_mdxc_separation(separator: Any, input_path: Path, output
     """Run DrumSep separation using the UVR-equivalent reconstruction above
     instead of audio_separator.Separator.separate()'s MDXC accumulation,
     writing files with the same naming convention consumed downstream by
-    normalize_outputs(). Only applies to the plain (non-Roformer, non
-    primary/secondary) multi-instrument MDXC path DrumSep actually uses;
+    normalize_outputs(). Only applies to the exact six-target, non-Roformer,
+    non-pitch-shifted DrumSep model contract (Kick/Snare/Toms/Hh/Ride/Crash);
     returns None if the loaded model doesn't match that shape so the caller
     can fall back to the stock sep.separate() call unchanged.
     """
     concrete = getattr(separator, "model_instance", None)
     if concrete is None or not hasattr(concrete, "model_data_cfgdict") or getattr(concrete, "is_roformer", True):
         return None
-    instruments = list(concrete.model_data_cfgdict.training.instruments)
-    if concrete.model_data_cfgdict.training.target_instrument or len(instruments) <= 2:
+    if getattr(concrete, "pitch_shift", 0) != 0:
+        return None
+    training = concrete.model_data_cfgdict.training
+    if training.target_instrument or tuple(training.instruments) != DIRECT_DEMIX_KEYS:
         return None
 
     import soundfile as sf
