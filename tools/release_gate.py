@@ -564,6 +564,110 @@ def check_vendor_wheel_index_parity(root: Path, sources: list[SourceEntry], netw
     return section
 
 
+FULL_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+FLOATING_REF_NAMES = {"main", "master", "head", "latest"}
+FLOATING_URL_MARKERS = ("/refs/heads/", "/latest/")
+
+
+def extract_source_ref(url: str) -> str | None:
+    parsed = urlparse(url)
+    if "raw.githubusercontent.com" not in (parsed.netloc or ""):
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) >= 3:
+        # raw.githubusercontent.com/<owner>/<repo>/<ref>/<path...>
+        return parts[2]
+    return None
+
+
+def check_immutable_payload_refs(root: Path, sources: list[SourceEntry], network: bool = False) -> Section:
+    """Fail-closed gate: every ReaPack <source> payload URL must resolve its
+    bytes from an immutable git ref (the exact release tag or a full commit
+    SHA), never a moving branch/alias -- a floating ref means the bytes a
+    user downloads can change silently after the release ships.
+
+    This only inspects <source> payload URLs inside index.xml. The ReaPack
+    subscription/discovery URL that points users at index.xml itself
+    (published in README.md, not a <source> entry) is intentionally exempt:
+    it is expected to keep tracking the default branch so existing
+    subscribers see new releases appear. Historical release notes/links
+    and post-release recovery/"latest" download links live outside
+    index.xml entirely and are likewise untouched by this gate.
+
+    With network=True, each payload URL is also HEAD-requested to confirm
+    the pinned ref actually resolves. This is reported as a warning, not a
+    failure: before the release is tagged and pushed, the pinned tag
+    legitimately does not exist on the remote yet, so this mode is meant
+    for post-tag verification, not the ordinary offline release gate.
+    """
+    section = Section("G. Immutable payload ref gate")
+    version_file = root / "VERSION"
+    version = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else ""
+    expected_tag = f"v{version}" if version else None
+
+    checked = 0
+    floating: set[str] = set()
+    non_immutable: set[str] = set()
+
+    for s in sources:
+        if not s.url:
+            continue
+        label = s.repo_path or s.file_attr or s.url
+
+        for marker in FLOATING_URL_MARKERS:
+            if marker in s.url:
+                floating.add(f"{label}: floating marker {marker!r} in URL ({s.url})")
+
+        ref = extract_source_ref(s.url)
+        if ref is None:
+            continue
+        checked += 1
+        if ref.lower() in FLOATING_REF_NAMES:
+            floating.add(f"{label}: floating ref {ref!r} ({s.url})")
+            continue
+        if FULL_COMMIT_SHA_RE.match(ref.lower()):
+            continue
+        if expected_tag is not None and ref == expected_tag:
+            continue
+        non_immutable.add(
+            f"{label}: ref {ref!r} is neither the release tag {expected_tag!r} nor a full commit SHA ({s.url})"
+        )
+
+    if floating:
+        section.fail("payload sources pinned to a floating/moving ref:")
+        for m in sorted(floating):
+            section.note(f" - {m}")
+    if non_immutable:
+        section.fail("payload sources not pinned to an immutable ref:")
+        for m in sorted(non_immutable):
+            section.note(f" - {m}")
+
+    if not floating and not non_immutable:
+        if checked:
+            section.note(f"{checked} payload source ref(s) verified immutable (tag {expected_tag!r} or full commit SHA)")
+        else:
+            section.note("no raw.githubusercontent.com payload sources found to check")
+
+    if network and checked and not floating and not non_immutable:
+        import urllib.request
+
+        for s in sources:
+            if not s.url:
+                continue
+            try:
+                req = urllib.request.Request(s.url, method="HEAD")
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    if resp.status >= 400:
+                        section.warn(f"payload URL returned HTTP {resp.status}: {s.url}")
+            except Exception as exc:  # noqa: BLE001 - network parity check reports, never raises
+                section.warn(
+                    f"could not verify payload URL reachability (expected before the release tag is pushed): "
+                    f"{s.url}: {exc}"
+                )
+
+    return section
+
+
 def check_production_payload_contract(root: Path, payload_paths: set[str]) -> Section:
     """Validate index.xml against tools/production_payload_contract.txt --
     the normative production payload definition (see that file's header).
@@ -648,6 +752,7 @@ def run_check(root: Path, network: bool = False) -> tuple[list[Section], int]:
     sections.append(runtime_section)
     sections.append(check_bootstrap_guard_payload(root, payload_paths))
     sections.append(check_vendor_wheel_index_parity(root, sources, network=network))
+    sections.append(check_immutable_payload_refs(root, sources, network=network))
     sections.append(check_production_payload_contract(root, payload_paths))
 
     fail_count = sum(1 for s in sections if s.status == "FAIL")

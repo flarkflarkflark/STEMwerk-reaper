@@ -12,9 +12,10 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _mk_index(version: str, sources: list[str]) -> str:
+def _mk_index(version: str, sources: list[str], ref: str | None = None) -> str:
+    ref = ref if ref is not None else f"v{version}"
     src_xml = "\n".join(
-        f'        <source file="../{src}" type="file">https://raw.githubusercontent.com/example/repo/main/scripts/reaper/{src}</source>'
+        f'        <source file="../{src}" type="file">https://raw.githubusercontent.com/example/repo/{ref}/scripts/reaper/{src}</source>'
         for src in sources
     )
     return (
@@ -143,6 +144,129 @@ def test_samplerate_guard_referenced_by_bootstrap_must_be_in_payload(tmp_path: P
     msgs = "\n".join("\n".join(s.messages) for s in sections)
     assert "bootstrap references helper missing from index.xml payload" in msgs
     assert "scripts/reaper/_internal/stemwerk_samplerate_guard.py" in msgs
+
+
+def _mk_valid_fixture(tmp_path: Path, version: str, ref: str | None = None) -> None:
+    _write(tmp_path / "VERSION", version + "\n")
+    _seed_required_top_level(tmp_path, version)
+    _write(tmp_path / "scripts/reaper/_internal/STEMwerk_Timing.lua", "-- timing\n")
+    _write(tmp_path / "scripts/reaper/_internal/stemwerk_samplerate_guard.py", "# guard\n")
+    _write(
+        tmp_path / "tools/production_payload_contract.txt",
+        "\n".join(
+            f"required\tcommon\tscripts/reaper/{rel}"
+            for rel in (
+                "STEMwerk.lua",
+                "STEMwerk-SETUP.lua",
+                "STEMwerk_Save_Support_Bundle.lua",
+                "_internal/STEMwerk_Timing.lua",
+                "_internal/stemwerk_samplerate_guard.py",
+            )
+        )
+        + "\n",
+    )
+    _write(
+        tmp_path / "index.xml",
+        _mk_index(
+            version,
+            [
+                "STEMwerk.lua",
+                "STEMwerk-SETUP.lua",
+                "STEMwerk_Save_Support_Bundle.lua",
+                "_internal/STEMwerk_Timing.lua",
+                "_internal/stemwerk_samplerate_guard.py",
+            ],
+            ref=ref,
+        ),
+    )
+
+
+def _section(sections: list[release_gate.Section], name: str) -> release_gate.Section:
+    for s in sections:
+        if s.name == name:
+            return s
+    raise AssertionError(f"section {name!r} not found among {[s.name for s in sections]}")
+
+
+IMMUTABLE_REF_GATE = "G. Immutable payload ref gate"
+
+
+def test_immutable_ref_gate_passes_with_release_tag(tmp_path: Path) -> None:
+    version = "2.2.2.2.2"
+    _mk_valid_fixture(tmp_path, version)  # default ref = f"v{version}", an immutable tag
+
+    sections, fail_count = release_gate.run_check(tmp_path)
+
+    assert fail_count == 0
+    gate = _section(sections, IMMUTABLE_REF_GATE)
+    assert gate.status == "PASS"
+    assert "verified immutable" in "\n".join(gate.messages)
+
+
+def test_immutable_ref_gate_accepts_full_commit_sha(tmp_path: Path) -> None:
+    version = "2.2.2.2.2"
+    _mk_valid_fixture(tmp_path, version, ref="0123456789abcdef0123456789abcdef01234567")
+
+    sections, fail_count = release_gate.run_check(tmp_path)
+
+    assert fail_count == 0
+    assert _section(sections, IMMUTABLE_REF_GATE).status == "PASS"
+
+
+def test_immutable_ref_gate_rejects_main_branch_ref(tmp_path: Path) -> None:
+    version = "2.2.2.2.2"
+    _mk_valid_fixture(tmp_path, version, ref="main")
+
+    sections, fail_count = release_gate.run_check(tmp_path)
+
+    assert fail_count > 0
+    gate = _section(sections, IMMUTABLE_REF_GATE)
+    assert gate.status == "FAIL"
+    assert "floating" in "\n".join(gate.messages)
+
+
+def test_immutable_ref_gate_rejects_master_branch_ref(tmp_path: Path) -> None:
+    version = "2.2.2.2.2"
+    _mk_valid_fixture(tmp_path, version, ref="master")
+
+    sections, fail_count = release_gate.run_check(tmp_path)
+
+    assert fail_count > 0
+    assert _section(sections, IMMUTABLE_REF_GATE).status == "FAIL"
+
+
+def test_immutable_ref_gate_rejects_latest_ref(tmp_path: Path) -> None:
+    version = "2.2.2.2.2"
+    _mk_valid_fixture(tmp_path, version, ref="latest")
+
+    sections, fail_count = release_gate.run_check(tmp_path)
+
+    assert fail_count > 0
+    assert _section(sections, IMMUTABLE_REF_GATE).status == "FAIL"
+
+
+def test_immutable_ref_gate_rejects_refs_heads_marker(tmp_path: Path) -> None:
+    version = "2.2.2.2.2"
+    _mk_valid_fixture(tmp_path, version, ref="refs/heads/main")
+
+    sections, fail_count = release_gate.run_check(tmp_path)
+
+    assert fail_count > 0
+    gate = _section(sections, IMMUTABLE_REF_GATE)
+    assert gate.status == "FAIL"
+    assert "refs/heads" in "\n".join(gate.messages)
+
+
+def test_immutable_ref_gate_rejects_ref_not_matching_release_tag(tmp_path: Path) -> None:
+    version = "2.2.2.2.2"
+    _mk_valid_fixture(tmp_path, version, ref="v9.9.9.9")
+
+    sections, fail_count = release_gate.run_check(tmp_path)
+
+    assert fail_count > 0
+    gate = _section(sections, IMMUTABLE_REF_GATE)
+    assert gate.status == "FAIL"
+    assert "not pinned to an immutable ref" in "\n".join(gate.messages)
 
 
 def _contract_path(tmp_path: Path, text: str) -> Path:

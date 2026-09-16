@@ -1017,7 +1017,8 @@ def test_drumsep_benchmark_helper_device_override_is_probe_only_and_scheduler_vi
     assert 'return "cpu", "not_requested"' in process
     assert 'require_cuda=True' in process
     assert 'route="direct-demix" if use_direct_demix else "wrapper"' in process
-    assert 'device=direct_demix_device if use_direct_demix else helper_device' in process
+    assert "use_managed_wrapper = direct_demix_reason == DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON" in process
+    assert 'device=direct_demix_device if use_direct_demix else (managed_wrapper_device or helper_device)' in process
     assert 'def _probe_gpu_device(device: str)' in helper
     assert 'choices=["cpu", "cuda", "rocm", "mps", "directml"]' in helper
     assert '"drumsep_helper_gpu_probe_status"' in support
@@ -3725,6 +3726,10 @@ def test_drumsep_runtime_selector_reports_missing_for_stale_ok_without_existing_
 
 def test_direct_dks_preflight_rewrites_dead_ckpt_url_and_downloads_assets(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
+    # This test exercises catalog/URL resolution with synthetic fixture bytes,
+    # not asset-content integrity (see tests/test_drumsep_asset_integrity.py
+    # for that); disable the pinned-hash gate so fixture bytes aren't rejected.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "model cache with spaces"
     repo_checks = tmp_path / "download_checks.json"
     yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -3803,6 +3808,9 @@ def test_direct_dks_preflight_rewrites_dead_ckpt_url_and_downloads_assets(tmp_pa
 
 def test_direct_dks_preflight_fetches_authoritative_catalog_when_download_checks_are_missing(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
+    # Fixture-bytes test, not an integrity test -- see comment on the
+    # sibling test above.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "fresh model cache"
     monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: None)
 
@@ -3862,6 +3870,9 @@ def test_direct_dks_preflight_fetches_authoritative_catalog_when_download_checks
 
 def test_direct_dks_preflight_skips_download_when_assets_already_exist(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
+    # Fixture-bytes test, not an integrity test -- the pinned-hash gate would
+    # otherwise evict this test's synthetic "existing" cache as corrupt.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "model cache with spaces"
     model_cache_dir.mkdir(parents=True, exist_ok=True)
     yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -3914,6 +3925,10 @@ def test_direct_dks_preflight_skips_download_when_assets_already_exist(tmp_path,
 
 def test_direct_dks_preflight_flags_audio_separator_0230_runtime_as_backend_limited(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
+    # Fixture-bytes test (backend-limit detection), not an integrity test --
+    # without this, the mismatched "existing" cache would be evicted and
+    # (with no urlopen mock in this test) a real network call would follow.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "model cache with spaces"
     model_cache_dir.mkdir(parents=True, exist_ok=True)
     yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -3970,6 +3985,9 @@ def test_direct_dks_preflight_flags_audio_separator_0230_runtime_as_backend_limi
 
 def test_direct_dks_preflight_allows_linux_rocm_runtime_with_six_output_capable_backend(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
+    # Fixture-bytes test, not an integrity test -- see comment on the
+    # sibling backend-limited test above.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "model cache with spaces"
     model_cache_dir.mkdir(parents=True, exist_ok=True)
     yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -4078,6 +4096,10 @@ def test_direct_dks_preflight_reports_source_and_target_on_download_failure(tmp_
 
 def test_direct_dks_preflight_reports_yaml_schema_details_on_invalid_yaml(tmp_path, monkeypatch, capsys):
     module = _load_audio_separator_process_module()
+    # This test is about YAML schema validation, not asset-content integrity;
+    # disable the pinned-hash gate so the deliberately-invalid-schema fixture
+    # yaml (and the fake ckpt bytes) reach that validation step at all.
+    monkeypatch.setattr(module, "DIRECT_DKS_MODEL_EXPECTED_SHA256", {})
     model_cache_dir = tmp_path / "model cache with spaces"
     repo_checks = tmp_path / "download_checks.json"
     yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -5017,8 +5039,8 @@ def test_windows_offline_drumsep_payload_builder_and_inno_wiring_present():
 
     assert 'drumsep-wheels-nvidia' in prep
     assert 'audio-separator==0.34.1' in prep
-    assert 'onnxruntime==1.26.0' in prep
-    assert 'torchaudio==2.4.1+cu121' in prep
+    assert 'onnxruntime==1.26.0' in prep  # retained for the CPU backend spec, not nvidia
+    assert 'torchaudio==2.7.1+cu128' in prep
     assert 'torch-directml==0.2.5.dev240914' in prep
     assert 'torch==2.12.0' in prep
 
@@ -5329,7 +5351,7 @@ def _assert_readme_release_contract(readme, target_version):
 
 def test_shipped_readme_identifies_current_public_2311_release_and_assets():
     repository_version = Path("VERSION").read_text(encoding="utf-8").strip()
-    assert repository_version == "2.3.1.1"
+    assert repository_version == "2.3.1.2"
     target_version = repository_version
 
     readme = Path("README.md").read_text(encoding="utf-8")
@@ -5345,7 +5367,7 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
     deliberately-unpublished Linux native packages or the separate-channel
     offline/allmodels pkg advertised as release assets, and dropped published
     rows."""
-    assert Path("VERSION").read_text(encoding="utf-8").strip() == "2.3.1.1"
+    assert Path("VERSION").read_text(encoding="utf-8").strip() == "2.3.1.2"
     target_version = Path("VERSION").read_text(encoding="utf-8").strip()
     real_readme = Path("README.md").read_text(encoding="utf-8")
 
@@ -6026,25 +6048,34 @@ def test_windows_main_wheelhouse_builder_keeps_cuda_torch_stack_and_numba_llvm_c
     assert '"llvmlite==0.48.0"' in script
     assert '"numba==0.66.0"' in script
     assert 'if include_cuda:' in script
-    assert '"torch==2.4.1+cu121"' in script
-    assert '"torchvision==0.19.1+cu121"' in script
+    assert '"torch==2.7.1+cu128"' in script
+    assert '"torchvision==0.22.1+cu128"' in script
     assert 'else:' in script
     assert '"torch==2.4.1"' in script
     assert '"torchvision==0.19.1"' in script
-    assert 'CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"' in script
-    assert 'if "+cu121" in spec:' in script
+    assert 'CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"' in script
+    assert 'if "+cu128" in spec:' in script
     assert "pip_download_with_index(spec, out_dir, args, CUDA_INDEX_URL)" in script
 
 
-def test_windows_bootstrap_cuda_runtime_preserves_cu121_local_version_suffix():
+def test_windows_bootstrap_cuda_runtime_uses_independent_cu128_pin():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
 
-    assert '$torchCudaSuffix = "+cu121"' in script
-    assert '$torchCudaReq = "torch==$torchVersion$torchCudaSuffix"' in script
-    assert '$torchVisionCudaReq = "torchvision==$torchVisionVersion$torchCudaSuffix"' in script
-    assert '"torch==$torchVersion$torchCudaSuffix"' in script
-    assert '"torchvision==$torchVisionVersion$torchCudaSuffix"' in script
-    assert '"torchaudio==$torchAudioVersion$torchCudaSuffix"' in script
+    assert '$torchCudaSuffix = "+cu128"' in script
+    assert '$torchCudaVersion = "2.7.1"' in script
+    assert '$torchVisionCudaVersion = "0.22.1"' in script
+    assert '$torchAudioCudaVersion = "2.7.1"' in script
+    assert '$torchCudaReq = "torch==$torchCudaVersion$torchCudaSuffix"' in script
+    assert '$torchVisionCudaReq = "torchvision==$torchVisionCudaVersion$torchCudaSuffix"' in script
+    assert '"torch==$torchCudaVersion$torchCudaSuffix"' in script
+    assert '"torchvision==$torchVisionCudaVersion$torchCudaSuffix"' in script
+    assert '"torchaudio==$torchAudioCudaVersion$torchCudaSuffix"' in script
+    # The CUDA bump must not silently move DirectML/CPU onto the new stack:
+    # torch-directml's newest published build hard-pins torch==2.4.1/0.19.1.
+    assert '$torchVersion = "2.4.1"' in script
+    assert '$torchVisionVersion = "0.19.1"' in script
+    assert '$torchAudioVersion = "2.4.1"' in script
+    assert '"torch==$torchVersion", "torchvision==$torchVisionVersion", "torch-directml==$torchDirectMlVersion"' in script
 
 
 def test_windows_nvidia_offline_drumsep_payload_carries_required_runtime_wheels():
@@ -6053,11 +6084,15 @@ def test_windows_nvidia_offline_drumsep_payload_carries_required_runtime_wheels(
     nvidia_block = prep.split('backend="nvidia"', 1)[1].split('BackendSpec(', 1)[0]
     assert 'output_dir="drumsep-wheels-nvidia"' in nvidia_block
     assert '"audio-separator==0.34.1"' in nvidia_block
-    assert '"onnxruntime==1.26.0"' in nvidia_block
     assert '"onnxruntime-gpu==1.24.4"' in nvidia_block
-    assert '"torch==2.4.1+cu121"' in nvidia_block
-    assert '"torchvision==0.19.1+cu121"' in nvidia_block
-    assert '"torchaudio==2.4.1+cu121"' in nvidia_block
+    assert '"torch==2.7.1+cu128"' in nvidia_block
+    assert '"torchvision==0.22.1+cu128"' in nvidia_block
+    assert '"torchaudio==2.7.1+cu128"' in nvidia_block
+    # Regression guard for the proven RTX 3060 onnxruntime/onnxruntime-gpu file
+    # conflict: requesting both in the same set can silently drop
+    # CUDAExecutionProvider. The plain, CPU-only "onnxruntime" package must never
+    # reappear alongside "onnxruntime-gpu" in the NVIDIA backend's requirements.
+    assert '"onnxruntime==' not in nvidia_block
 
 
 def test_windows_bootstrap_offline_drumsep_mode_uses_local_payload_only():
@@ -6366,7 +6401,12 @@ def test_macos_payload_builder_requires_official_ffmpeg_and_local_runtime_source
     assert 'RUNTIME_REQUIREMENTS = (' in script
     assert '"samplerate==0.1.0"' in script
     assert 'build_stemwerk_core_wheel(repo_root, wheels_dir, python_executable)' in script
-    assert '"--no-build-isolation"' in script
+    # stemwerk-core is built under normal PEP-517 isolation restricted to the
+    # closed wheelhouse (--no-index --find-links), not --no-build-isolation:
+    # the isolated build env must source setuptools/wheel from the wheelhouse
+    # instead of assuming they're importable in the invoking host interpreter.
+    assert '"--no-build-isolation"' not in script
+    assert '_require_bootstrap_wheel(wheels_dir, pinned)' in script
     assert 'validate_official_managed_python_provenance(output_dir / "python", manifest)' in script
 
 

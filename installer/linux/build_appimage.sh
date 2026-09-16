@@ -158,11 +158,38 @@ chmod +x "$APPDIR/usr/bin/stemwerk-installer"
 # Make sure desktop file is at the AppDir root too (common AppImage convention)
 cp -f "$APPDIR/usr/share/applications/stemwerk.desktop" "$APPDIR/stemwerk.desktop"
 
-# Download appimagetool if missing
+# Pinned to AppImageKit's last immutable tagged GitHub Release ("13",
+# 2020-12-31) rather than the "continuous" release, whose tag and asset
+# are rewritten in place by upstream CI -- the exact bytes behind that URL
+# can change out from under this build with no version bump. Upstream has
+# since relabeled release 13's assets with an "obsolete-" prefix to steer
+# users toward "continuous", but the underlying binary is untouched and
+# still hosted at a fixed, immutable release URL. Fail closed if the
+# downloaded bytes don't match the pinned checksum.
+APPIMAGETOOL_URL="https://github.com/AppImage/AppImageKit/releases/download/13/obsolete-appimagetool-x86_64.AppImage"
+APPIMAGETOOL_SHA256="df3baf5ca5facbecfc2f3fa6713c29ab9cefa8fd8c1eac5d283b79cab33e4acb"
 APPIMAGETOOL="$BUILD_DIR/appimagetool-x86_64.AppImage"
+
+verify_appimagetool_sha256() {
+  local actual
+  actual="$(sha256sum "$APPIMAGETOOL" | awk '{print $1}')"
+  [[ "$actual" == "$APPIMAGETOOL_SHA256" ]]
+}
+
+if [[ -f "$APPIMAGETOOL" ]] && ! verify_appimagetool_sha256; then
+  echo "Cached appimagetool failed checksum verification, re-downloading." >&2
+  rm -f "$APPIMAGETOOL"
+fi
+
 if [[ ! -f "$APPIMAGETOOL" ]]; then
-  curl -L -o "$APPIMAGETOOL" \
-    "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+  curl -L -o "$APPIMAGETOOL" "$APPIMAGETOOL_URL"
+  if ! verify_appimagetool_sha256; then
+    echo "ERROR: appimagetool download failed checksum verification." >&2
+    echo "  expected: $APPIMAGETOOL_SHA256" >&2
+    echo "  actual:   $(sha256sum "$APPIMAGETOOL" | awk '{print $1}')" >&2
+    rm -f "$APPIMAGETOOL"
+    exit 1
+  fi
   chmod +x "$APPIMAGETOOL"
 fi
 

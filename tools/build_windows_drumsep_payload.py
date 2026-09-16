@@ -63,14 +63,18 @@ BACKENDS = (
         backend="nvidia",
         output_dir="drumsep-wheels-nvidia",
         base_dir="wheels-nvidia",
-        source_family="pypi+pytorch-cu121",
-        extra_index_url="https://download.pytorch.org/whl/cu121",
+        source_family="pypi+pytorch-cu128",
+        extra_index_url="https://download.pytorch.org/whl/cu128",
         requirements=(
             "audio-separator==0.34.1",
-            "onnxruntime==1.26.0",
-            "torch==2.4.1+cu121",
-            "torchvision==0.19.1+cu121",
-            "torchaudio==2.4.1+cu121",
+            # No plain "onnxruntime" here: it and onnxruntime-gpu both install into
+            # the same importable `onnxruntime` package, and downloading both in one
+            # requirement set lets file-conflict resolution order silently pick
+            # whichever lands last -- with both present, plain onnxruntime's files
+            # win the conflict and CUDAExecutionProvider disappears entirely.
+            "torch==2.7.1+cu128",
+            "torchvision==0.22.1+cu128",
+            "torchaudio==2.7.1+cu128",
             "onnxruntime-gpu==1.24.4",
         ),
     ),

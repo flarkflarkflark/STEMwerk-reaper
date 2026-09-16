@@ -39,6 +39,7 @@ MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
 MPS_DEMUCS_SEGMENT_SIZE = 2
 MPS_SEGMENT_POLICY = "universal_safe_segment_2"
 DRUMSEP_RUNTIME_LIMIT_REASON = "audio_separator_mdxc_runtime_primary_secondary_only"
+DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON = "uvr_equivalent_wrapper_required"
 DIRECT_DKS_MODEL_ALIAS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 DIRECT_DKS_MODEL_FILENAME = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 DIRECT_DKS_MODEL_YAML = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -48,13 +49,20 @@ DIRECT_DKS_MODEL_DEAD_CKPT_URL = (
     "aufr33-jarredou_MDX23C_DrumSep_model_v0.1/"
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 )
+# Pinned to immutable upstream commits rather than "main" -- both verified
+# (2026-09-15) to still serve the exact validated bytes below; a future
+# upstream change to either "main" branch can no longer silently change what
+# gets installed. See DIRECT_DKS_MODEL_EXPECTED_SHA256 for the fail-closed
+# content check applied after every download.
 DIRECT_DKS_MODEL_MIRROR_CKPT_URL = (
-    "https://huggingface.co/Sucial/MSST-WebUI/resolve/main/"
+    "https://huggingface.co/Sucial/MSST-WebUI/resolve/"
+    "90b617b15bd0dc0b784f3d361faca1b51173fe44/"
     "All_Models/multi_stem_models/"
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 )
 DIRECT_DKS_MODEL_YAML_URL = (
-    "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
+    "https://raw.githubusercontent.com/TRvlvr/application_data/"
+    "adea29c9fdbd2fa115a208965d00a6f03cdfde96/"
     "mdx_model_data/mdx_c_configs/"
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 )
@@ -80,6 +88,13 @@ AUDIO_SEPARATOR_REQUIRED_CATALOG_SECTIONS = (
     "mdx23c_download_vip_list",
     "roformer_download_list",
 )
+DIRECT_DKS_MODEL_CKPT_SHA256 = "d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0"
+DIRECT_DKS_MODEL_YAML_SHA256 = "440a13f67461b2cdad2bb1cb86c08ff27a8ec53093c4a24d4d7fc2c19cb9f5f5"
+DIRECT_DKS_MODEL_EXPECTED_SHA256 = {
+    DIRECT_DKS_MODEL_FILENAME: DIRECT_DKS_MODEL_CKPT_SHA256,
+    DIRECT_DKS_MODEL_YAML: DIRECT_DKS_MODEL_YAML_SHA256,
+}
+DRUMSEP_ASSET_INTEGRITY_MISMATCH_REASON = "asset_integrity_mismatch"
 DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
 DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
 DRUMSEP_RUNTIME_CUDA_DIRNAME = ".venv-drumsep-cuda"
@@ -251,7 +266,11 @@ def _should_use_drumsep_mps_direct_demix(
             return False, "pytorch_mps_fallback_env_set"
         if not bool(info.get("mps_experimental")):
             return False, "mps_experimental_policy_inactive"
-    return True, "ok"
+    # The managed helper now reconstructs all six MDXC targets itself on the
+    # wrapper route. Keep the narrowly qualified legacy direct-demix route
+    # available in the helper, but do not let this product workflow bypass the
+    # UVR-equivalent reconstruction.
+    return False, DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON
 
 
 def _resolve_normal_workflow_backend(selected_device: Optional[str]) -> str:
@@ -1142,6 +1161,23 @@ def _is_known_drumsep_runtime_unsupported_error(exc: Exception, traceback_text: 
     )
 
 
+def _classify_direct_dks_preflight_reason(known_err_lower: str) -> str:
+    """Map a _direct_dks_preflight_check detail string to a user-facing
+    error_reason. An asset-integrity (checksum) mismatch is reported
+    distinctly from an ordinary download/network failure -- retrying the
+    same network path won't fix a corrupted/tampered download, so it must
+    not be misreported as a generic connectivity problem."""
+    if DRUMSEP_ASSET_INTEGRITY_MISMATCH_REASON in known_err_lower:
+        return "drumsep_model_integrity_failed"
+    if (
+        "not found in supported model files" in known_err_lower
+        or known_err_lower.startswith("catalog_")
+        or known_err_lower.startswith("unsupported_")
+    ):
+        return "drumsep_model_missing"
+    return "drumsep_model_download_failed"
+
+
 def _emit_direct_dks_preflight_markers(reason: str, requested_model: str, resolved_model: str = "", detail: str = "") -> None:
     print("error_stage=stage2_preflight", file=sys.stderr)
     print(f"error_reason={reason}", file=sys.stderr)
@@ -1520,11 +1556,51 @@ def _direct_dks_yaml_filename(asset_map: Dict[str, str]) -> str:
     return ""
 
 
+def _expected_direct_dks_sha256(filename: str) -> Optional[str]:
+    return DIRECT_DKS_MODEL_EXPECTED_SHA256.get(str(filename))
+
+
+def _direct_dks_asset_hash_ok(target: Path, filename: str) -> Tuple[bool, str]:
+    """Verify target's content against the pinned expected SHA-256 for filename.
+
+    A filename with no entry in DIRECT_DKS_MODEL_EXPECTED_SHA256 is treated as
+    unpinned and passes (the asset_map this is called against always carries
+    exactly the two DrumSep filenames in practice, but this stays permissive
+    for any other entry rather than failing closed on an unrelated file)."""
+    expected = _expected_direct_dks_sha256(filename)
+    if expected is None:
+        return True, "no_expected_hash"
+    if not target.exists():
+        return False, "missing"
+    actual = hashlib.sha256(target.read_bytes()).hexdigest()
+    if actual != expected:
+        return False, f"{DRUMSEP_ASSET_INTEGRITY_MISMATCH_REASON}:{filename}:expected={expected}:actual={actual}"
+    return True, "ok"
+
+
+def _evict_direct_dks_asset_if_hash_mismatched(target: Path, filename: str) -> bool:
+    """Return True if target is present and hash-valid (or unpinned).
+
+    A present-but-mismatched file is deleted here so it can never be silently
+    reused as a valid cache hit -- the caller re-downloads it instead."""
+    if not target.exists():
+        return False
+    ok, detail = _direct_dks_asset_hash_ok(target, filename)
+    if ok:
+        return True
+    print(f"drumsep_cache_integrity_failed target={target} detail={detail}", file=sys.stderr)
+    try:
+        target.unlink()
+    except OSError:
+        pass
+    return False
+
+
 def _direct_dks_assets_ready(model_cache_dir: Path, asset_map: Dict[str, str]) -> Tuple[bool, List[str]]:
     missing_targets: List[str] = []
     for filename in asset_map:
         target = model_cache_dir / str(filename)
-        if not target.exists():
+        if not _evict_direct_dks_asset_if_hash_mismatched(target, str(filename)):
             missing_targets.append(str(target))
     return len(missing_targets) == 0, missing_targets
 
@@ -1661,7 +1737,7 @@ def _format_direct_dks_backend_limit_detail(payload: Dict[str, Any]) -> str:
 def _download_direct_dks_assets(model_cache_dir: Path, asset_map: Dict[str, str]) -> Tuple[bool, str]:
     for filename, url in asset_map.items():
         target = model_cache_dir / filename
-        if target.exists():
+        if _evict_direct_dks_asset_if_hash_mismatched(target, str(filename)):
             print(f"drumsep_cache_target={target}", file=sys.stderr)
             print("drumsep_cache_status=exists", file=sys.stderr)
             continue
@@ -1673,12 +1749,22 @@ def _download_direct_dks_assets(model_cache_dir: Path, asset_map: Dict[str, str]
             target.parent.mkdir(parents=True, exist_ok=True)
             with urllib.request.urlopen(url, timeout=120) as response:
                 data = response.read()
+            digest = hashlib.sha256(data).hexdigest()
+            expected = _expected_direct_dks_sha256(filename)
+            if expected is not None and digest != expected:
+                print(
+                    f"drumsep_cache_error={filename}|{url}|{DRUMSEP_ASSET_INTEGRITY_MISMATCH_REASON}: "
+                    f"expected={expected} actual={digest}",
+                    file=sys.stderr,
+                )
+                return False, (
+                    f"{DRUMSEP_ASSET_INTEGRITY_MISMATCH_REASON}:{filename}:"
+                    f"expected={expected}:actual={digest}:source={url}"
+                )
             tmp = target.with_suffix(target.suffix + ".part")
             tmp.write_bytes(data)
             tmp.replace(target)
-            if target.suffix.lower() == ".ckpt":
-                digest = hashlib.sha256(target.read_bytes()).hexdigest()
-                print(f"drumsep_cache_sha256={digest}", file=sys.stderr)
+            print(f"drumsep_cache_sha256={digest}", file=sys.stderr)
             print(f"drumsep_cache_asset={target}", file=sys.stderr)
         except Exception as exc:
             print(f"drumsep_cache_error={filename}|{url}|{type(exc).__name__}: {exc}", file=sys.stderr)
@@ -1690,7 +1776,7 @@ def _direct_dks_preflight_check(
     model_name: str,
     model_cache_dir: Path,
     runtime_info: Optional[Dict[str, Any]] = None,
-    allow_direct_demix: bool = False,
+    allow_six_stem_helper: bool = False,
     allow_downloads: bool = True,
 ) -> Tuple[bool, str, str, Optional[str]]:
     # Force an explicit model-catalog lookup before normal workflow setup.
@@ -1738,7 +1824,7 @@ def _direct_dks_preflight_check(
         return False, requested_model, resolved_model, yaml_detail
     model_meta = _load_direct_dks_yaml_metadata(asset_map, model_cache_dir)
     skip_backend_limit = (
-        allow_direct_demix
+        allow_six_stem_helper
         and requested_model == DIRECT_DKS_MODEL_ALIAS
         and resolved_model == DIRECT_DKS_MODEL_FILENAME
     )
@@ -3297,27 +3383,17 @@ def _is_unexpected_cpu_downgrade(requested_device: str, preview_device: str) -> 
 
 
 def _map_reaper_stems_from_result(result: Any, output_root: Path) -> Dict[str, str]:
-    stem_mapping = {
-        "vocals": ["vocals", "vocal", "Vocals"],
-        "drums": ["drums", "drum", "Drums"],
-        "bass": ["bass", "Bass"],
-        "other": ["other", "Other", "no_vocals", "instrumental", "Instrumental"],
-        "guitar": ["guitar", "Guitar"],
-        "piano": ["piano", "Piano", "keys", "Keys"],
-    }
-
     reaper_stems: Dict[str, str] = {}
     for stem_name, stem_path in result.stems.items():
         abs_path = _resolve_stem_path(output_root, stem_path)
         if not abs_path.exists():
             raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
 
-        filename = abs_path.stem.lower()
-        target_name = stem_name
-        for map_name, patterns in stem_mapping.items():
-            if any(p.lower() in filename for p in patterns):
-                target_name = map_name
-                break
+        target_name = str(stem_name).strip().casefold()
+        if not target_name:
+            raise ValueError(f"Separated stem has an empty identity: {abs_path}")
+        if target_name in reaper_stems:
+            raise ValueError(f"Duplicate separated stem identity: {target_name}")
 
         new_path = abs_path.parent / f"{target_name}.wav"
         if abs_path != new_path:
@@ -3898,8 +3974,12 @@ def _classify_runtime_failure(
             "details": details,
         }
 
+    is_cuda_architecture_unsupported = (
+        "no kernel image is available for execution on the device" in lower
+    )
     is_cuda_failure = (
-        "cuda error: an illegal memory access was encountered" in lower
+        is_cuda_architecture_unsupported
+        or "cuda error: an illegal memory access was encountered" in lower
         or "illegal memory access was encountered" in lower
         or "cuda out of memory" in lower
     )
@@ -3907,7 +3987,12 @@ def _classify_runtime_failure(
         return None
 
     gpu_details = _extract_gpu_memory_details(env)
-    reason = "cuda_out_of_memory" if "cuda out of memory" in lower else "cuda_illegal_memory_access"
+    if is_cuda_architecture_unsupported:
+        reason = "cuda_architecture_unsupported"
+    elif "cuda out of memory" in lower:
+        reason = "cuda_out_of_memory"
+    else:
+        reason = "cuda_illegal_memory_access"
     details = {
         "requested_device": requested_device or "",
         "selected_device": selected_device or "",
@@ -3992,6 +4077,33 @@ def _classify_model_failure_text(text: str) -> Optional[Dict[str, str]]:
             "model_path": path_match.group(1).strip() if path_match else "",
         }
     return None
+
+
+def _classify_final_failure(
+    exc: BaseException,
+    traceback_text: str,
+    requested_device: str,
+    selected_device: str,
+    model_name: str,
+    env: Optional[Dict[str, object]] = None,
+) -> Tuple[Optional[Dict[str, object]], Optional[Dict[str, str]]]:
+    """Apply the final exception-handler precedence used by ``main``."""
+    failure = _classify_runtime_failure(
+        exc,
+        traceback_text,
+        requested_device,
+        selected_device,
+        model_name,
+        env,
+    )
+    is_cuda_architecture_failure = (
+        bool(failure)
+        and failure.get("error_reason") == "cuda_architecture_unsupported"
+    )
+    model_failure = None
+    if not is_cuda_architecture_failure:
+        model_failure = _classify_model_failure_text(f"{exc}\n{traceback_text}")
+    return failure, model_failure
 
 
 def _parse_major_minor(version_text: Optional[str]) -> Tuple[int, int]:
@@ -4401,7 +4513,9 @@ def main():
             runtime_info,
             requested_stage2_model,
         )
+        use_managed_wrapper = direct_demix_reason == DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON
         direct_demix_device = runtime_kind if use_direct_demix and runtime_kind in {"cpu", "mps"} else ""
+        managed_wrapper_device = runtime_kind if use_managed_wrapper and runtime_kind in {"cpu", "mps"} else ""
         print(f"drumsep_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
         print(f"drumsep_direct_demix_gate_reason={direct_demix_reason}", file=sys.stderr)
         print(f"drumsep_mps_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
@@ -4410,7 +4524,7 @@ def main():
             requested_stage2_model,
             model_cache_dir,
             runtime_info=runtime_info,
-            allow_direct_demix=use_direct_demix,
+            allow_six_stem_helper=(use_direct_demix or use_managed_wrapper),
             allow_downloads=False,
         )
         if not ok:
@@ -4423,11 +4537,7 @@ def main():
                     known_err_text[len("backend_limited:"):],
                 )
             else:
-                reason = (
-                    "drumsep_model_missing"
-                    if "not found in supported model files" in known_err_lower or known_err_lower.startswith("catalog_") or known_err_lower.startswith("unsupported_")
-                    else "drumsep_model_download_failed"
-                )
+                reason = _classify_direct_dks_preflight_reason(known_err_lower)
                 _emit_direct_dks_preflight_markers(reason, requested_model or requested_stage2_model, resolved_model or "", known_err_text)
             emit_phase("python_error")
             if write_done:
@@ -4463,6 +4573,12 @@ def main():
                 emit_phase("separate_start")
                 stage1_result = stage1_sep.separate(args.input, str(stage1_root), stems=["drums"])
                 emit_phase("separate_end")
+            print("stage1_mapping_source=generated_stem_token", file=sys.stderr)
+            for identity, stem_path in sorted(stage1_result.stems.items()):
+                print(
+                    f"stage1_output_identity={identity}|{Path(stem_path).name}",
+                    file=sys.stderr,
+                )
             stage1_stems = _map_reaper_stems_from_result(stage1_result, stage1_root)
             drums_input = Path(stage1_stems.get("drums", stage1_root / "drums.wav")).resolve()
             if not drums_input.exists():
@@ -4486,7 +4602,7 @@ def main():
                     requested_stage2_model,
                     run_model,
                     route="direct-demix" if use_direct_demix else "wrapper",
-                    device=direct_demix_device if use_direct_demix else helper_device,
+                    device=direct_demix_device if use_direct_demix else (managed_wrapper_device or helper_device),
                     requested_device=device_preference,
                     backend_runtime=direct_demix_device if use_direct_demix else stage2_backend,
                 )
@@ -4589,7 +4705,9 @@ def main():
             runtime_info,
             run_model,
         )
+        use_managed_wrapper = direct_demix_reason == DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON
         direct_demix_device = runtime_kind if use_direct_demix and runtime_kind in {"cpu", "mps"} else ""
+        managed_wrapper_device = runtime_kind if use_managed_wrapper and runtime_kind in {"cpu", "mps"} else ""
         print(f"drumsep_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
         print(f"drumsep_direct_demix_gate_reason={direct_demix_reason}", file=sys.stderr)
         print(f"drumsep_mps_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
@@ -4599,7 +4717,7 @@ def main():
                 run_model,
                 model_cache_dir,
                 runtime_info=runtime_info,
-                allow_direct_demix=use_direct_demix,
+                allow_six_stem_helper=(use_direct_demix or use_managed_wrapper),
                 allow_downloads=False,
             )
             if not ok:
@@ -4612,12 +4730,7 @@ def main():
                         known_err_text[len("backend_limited:"):],
                     )
                 else:
-                    reason = (
-                        "drumsep_model_missing"
-                        if "not found in supported model files" in known_err_lower
-                        or known_err_lower.startswith("catalog_")
-                        else "drumsep_model_download_failed"
-                    )
+                    reason = _classify_direct_dks_preflight_reason(known_err_lower)
                     _emit_direct_dks_preflight_markers(reason, requested_model or run_model, resolved_model or "", known_err_text)
                 emit_phase("python_error")
                 if write_done:
@@ -4645,7 +4758,7 @@ def main():
             requested_stage2_model,
             run_model,
             route="direct-demix" if use_direct_demix else "wrapper",
-            device=direct_demix_device if use_direct_demix else helper_device,
+            device=direct_demix_device if use_direct_demix else (managed_wrapper_device or helper_device),
             requested_device=device_preference,
             backend_runtime=direct_demix_device if use_direct_demix else stage2_backend,
         )
@@ -4764,7 +4877,20 @@ def main():
             if write_done:
                 write_done("ERROR")
             return _finish_benchmark_run(benchmark_sampler, 1)
-        model_failure = _classify_model_failure_text(f"{exc}\n{traceback_text}")
+        failure, model_failure = _classify_final_failure(
+            exc,
+            traceback_text,
+            device_preference,
+            resolved_device,
+            run_model,
+            runtime_env,
+        )
+        # A proven CUDA architecture/runtime failure (e.g. "no kernel image is
+        # available for execution on the device") is an explicit, unambiguous
+        # diagnosis from the exception text itself. It must win over the
+        # model-download/VPN-firewall classifier below, which only pattern-matches
+        # loosely on network-error substrings and could otherwise coincidentally
+        # fire on the same traceback and surface a misleading download hint.
         if model_failure:
             print(f"STEMWERK_ERROR_CLASS={model_failure['error_class']}", file=sys.stderr)
             print(f"STEMWERK_ERROR_HINT={model_failure['error_hint']}", file=sys.stderr)
@@ -4773,14 +4899,6 @@ def main():
                 print(f"STEMWERK_MODEL_URL={model_failure['model_url']}", file=sys.stderr)
             if model_failure.get("model_path"):
                 print(f"STEMWERK_MODEL_PATH={model_failure['model_path']}", file=sys.stderr)
-        failure = _classify_runtime_failure(
-            exc,
-            traceback_text,
-            device_preference,
-            resolved_device,
-            run_model,
-            runtime_env,
-        )
         if failure:
             if failure.get("error_reason"):
                 print(f"error_reason={failure['error_reason']}", file=sys.stderr)
