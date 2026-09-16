@@ -38,7 +38,7 @@ class _AbortAfterCapture(RuntimeError):
     pass
 
 
-def _install_fake_audio_separator(captured_kwargs):
+def _install_fake_audio_separator(captured_kwargs, monkeypatch):
     class FakeSeparator:
         def __init__(self, **kwargs):
             captured_kwargs.append(kwargs)
@@ -48,8 +48,11 @@ def _install_fake_audio_separator(captured_kwargs):
     fake_module.Separator = FakeSeparator
     fake_package = types.ModuleType("audio_separator")
     fake_package.separator = fake_module
-    sys.modules["audio_separator"] = fake_package
-    sys.modules["audio_separator.separator"] = fake_module
+    # monkeypatch.setitem (not a bare sys.modules[...] = ...) so this fake is
+    # torn down after the test instead of leaking into later tests in the
+    # same pytest session that import the real audio_separator.separator.
+    monkeypatch.setitem(sys.modules, "audio_separator", fake_package)
+    monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_module)
 
 
 def test_run_explicitly_passes_normalization_threshold_1_0_to_separator(tmp_path, monkeypatch):
@@ -65,7 +68,7 @@ def test_run_explicitly_passes_normalization_threshold_1_0_to_separator(tmp_path
     monkeypatch.setattr(module, "_probe_gpu_device", lambda device: (True, "ok", {}))
 
     captured_kwargs: list[dict] = []
-    _install_fake_audio_separator(captured_kwargs)
+    _install_fake_audio_separator(captured_kwargs, monkeypatch)
 
     args = SimpleNamespace(
         input=str(tmp_path / "in.wav"),

@@ -84,12 +84,24 @@ def _mock_urlopen(module, monkeypatch, payloads: dict[str, bytes]):
     )
 
 
+def _stub_authoritative_catalog(module, monkeypatch):
+    """When neither a runtime cache nor a repo/bundled download_checks.json
+    snapshot exists, _ensure_runtime_download_checks_has_drumsep fetches
+    audio-separator's real upstream catalog (see
+    AUDIO_SEPARATOR_REQUIRED_CATALOG_SECTIONS) instead of fabricating empty
+    sections. Stub that fetch with a minimal-but-complete catalog so these
+    hermetic tests don't hit the network."""
+    complete_catalog = {section: {} for section in module.AUDIO_SEPARATOR_REQUIRED_CATALOG_SECTIONS}
+    monkeypatch.setattr(module, "_fetch_authoritative_audio_separator_catalog", lambda timeout=120: dict(complete_catalog))
+
+
 # --- A/C: exact known hash accepted --------------------------------------
 
 
 def test_checkpoint_and_yaml_matching_hashes_are_accepted(tmp_path, monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: None)
+    _stub_authoritative_catalog(module, monkeypatch)
     ckpt_bytes = b"controlled-fixture-checkpoint-bytes"
     _patch_expected_hashes(module, monkeypatch, ckpt_bytes=ckpt_bytes, yaml_bytes=VALID_YAML)
     _mock_urlopen(
@@ -116,6 +128,7 @@ def test_checkpoint_and_yaml_matching_hashes_are_accepted(tmp_path, monkeypatch)
 def test_checkpoint_mismatched_hash_is_rejected_and_not_persisted(tmp_path, monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: None)
+    _stub_authoritative_catalog(module, monkeypatch)
     served_ckpt_bytes = b"tampered-or-corrupted-checkpoint-bytes"
     # Expected hash deliberately does not match what will be served.
     _patch_expected_hashes(module, monkeypatch, ckpt_bytes=b"a-different-set-of-expected-bytes")
@@ -145,6 +158,7 @@ def test_checkpoint_mismatched_hash_is_rejected_and_not_persisted(tmp_path, monk
 def test_yaml_mismatched_hash_is_rejected_and_not_persisted(tmp_path, monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: None)
+    _stub_authoritative_catalog(module, monkeypatch)
     ckpt_bytes = b"controlled-fixture-checkpoint-bytes"
     served_yaml_bytes = VALID_YAML
     _patch_expected_hashes(module, monkeypatch, ckpt_bytes=ckpt_bytes, yaml_bytes=b"different-expected-yaml-bytes")
@@ -191,6 +205,7 @@ def test_cached_file_with_wrong_hash_is_evicted_not_reused(tmp_path, monkeypatch
 def test_preflight_redownloads_after_evicting_bad_cache(tmp_path, monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: None)
+    _stub_authoritative_catalog(module, monkeypatch)
     model_cache_dir = tmp_path / "models"
     model_cache_dir.mkdir()
     correct_ckpt_bytes = b"correct-freshly-downloaded-checkpoint-bytes"

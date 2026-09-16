@@ -83,13 +83,16 @@ def _make_fake_separator_class(*, default_amplification_threshold, reject_non_po
     return FakeSeparator
 
 
-def _install_fake_audio_separator(fake_separator_class):
+def _install_fake_audio_separator(fake_separator_class, monkeypatch):
     fake_module = types.ModuleType("audio_separator.separator")
     fake_module.Separator = fake_separator_class
     fake_package = types.ModuleType("audio_separator")
     fake_package.separator = fake_module
-    sys.modules["audio_separator"] = fake_package
-    sys.modules["audio_separator.separator"] = fake_module
+    # monkeypatch.setitem (not a bare sys.modules[...] = ...) so this fake is
+    # torn down after the test instead of leaking into later tests in the
+    # same pytest session that import the real audio_separator.separator.
+    monkeypatch.setitem(sys.modules, "audio_separator", fake_package)
+    monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_module)
 
 
 def _run_with_fake_separator(module, fake_separator_class, tmp_path, monkeypatch):
@@ -101,7 +104,7 @@ def _run_with_fake_separator(module, fake_separator_class, tmp_path, monkeypatch
         ),
     )
     monkeypatch.setattr(module, "_probe_gpu_device", lambda device: (True, "ok", {}))
-    _install_fake_audio_separator(fake_separator_class)
+    _install_fake_audio_separator(fake_separator_class, monkeypatch)
 
     args = SimpleNamespace(
         input=str(tmp_path / "in.wav"),
