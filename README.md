@@ -33,8 +33,8 @@ For full release notes, asset checksums, and current download details, use the p
 
 ## What's new in 2.3.1.2
 Windows NVIDIA Blackwell (RTX 50-series) hotfix (issue #118):
-- The Windows CUDA backend now installs `torch==2.7.1+cu128` / `torchvision==0.22.1+cu128` / `torchaudio==2.7.1+cu128` (previously `2.4.1+cu121`), adding the compiled kernels Blackwell (sm_120) GPUs need. Validated on real Blackwell hardware and on this line's regression machine (RTX 3060, sm_86); Windows CPU and DirectML keep their existing, independently-pinned torch stacks.
-- The separate Drum Kit Split (DrumSep) CUDA runtime is migrated the same way, independently of Normal Stems.
+- The Windows CUDA backend now installs `torch==2.7.1+cu128` / `torchvision==0.22.1+cu128` / `torchaudio==2.7.1+cu128` (previously `2.4.1+cu121`), adding the compiled kernels Blackwell (sm_120) GPUs need. Normal Stems CUDA was validated on real Blackwell hardware; Windows CPU and DirectML keep their existing, independently-pinned torch stacks.
+- The separate Drum Kit Split (DrumSep) CUDA runtime is migrated the same way, independently of Normal Stems, and uses the same Blackwell-capable cu128 stack. It was regression-tested on RTX 3060 (sm_86) hardware; final end-to-end DrumSep/DKS validation on real Blackwell hardware remains pending.
 - Setup/Repair now detects an existing `2.3.1.1`-era cu121 install and rebuilds it to the matched cu128 stack automatically; an already-correct cu128 runtime is verified and left alone instead of being reinstalled on every Repair.
 - CUDA readiness verification now launches a real kernel (not just `torch.cuda.is_available()`), so a stale or broken CUDA runtime is caught and repaired before a separation run starts instead of failing partway through.
 - A CUDA architecture/kernel failure is now classified and surfaced as such, instead of falling through as a generic error or being confused with a model-download/network failure.
