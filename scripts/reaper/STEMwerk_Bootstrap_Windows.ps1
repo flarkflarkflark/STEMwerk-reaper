@@ -107,14 +107,30 @@ $drumsepDirectMlSoundFileVersion = "0.14.0"
 $drumsepModelEntryName = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
 $drumsepModelFileName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 $drumsepModelYamlName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+# Both URLs are pinned to immutable upstream commits (not "main"/floating
+# refs); both verified (2026-09-15) to still serve the exact validated
+# bytes in $drumsepModelCkptSha256/$drumsepModelYamlSha256 below, which
+# EnsureDrumsepAssets enforces fail-closed after every download.
 $drumsepModelCkptUrl = "https://huggingface.co/KitsuneX07/Music_Source_Sepetration_Models/resolve/8309883c6b3fecc360fff24c932dcc588f8c23c2/multi_stem_models/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt?download=true"
-$drumsepModelYamlUrl = "https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+$drumsepModelYamlUrl = "https://raw.githubusercontent.com/TRvlvr/application_data/adea29c9fdbd2fa115a208965d00a6f03cdfde96/mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 $drumsepModelCkptMinimumBytes = 104857600
 $drumsepModelYamlMinimumBytes = 128
+$drumsepModelCkptSha256 = "d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0"
+$drumsepModelYamlSha256 = "440a13f67461b2cdad2bb1cb86c08ff27a8ec53093c4a24d4d7fc2c19cb9f5f5"
+# NVIDIA CUDA is deliberately pinned through its own $torchCuda*/$torchCudaSuffix
+# variables, independent of $torchVersion/$torchVisionVersion/$torchAudioVersion
+# below. The newest published torch-directml build (0.2.5.dev240914) hard-pins
+# torch==2.4.1/torchvision==0.19.1, so the shared trio must stay untouched for
+# DirectML/CPU; only the CUDA-specific variables move to the Blackwell-capable
+# (sm_120) cu128 stack. Do not collapse these back into one shared variable set.
 $torchVersion = "2.4.1"
 $torchVisionVersion = "0.19.1"
 $torchAudioVersion = "2.4.1"
-$torchCudaSuffix = "+cu121"
+$torchCudaVersion = "2.7.1"
+$torchVisionCudaVersion = "0.22.1"
+$torchAudioCudaVersion = "2.7.1"
+$torchCudaSuffix = "+cu128"
+$torchCudaTag = $torchCudaSuffix.TrimStart('+')
 $torchDirectMlVersion = "0.2.5.dev240914"
 $onnxRuntimeGpuVersion = "1.24.4"
 $onnxRuntimeDirectMlVersion = "1.24.4"
@@ -124,7 +140,7 @@ $samplerateOk = $false
 $juliusOk = $false
 $torchAudioOk = $false
 $pytorchCpuIndex = "https://download.pytorch.org/whl/cpu"
-$pytorchCudaIndex = "https://download.pytorch.org/whl/cu121"
+$pytorchCudaIndex = "https://download.pytorch.org/whl/cu128"
 $package = "audio-separator==$audioSeparatorVersion"
 $coreExtra = ""
 $profile = "windows-cpu"
@@ -1028,15 +1044,77 @@ function InstallBundledDrumsepPackages([string]$PythonPath, [string[]]$InstallAr
     return (InstallWithPipOfflineSources $PythonPath $InstallArgs $Description @($bundledWheelsDir, $bundledDrumsepWheelsDir))
 }
 
+function TestCudaBackendAlreadyHealthy([string]$PythonPath) {
+    # A stale/incompatible CUDA torch build (e.g. a 2.3.1.1-era cu121 install on
+    # a Blackwell GPU) must never short-circuit the reinstall below, so this
+    # checks the EXACT pinned version/build tag in addition to a real kernel
+    # launch -- torch.cuda.is_available() alone would also pass for a stale
+    # but still-functional cu121 install on non-Blackwell hardware.
+    if ([string]::IsNullOrWhiteSpace($PythonPath) -or -not (Test-Path $PythonPath)) { return $false }
+    $code = @'
+import os
+import sys
+try:
+    import torch
+    import torchvision
+except Exception:
+    sys.exit(1)
+
+def split_version(value):
+    text = str(value or "")
+    core, sep, build = text.partition("+")
+    return core, (build.lower() if sep else "")
+
+torch_core, torch_build = split_version(getattr(torch, "__version__", ""))
+vision_core, vision_build = split_version(getattr(torchvision, "__version__", ""))
+expected_torch = os.environ.get("STEMWERK_CUDA_CHECK_TORCH", "")
+expected_vision = os.environ.get("STEMWERK_CUDA_CHECK_VISION", "")
+expected_tag = os.environ.get("STEMWERK_CUDA_CHECK_TAG", "")
+if torch_core != expected_torch or torch_build != expected_tag:
+    sys.exit(1)
+if vision_core != expected_vision or vision_build != expected_tag:
+    sys.exit(1)
+if not bool(torch.cuda.is_available()) or int(torch.cuda.device_count()) <= 0:
+    sys.exit(1)
+try:
+    tensor = torch.ones((1, 1, 8, 8), dtype=torch.float32, device="cuda:0")
+    weight = torch.ones((1, 1, 3, 3), dtype=torch.float32, device="cuda:0")
+    out = torch.nn.functional.conv2d(tensor, weight)
+    torch.cuda.synchronize()
+    _ = float(out.detach().cpu().sum().item())
+except Exception:
+    sys.exit(1)
+sys.exit(0)
+'@
+    $previousTorch = $env:STEMWERK_CUDA_CHECK_TORCH
+    $previousVision = $env:STEMWERK_CUDA_CHECK_VISION
+    $previousTag = $env:STEMWERK_CUDA_CHECK_TAG
+    try {
+        $env:STEMWERK_CUDA_CHECK_TORCH = $torchCudaVersion
+        $env:STEMWERK_CUDA_CHECK_VISION = $torchVisionCudaVersion
+        $env:STEMWERK_CUDA_CHECK_TAG = $torchCudaTag
+        RunHidden $PythonPath @("-c", $code) "Check existing CUDA runtime" | Out-Null
+    } finally {
+        $env:STEMWERK_CUDA_CHECK_TORCH = $previousTorch
+        $env:STEMWERK_CUDA_CHECK_VISION = $previousVision
+        $env:STEMWERK_CUDA_CHECK_TAG = $previousTag
+    }
+    return ($LASTEXITCODE -eq 0)
+}
+
 function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
     if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
     if ([string]::IsNullOrWhiteSpace($BackendName) -or $BackendName -eq "cpu") { return $true }
 
     if ($BackendName -eq "cuda") {
+        if (TestCudaBackendAlreadyHealthy $PythonPath) {
+            LogProgress "Existing CUDA runtime already matches the required torch build; skipping reinstall"
+            return $true
+        }
         LogProgress "Installing PyTorch CUDA runtime"
-        $torchCudaReq = "torch==$torchVersion$torchCudaSuffix"
-        $torchVisionCudaReq = "torchvision==$torchVisionVersion$torchCudaSuffix"
-        $torchAudioCudaReq = "torchaudio==$torchAudioVersion$torchCudaSuffix"
+        $torchCudaReq = "torch==$torchCudaVersion$torchCudaSuffix"
+        $torchVisionCudaReq = "torchvision==$torchVisionCudaVersion$torchCudaSuffix"
+        $torchAudioCudaReq = "torchaudio==$torchAudioCudaVersion$torchCudaSuffix"
         $installArgs = @(
             "--upgrade","--force-reinstall",
             "--index-url",$pytorchCudaIndex,
@@ -1086,7 +1164,32 @@ function VerifyBackendRuntime([string]$PythonPath, [string]$BackendName) {
     if ([string]::IsNullOrWhiteSpace($BackendName) -or $BackendName -eq "cpu") { return $true }
 
     if ($BackendName -eq "cuda") {
-        $code = 'import sys, torch; avail=bool(torch.cuda.is_available()); count=int(torch.cuda.device_count()) if avail else 0; ver=getattr(torch.version,"cuda",None); print(f"STEMWERK_CUDA_CHECK avail={avail} count={count} version={ver}"); sys.exit(0 if (avail and count > 0 and ver) else 1)'
+        # torch.cuda.is_available()/device_count() only prove the driver is visible; a
+        # cu121-era build on a Blackwell (sm_120) GPU still reports both as healthy and
+        # then fails at real inference with "no kernel image is available for execution
+        # on the device". Launch a real conv2d kernel here so a stale/incompatible CUDA
+        # runtime cannot be declared ready.
+        $code = @'
+import sys
+import torch
+avail = bool(torch.cuda.is_available())
+count = int(torch.cuda.device_count()) if avail else 0
+ver = getattr(torch.version, "cuda", None)
+kernel_ok = False
+kernel_error = ""
+if avail and count > 0:
+    try:
+        tensor = torch.ones((1, 1, 8, 8), dtype=torch.float32, device="cuda:0")
+        weight = torch.ones((1, 1, 3, 3), dtype=torch.float32, device="cuda:0")
+        out = torch.nn.functional.conv2d(tensor, weight)
+        torch.cuda.synchronize()
+        _ = float(out.detach().cpu().sum().item())
+        kernel_ok = True
+    except Exception as exc:
+        kernel_error = f"{type(exc).__name__}:{exc}"
+print(f"STEMWERK_CUDA_CHECK avail={avail} count={count} version={ver} kernel_ok={kernel_ok} kernel_error={kernel_error}")
+sys.exit(0 if (avail and count > 0 and ver and kernel_ok) else 1)
+'@
         RunHidden $PythonPath @("-c", $code) "Verify CUDA runtime" | Out-Null
         return ($LASTEXITCODE -eq 0)
     }
@@ -1139,7 +1242,7 @@ function GetAudioRuntimeDependencyList([string]$BackendName) {
     if ($BackendName -eq "directml") {
         $deps += @("torch==$torchVersion", "torchvision==$torchVisionVersion", "torch-directml==$torchDirectMlVersion", "onnxruntime-directml==$onnxRuntimeDirectMlVersion")
     } elseif ($BackendName -eq "cuda") {
-        $deps += @("torch==$torchVersion$torchCudaSuffix", "torchvision==$torchVisionVersion$torchCudaSuffix", "onnxruntime")
+        $deps += @("torch==$torchCudaVersion$torchCudaSuffix", "torchvision==$torchVisionCudaVersion$torchCudaSuffix", "onnxruntime")
     } else {
         $deps += @("torch==$torchVersion", "torchvision==$torchVisionVersion", "onnxruntime")
     }
@@ -1149,7 +1252,7 @@ function GetAudioRuntimeDependencyList([string]$BackendName) {
 function GetMatchedTorchaudioContract([string]$BackendName) {
     if ($BackendName -eq "cuda") {
         return @{
-            Requirement = "torchaudio==$torchAudioVersion$torchCudaSuffix"
+            Requirement = "torchaudio==$torchAudioCudaVersion$torchCudaSuffix"
             Index = $pytorchCudaIndex
             Backend = "cuda"
         }
@@ -1175,6 +1278,8 @@ from pathlib import Path
 result_path = Path(os.environ["STEMWERK_TORCHAUDIO_RESULT"])
 backend = os.environ.get("STEMWERK_TORCHAUDIO_BACKEND", "cpu")
 expected = os.environ.get("STEMWERK_TORCHAUDIO_VERSION", "2.4.1")
+expected_torchvision = os.environ.get("STEMWERK_TORCHVISION_VERSION", "")
+expected_cuda_tag = os.environ.get("STEMWERK_TORCHAUDIO_CUDA_TAG", "").lower()
 errors = []
 try:
     import torch
@@ -1186,6 +1291,11 @@ try:
 except Exception:
     errors.append("torchaudio_missing")
     torchaudio = None
+try:
+    import torchvision
+except Exception:
+    errors.append("torchvision_missing")
+    torchvision = None
 
 def split_version(value):
     text = str(value or "")
@@ -1200,12 +1310,21 @@ if torch is not None and torchaudio is not None:
     elif audio_core != expected or torch_core != audio_core:
         errors.append("torchaudio_version_mismatch")
     if backend == "cuda":
-        if torch_build != "cu121" or audio_build != "cu121":
+        if not expected_cuda_tag:
+            errors.append("cuda_contract_missing")
+        if torch_build != expected_cuda_tag or audio_build != expected_cuda_tag:
             errors.append("torchaudio_backend_mismatch")
     else:
         allowed_torch_builds = ("", "cpu") if backend == "directml" else ("cpu",)
         if torch_build not in allowed_torch_builds or audio_build != "cpu":
             errors.append("torchaudio_backend_mismatch")
+
+if torchvision is not None:
+    vision_core, vision_build = split_version(getattr(torchvision, "__version__", ""))
+    if not expected_torchvision or vision_core != expected_torchvision:
+        errors.append("torchvision_version_mismatch")
+    if backend == "cuda" and vision_build != expected_cuda_tag:
+        errors.append("torchvision_backend_mismatch")
 
 if errors:
     result_path.write_text("repair_required|" + errors[0], encoding="utf-8")
@@ -1215,15 +1334,21 @@ else:
     $previousResult = $env:STEMWERK_TORCHAUDIO_RESULT
     $previousBackend = $env:STEMWERK_TORCHAUDIO_BACKEND
     $previousVersion = $env:STEMWERK_TORCHAUDIO_VERSION
+    $previousTorchVisionVersion = $env:STEMWERK_TORCHVISION_VERSION
+    $previousCudaTag = $env:STEMWERK_TORCHAUDIO_CUDA_TAG
     try {
         $env:STEMWERK_TORCHAUDIO_RESULT = $probeResultPath
         $env:STEMWERK_TORCHAUDIO_BACKEND = [string]$contract.Backend
-        $env:STEMWERK_TORCHAUDIO_VERSION = $torchAudioVersion
+        $env:STEMWERK_TORCHAUDIO_VERSION = if ($BackendName -eq "cuda") { $torchAudioCudaVersion } else { $torchAudioVersion }
+        $env:STEMWERK_TORCHVISION_VERSION = if ($BackendName -eq "cuda") { $torchVisionCudaVersion } else { $torchVisionVersion }
+        $env:STEMWERK_TORCHAUDIO_CUDA_TAG = $torchCudaTag
         RunHidden $PythonPath @("-c", $probeCode) "Verify matched Torch/torchaudio runtime" | Out-Null
     } finally {
         $env:STEMWERK_TORCHAUDIO_RESULT = $previousResult
         $env:STEMWERK_TORCHAUDIO_BACKEND = $previousBackend
         $env:STEMWERK_TORCHAUDIO_VERSION = $previousVersion
+        $env:STEMWERK_TORCHVISION_VERSION = $previousTorchVisionVersion
+        $env:STEMWERK_TORCHAUDIO_CUDA_TAG = $previousCudaTag
     }
     $probeText = ""
     if (Test-Path $probeResultPath) {
@@ -1499,6 +1624,18 @@ try:
     if backend == "cuda":
         if not bool(torch.cuda.is_available()) or int(torch.cuda.device_count()) <= 0:
             errors.append("cuda_runtime_probe_failed")
+        else:
+            # is_available()/device_count() only prove the driver is visible; launch a
+            # real kernel so a cu121-era build on a Blackwell (sm_120) GPU is not
+            # declared ready when it is unable to actually execute a separation.
+            try:
+                tensor = torch.ones((1, 1, 8, 8), dtype=torch.float32, device="cuda:0")
+                weight = torch.ones((1, 1, 3, 3), dtype=torch.float32, device="cuda:0")
+                out = torch.nn.functional.conv2d(tensor, weight)
+                torch.cuda.synchronize()
+                _ = float(out.detach().cpu().sum().item())
+            except Exception as exc:
+                errors.append("cuda_kernel_unavailable:" + str(exc))
 except Exception as exc:
     errors.append("torch_import_failed:" + str(exc))
 try:
@@ -2017,9 +2154,9 @@ function WriteDrumsepCudaState([string]$State, [string]$ModelStatus, [string]$Re
     $ortCudaProviderValue = [string]($probe["ORT_CUDA_PROVIDER"])
     if ($State -eq "ok") {
         if ([string]::IsNullOrWhiteSpace($audioSeparatorVersionValue)) { $audioSeparatorVersionValue = $drumsepAudioSeparatorVersion }
-        if ([string]::IsNullOrWhiteSpace($torchVersionValue)) { $torchVersionValue = "$torchVersion$torchCudaSuffix" }
-        if ([string]::IsNullOrWhiteSpace($torchVisionVersionValue)) { $torchVisionVersionValue = "$torchVisionVersion$torchCudaSuffix" }
-        if ([string]::IsNullOrWhiteSpace($torchAudioVersionValue)) { $torchAudioVersionValue = "$torchAudioVersion$torchCudaSuffix" }
+        if ([string]::IsNullOrWhiteSpace($torchVersionValue)) { $torchVersionValue = "$torchCudaVersion$torchCudaSuffix" }
+        if ([string]::IsNullOrWhiteSpace($torchVisionVersionValue)) { $torchVisionVersionValue = "$torchVisionCudaVersion$torchCudaSuffix" }
+        if ([string]::IsNullOrWhiteSpace($torchAudioVersionValue)) { $torchAudioVersionValue = "$torchAudioCudaVersion$torchCudaSuffix" }
         if ([string]::IsNullOrWhiteSpace($onnxRuntimeGpuVersionValue)) { $onnxRuntimeGpuVersionValue = $onnxRuntimeGpuVersion }
         if ([string]::IsNullOrWhiteSpace($cudaDeviceIdValue)) { $cudaDeviceIdValue = "cuda:0" }
         if ([string]::IsNullOrWhiteSpace($ffmpegStatusValue)) { $ffmpegStatusValue = "ok" }
@@ -2271,7 +2408,25 @@ function DownloadFileWithRetry([string]$Url, [string]$TargetPath, [string]$Label
     return $false
 }
 
+function Test-Sha256Match([string]$Path, [string]$ExpectedSha256) {
+    if ([string]::IsNullOrWhiteSpace($ExpectedSha256)) { return $true }
+    if (-not (Test-Path $Path)) { return $false }
+    try {
+        $actual = (Get-FileHash -Path $Path -Algorithm SHA256).Hash
+    } catch {
+        LogLine ("SHA-256 computation failed for " + $Path + ": " + $_.Exception.Message)
+        return $false
+    }
+    return ($actual.ToLowerInvariant() -eq $ExpectedSha256.ToLowerInvariant())
+}
+
+function DrumsepAssetFailureStatusDetail() {
+    if ($script:DrumsepAssetFailureReason -eq "model_integrity_failed") { return "model_integrity_failed" }
+    return "model_download_failed"
+}
+
 function EnsureDrumsepAssets([string]$ModelDir) {
+    $script:DrumsepAssetFailureReason = ""
     if ([string]::IsNullOrWhiteSpace($ModelDir)) { return $false }
     if ($offlineBundledAllmodelsMode) {
         LogProgress "Installing bundled Drum Kit model assets..."
@@ -2285,21 +2440,29 @@ function EnsureDrumsepAssets([string]$ModelDir) {
     }
 
     $assets = @(
-        @{ Path = (Join-Path $ModelDir $drumsepModelFileName); Url = $drumsepModelCkptUrl; Label = "DrumSep model checkpoint"; MinimumBytes = $drumsepModelCkptMinimumBytes },
-        @{ Path = (Join-Path $ModelDir $drumsepModelYamlName); Url = $drumsepModelYamlUrl; Label = "DrumSep model YAML"; MinimumBytes = $drumsepModelYamlMinimumBytes }
+        @{ Path = (Join-Path $ModelDir $drumsepModelFileName); Url = $drumsepModelCkptUrl; Label = "DrumSep model checkpoint"; MinimumBytes = $drumsepModelCkptMinimumBytes; Sha256 = $drumsepModelCkptSha256 },
+        @{ Path = (Join-Path $ModelDir $drumsepModelYamlName); Url = $drumsepModelYamlUrl; Label = "DrumSep model YAML"; MinimumBytes = $drumsepModelYamlMinimumBytes; Sha256 = $drumsepModelYamlSha256 }
     )
     foreach ($asset in $assets) {
         if (Test-Path $asset.Path) {
             $existingSize = (Get-Item $asset.Path).Length
-            if ($existingSize -ge $asset.MinimumBytes) {
+            if ($existingSize -ge $asset.MinimumBytes -and (Test-Sha256Match $asset.Path $asset.Sha256)) {
                 LogProgress ($asset.Label + " already present: " + $asset.Path)
                 continue
             }
-            LogProgress ($asset.Label + " is incomplete and will be re-downloaded: " + $asset.Path)
+            LogProgress ($asset.Label + " is incomplete/corrupt and will be re-downloaded: " + $asset.Path)
             Remove-Item -Path $asset.Path -Force -ErrorAction SilentlyContinue
         }
         if (-not (DownloadFileWithRetry $asset.Url $asset.Path $asset.Label $asset.MinimumBytes)) {
             LogLine ("DrumSep asset download failed: " + $asset.Url)
+            return $false
+        }
+        if (-not (Test-Sha256Match $asset.Path $asset.Sha256)) {
+            $actualHash = ""
+            try { $actualHash = (Get-FileHash -Path $asset.Path -Algorithm SHA256).Hash } catch {}
+            LogLine ("DrumSep asset failed checksum verification: " + $asset.Path + " expected=" + $asset.Sha256 + " actual=" + $actualHash + " url=" + $asset.Url)
+            Remove-Item -Path $asset.Path -Force -ErrorAction SilentlyContinue
+            $script:DrumsepAssetFailureReason = "model_integrity_failed"
             return $false
         }
     }
@@ -2508,11 +2671,14 @@ import onnxruntime as ort
 import torch
 from audio_separator.separator import Separator
 
+def exact_cuda_package_version(found, wanted):
+    return str(found or "").strip().lower() == str(wanted or "").strip().lower()
+
 expected = {
     "audio-separator": "$drumsepAudioSeparatorVersion",
-    "torch": "$torchVersion",
-    "torchvision": "$torchVisionVersion",
-    "torchaudio": "$torchAudioVersion",
+    "torch": "$torchCudaVersion$torchCudaSuffix",
+    "torchvision": "$torchVisionCudaVersion$torchCudaSuffix",
+    "torchaudio": "$torchAudioCudaVersion$torchCudaSuffix",
     "onnxruntime-gpu": "$onnxRuntimeGpuVersion",
 }
 modules = ["audio_separator", "torch", "torchvision", "torchaudio", "onnxruntime"]
@@ -2528,7 +2694,7 @@ for dist_name, wanted in expected.items():
     except Exception as exc:
         errors.append(f"version_missing:{dist_name}:{type(exc).__name__}:{exc}")
         continue
-    if found != wanted and found.split("+", 1)[0] != wanted:
+    if not exact_cuda_package_version(found, wanted):
         errors.append(f"version_mismatch:{dist_name}:expected={wanted}:found={found}")
 providers = [str(item) for item in (ort.get_available_providers() or [])]
 if not bool(torch.cuda.is_available()):
@@ -2632,7 +2798,7 @@ function InstallDrumsepRuntime([string]$BasePythonPath) {
 
     WriteDrumsepState "running" "missing" "model_download"
     if (-not (EnsureDrumsepAssets $modelDir)) {
-        WriteDrumsepState "install_failed" "missing" "model_download_failed"
+        WriteDrumsepState "install_failed" "missing" (DrumsepAssetFailureStatusDetail)
         return $false
     }
 
@@ -2725,7 +2891,7 @@ function InstallDrumsepDirectmlRuntime([string]$BasePythonPath) {
 
     WriteDrumsepDirectmlState "running" "missing" "model_download"
     if (-not (EnsureDrumsepAssets $modelDir)) {
-        WriteDrumsepDirectmlState "install_failed" "missing" "model_download_failed"
+        WriteDrumsepDirectmlState "install_failed" "missing" (DrumsepAssetFailureStatusDetail)
         return $false
     }
 
@@ -2808,9 +2974,9 @@ function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
         "--upgrade",
         "--prefer-binary",
         "audio-separator==$drumsepAudioSeparatorVersion",
-        "torch==$torchVersion$torchCudaSuffix",
-        "torchvision==$torchVisionVersion$torchCudaSuffix",
-        "torchaudio==$torchAudioVersion$torchCudaSuffix",
+        "torch==$torchCudaVersion$torchCudaSuffix",
+        "torchvision==$torchVisionCudaVersion$torchCudaSuffix",
+        "torchaudio==$torchAudioCudaVersion$torchCudaSuffix",
         "onnxruntime-gpu==$onnxRuntimeGpuVersion",
         "librosa==$drumsepLibrosaVersion"
     )
@@ -2824,9 +2990,9 @@ function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
             "--prefer-binary",
             "--extra-index-url", $pytorchCudaIndex,
             "audio-separator==$drumsepAudioSeparatorVersion",
-            "torch==$torchVersion$torchCudaSuffix",
-            "torchvision==$torchVisionVersion$torchCudaSuffix",
-            "torchaudio==$torchAudioVersion$torchCudaSuffix",
+            "torch==$torchCudaVersion$torchCudaSuffix",
+            "torchvision==$torchVisionCudaVersion$torchCudaSuffix",
+            "torchaudio==$torchAudioCudaVersion$torchCudaSuffix",
             "onnxruntime-gpu==$onnxRuntimeGpuVersion",
             "librosa==$drumsepLibrosaVersion"
         )
@@ -2839,7 +3005,7 @@ function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
 
     WriteDrumsepCudaState "running" "missing" "model_download"
     if (-not (EnsureDrumsepAssets $modelDir)) {
-        WriteDrumsepCudaState "error" "missing" "model_download_failed"
+        WriteDrumsepCudaState "error" "missing" (DrumsepAssetFailureStatusDetail)
         return $false
     }
 
@@ -3159,7 +3325,14 @@ if (Test-Path $venvPy) {
         }
     }
 
-    if ($status -eq "ok" -and $backend -ne "cpu" -and $backend -ne "cuda") {
+    # CUDA and DirectML both need their backend-specific torch stack proven
+    # healthy (and repaired/reinstalled if stale or broken) BEFORE audio-separator's
+    # own dependency install and torchaudio-matching step ever touches torch --
+    # otherwise a broken CUDA install (e.g. package metadata present but the
+    # native extension missing/corrupted) gets treated as "torch import failed,
+    # cannot repair" by the audio-separator path and silently falls back to CPU
+    # without ever reaching the real CUDA reinstall/repair logic below.
+    if ($status -eq "ok" -and $backend -ne "cpu") {
         $requestedBackend = $backend
         if (-not (InstallBackendRuntime $python $requestedBackend)) {
             LogLine ("Backend runtime install failed for " + $requestedBackend + "; falling back to CPU")
@@ -3190,21 +3363,6 @@ if (Test-Path $venvPy) {
         }
         if (-not $audioSeparatorOk) {
             Set-Status "deps_failed" $audioInstallResult
-        }
-    }
-
-    if ($status -eq "ok" -and $backend -eq "cuda") {
-        $requestedBackend = $backend
-        if (-not (InstallBackendRuntime $python $requestedBackend)) {
-            LogLine ("Backend runtime install failed for " + $requestedBackend + "; falling back to CPU")
-            $profile = "windows-cpu"
-            $backend = "cpu"
-            $backendReason = "backend_runtime_install_failed"
-        } elseif (-not (VerifyBackendRuntime $python $requestedBackend)) {
-            LogLine ("Backend runtime verify failed for " + $requestedBackend + "; falling back to CPU")
-            $profile = "windows-cpu"
-            $backend = "cpu"
-            $backendReason = "backend_runtime_verify_failed"
         }
     }
 

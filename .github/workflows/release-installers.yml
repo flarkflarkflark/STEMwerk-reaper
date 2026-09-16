@@ -1,22 +1,43 @@
 name: Build installers
 
+# Two distinct, non-overlapping modes, selected by upload_release_assets:
+#
+# BUILD mode (upload_release_assets=false, the default): builds an
+# unpublished RC from an exact, explicitly pinned commit. The release tag
+# does not need to exist yet -- tagging happens only after the RC artifacts
+# are validated, outside this workflow.
+#
+# PUBLICATION mode (upload_release_assets=true): never builds. It republishes
+# the exact artifact bytes from a prior successful BUILD run (build_run_id),
+# after proving the release tag exists and resolves to the same source_commit
+# that run was built from, and that source_commit matches VERSION/tag. This
+# is what makes publication byte-identical to what was actually validated,
+# rather than a fresh (and not guaranteed byte-reproducible) rebuild.
 on:
   workflow_dispatch:
     inputs:
+      source_commit:
+        description: "Full 40-hex commit SHA to build (BUILD mode), or to verify the release tag against (PUBLICATION mode). Never a branch/tag name."
+        required: true
       tag:
-        description: "Release tag to upload assets to (e.g. v2.1.0)."
+        description: "Release tag (e.g. v2.3.1.2). Must match VERSION; for publication it must already exist and resolve to source_commit."
         required: false
         default: ""
       upload_release_assets:
-        description: "Upload built installers to the GitHub release."
+        description: "Publish the already-built installers from build_run_id to the GitHub release. Never rebuilds. Defaults to off."
         required: false
-        default: "true"
+        default: "false"
+      build_run_id:
+        description: "Run ID of the prior successful BUILD-mode run (same source_commit) whose artifacts to publish. Required when upload_release_assets is true."
+        required: false
+        default: ""
       windows_bundled_asset:
         description: "Also build a bundled Windows installer with Python + FFmpeg included."
         required: false
         default: "false"
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-installers-${{ github.workflow }}-${{ github.ref }}
@@ -26,43 +47,67 @@ env:
   STEMWERK_VERSION_FILE: VERSION
 
 jobs:
-  validate-version:
+  resolve-mode:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.v.outputs.version }}
-      release_tag: ${{ steps.v.outputs.release_tag }}
+      mode: ${{ steps.m.outputs.mode }}
+      version: ${{ steps.m.outputs.version }}
+      release_tag: ${{ steps.m.outputs.release_tag }}
+      source_commit: ${{ steps.m.outputs.source_commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.inputs.source_commit }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Require a clean checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "ERROR: checkout is not clean."
+            git status --porcelain
+            exit 1
+          fi
 
       - name: Validate version sync
         run: python3 tools/version_sync.py --check
 
-      - id: v
-        name: Validate tag matches VERSION
+      - name: Verify ReaPack payload sources are immutable
+        run: python3 tools/release_gate.py --check
+
+      - id: m
+        name: Resolve BUILD vs PUBLICATION mode and validate the exact source commit
         shell: bash
         run: |
           set -euo pipefail
+
+          SOURCE_COMMIT="${{ github.event.inputs.source_commit }}"
+          if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "ERROR: source_commit must be a full 40-hex commit SHA, not a branch or tag name."
+            echo "Got: $SOURCE_COMMIT"
+            exit 1
+          fi
+          SOURCE_COMMIT="$(tr '[:upper:]' '[:lower:]' <<< "$SOURCE_COMMIT")"
+
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [[ "$ACTUAL_SHA" != "$SOURCE_COMMIT" ]]; then
+            echo "ERROR: checked-out commit $ACTUAL_SHA does not match requested source_commit $SOURCE_COMMIT."
+            exit 1
+          fi
+          echo "source_commit=$SOURCE_COMMIT" >> "$GITHUB_OUTPUT"
+
           VERSION="$(tr -d '\r\n' < "${STEMWERK_VERSION_FILE}")"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          # Determine release tag:
-          # - Tag push: use the pushed tag
-          # - workflow_dispatch: use the provided input
           RELEASE_TAG="${{ github.event.inputs.tag }}"
-          if [[ -z "$RELEASE_TAG" && "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
-            RELEASE_TAG="${GITHUB_REF_NAME}"
-          fi
-
-          # Nice UX: when manually running workflow_dispatch, default to v<VERSION>
           if [[ -z "$RELEASE_TAG" ]]; then
             RELEASE_TAG="v$VERSION"
           fi
-
-          # Accept '2.1.1' and normalize to 'v2.1.1'
           if [[ "$RELEASE_TAG" != v* ]]; then
             RELEASE_TAG="v$RELEASE_TAG"
           fi
-
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
           TAG_VER="${RELEASE_TAG#v}"
@@ -71,13 +116,60 @@ jobs:
             exit 1
           fi
 
+          if [[ "${{ github.event.inputs.upload_release_assets }}" == "true" ]]; then
+            echo "mode=publish" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=build" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --- PUBLICATION-only gates. BUILD mode never requires the tag to exist. ---
+
+      - name: "Publication gate: release tag must exist and resolve to source_commit"
+        if: ${{ github.event.inputs.upload_release_assets == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.m.outputs.release_tag }}
+          SOURCE_COMMIT: ${{ steps.m.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null 2>&1; then
+            echo "ERROR: release tag ${RELEASE_TAG} does not exist."
+            echo "Publication requires an existing tag created after the RC build was validated;"
+            echo "it must never run against an unpinned/ambiguous or not-yet-tagged commit."
+            exit 1
+          fi
+
+          TAG_SHA="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [[ "$TAG_SHA" != "$SOURCE_COMMIT" ]]; then
+            echo "ERROR: release tag ${RELEASE_TAG} resolves to $TAG_SHA, not the requested source_commit $SOURCE_COMMIT."
+            echo "Publication must never publish artifacts for a different revision than the tag points at."
+            exit 1
+          fi
+
+          echo "Verified: tag ${RELEASE_TAG} resolves to source_commit ${SOURCE_COMMIT}, and HEAD matches both."
+
+      - name: "Publication gate: require the prior validated build run"
+        if: ${{ github.event.inputs.upload_release_assets == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ github.event.inputs.build_run_id }}" ]]; then
+            echo "ERROR: upload_release_assets=true requires build_run_id: the run ID of the prior"
+            echo "successful BUILD-mode run for this exact source_commit. Publication republishes that"
+            echo "run's already-validated artifact bytes -- it never rebuilds."
+            exit 1
+          fi
+
   windows-exe:
-    needs: validate-version
+    needs: resolve-mode
+    if: ${{ needs.resolve-mode.outputs.mode == 'build' }}
     runs-on: windows-latest
     env:
-      STEMWERK_VERSION: ${{ needs.validate-version.outputs.version }}
+      STEMWERK_VERSION: ${{ needs.resolve-mode.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve-mode.outputs.source_commit }}
 
       - name: Install Inno Setup
         shell: powershell
@@ -130,37 +222,32 @@ jobs:
           $env:STEMWERK_OUTPUT_SUFFIX = "-bundled"
           & $iscc "installer\windows\STEMwerk.iss"
 
+      # Windows update patch remains retired for 2.3.0.4 because 2.3 requires
+      # full runtime migration (main venv + DrumSep venv + model assets + ready_to_go.env).
+      # Publish only the supported full Windows installer assets.
       - name: Upload build artifacts (Windows)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installers-windows
           path: |
             installer/windows/dist/STEMwerk-Setup-*.exe
           if-no-files-found: error
 
-      - name: Upload release asset (Windows .exe)
-        if: ${{ github.event_name == 'push' || github.event.inputs.upload_release_assets == 'true' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.validate-version.outputs.release_tag }}
-          # Windows update patch remains retired for 2.3.0.4 because 2.3 requires
-          # full runtime migration (main venv + DrumSep venv + model assets + ready_to_go.env).
-          # Publish only the supported full Windows installer assets.
-          files: |
-            installer/windows/dist/STEMwerk-Setup-*.exe
-
   macos-pkg:
-    needs: validate-version
+    needs: resolve-mode
+    if: ${{ needs.resolve-mode.outputs.mode == 'build' }}
     # Pin the Apple Silicon runner OS. Exact Xcode/SDK/clang versions are recorded
     # in SOURCE_PROVENANCE.json instead of claiming byte-identical reproducibility.
     runs-on: macos-14
     env:
-      STEMWERK_VERSION: ${{ needs.validate-version.outputs.version }}
+      STEMWERK_VERSION: ${{ needs.resolve-mode.outputs.version }}
       MACOSX_DEPLOYMENT_TARGET: "12.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve-mode.outputs.source_commit }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
           architecture: arm64
@@ -225,80 +312,156 @@ jobs:
               > "SHA256SUMS-$STEMWERK_VERSION-macos.txt"
           )
 
+      # installers-<platform> is a strict contract: only public release
+      # installer bytes, flat at the artifact root -- exactly what the
+      # checksums and publish jobs expect. The macOS build also produces
+      # non-public build evidence (audit JSON, FFmpeg source, a per-platform
+      # checksum file); those are staged into a separate artifact below so
+      # they can never be mistaken for a release installer.
+      - name: Stage public macOS installer artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/installers-macos"
+          mkdir -p "$STAGE"
+          cp "installer/macos/dist/STEMwerk-$STEMWERK_VERSION.pkg" "$STAGE/"
+          cp "installer/macos/dist/STEMwerk-$STEMWERK_VERSION-bundled-apple-silicon.pkg" "$STAGE/"
+
       - name: Upload build artifacts (macOS)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installers-macos
+          path: ${{ runner.temp }}/installers-macos
+          if-no-files-found: error
+
+      # Not a release artifact -- deliberately named outside the
+      # installers-* pattern so checksums/publish never download it.
+      - name: Upload macOS build evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-build-evidence
           path: |
-            installer/macos/dist/*.pkg
             installer/macos/dist/*.txt
             installer/macos/dist/source/*
             installer/macos/build/*/final-package-audit.json
           if-no-files-found: error
 
-      - name: Upload release asset (macOS .pkg)
-        if: ${{ github.event_name == 'push' || github.event.inputs.upload_release_assets == 'true' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.validate-version.outputs.release_tag }}
-          files: |
-            installer/macos/dist/*.pkg
-            installer/macos/dist/*.txt
-            installer/macos/dist/source/*
-
   linux-packages:
-    needs: validate-version
+    needs: resolve-mode
+    if: ${{ needs.resolve-mode.outputs.mode == 'build' }}
     runs-on: ubuntu-latest
     env:
-      STEMWERK_VERSION: ${{ needs.validate-version.outputs.version }}
+      STEMWERK_VERSION: ${{ needs.resolve-mode.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve-mode.outputs.source_commit }}
 
       - name: Install build deps
         shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            rsync dpkg-dev rpm curl
+            rsync curl
 
-      - name: Build .deb
-        shell: bash
-        run: |
-          bash installer/linux/build_deb.sh
-
-      - name: Build .rpm
-        shell: bash
-        run: |
-          bash installer/linux/build_rpm.sh
-
+      # .deb/.rpm/Arch packaging is build-tooling only (installer/linux/build_deb.sh,
+      # build_rpm.sh, build_archpkg.sh); it is not part of the published 2.3.1.2
+      # artifact matrix, so this workflow builds only the AppImage.
       - name: Build AppImage
         shell: bash
         run: |
           bash installer/linux/build_appimage.sh
 
-      - name: Build Arch package
-        shell: bash
-        run: |
-          bash installer/linux/build_archpkg.sh
-
       - name: Upload build artifacts (Linux)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installers-linux
           path: |
-            installer/linux/dist/*.deb
-            installer/linux/dist/*.rpm
             installer/linux/dist/*.AppImage
-            installer/linux/dist/*.pkg.tar.zst
           if-no-files-found: error
 
-      - name: Upload release assets (Linux)
-        if: ${{ github.event_name == 'push' || github.event.inputs.upload_release_assets == 'true' }}
-        uses: softprops/action-gh-release@v2
+  checksums:
+    needs: [resolve-mode, windows-exe, macos-pkg, linux-packages]
+    if: ${{ needs.resolve-mode.outputs.mode == 'build' }}
+    runs-on: ubuntu-latest
+    env:
+      STEMWERK_VERSION: ${{ needs.resolve-mode.outputs.version }}
+    steps:
+      - name: Download built installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          tag_name: ${{ needs.validate-version.outputs.release_tag }}
+          path: artifacts
+          pattern: installers-*
+          merge-multiple: true
+
+      # If signing/notarization is ever applied to these artifacts, that must
+      # happen (externally) before this step runs, so the manifest below
+      # checksums the exact bytes that get published -- never a pre-signing
+      # intermediate.
+      - name: Generate combined checksum manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          FILES=(
+            "STEMwerk-Setup-$STEMWERK_VERSION.exe"
+            "STEMwerk-Setup-$STEMWERK_VERSION-bundled.exe"
+            "STEMwerk-$STEMWERK_VERSION.pkg"
+            "STEMwerk-$STEMWERK_VERSION-bundled-apple-silicon.pkg"
+            "STEMwerk-$STEMWERK_VERSION-x86_64.AppImage"
+          )
+          for f in "${FILES[@]}"; do
+            test -f "$f" || { echo "ERROR: expected release artifact missing: $f"; exit 1; }
+          done
+
+          # Fail closed on anything beyond the five intended installers: each
+          # installers-<platform> artifact is a strict flat-public-bytes-only
+          # contract, so an extra file here means that contract was violated
+          # upstream, not a file safe to silently include in the manifest.
+          mapfile -t ACTUAL_FILES < <(find . -maxdepth 1 -type f -printf '%f\n' | sort)
+          mapfile -t EXPECTED_FILES < <(printf '%s\n' "${FILES[@]}" | sort)
+          if [[ "$(printf '%s\n' "${ACTUAL_FILES[@]}")" != "$(printf '%s\n' "${EXPECTED_FILES[@]}")" ]]; then
+            echo "ERROR: unexpected file(s) in merged installer artifacts directory:"
+            comm -23 <(printf '%s\n' "${ACTUAL_FILES[@]}") <(printf '%s\n' "${EXPECTED_FILES[@]}")
+            exit 1
+          fi
+
+          sha256sum "${FILES[@]}" > "SHA256SUMS-$STEMWERK_VERSION.txt"
+          cat "SHA256SUMS-$STEMWERK_VERSION.txt"
+
+      - name: Upload checksum manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installers-checksums
+          path: artifacts/SHA256SUMS-*.txt
+          if-no-files-found: error
+
+  publish:
+    needs: resolve-mode
+    if: ${{ needs.resolve-mode.outputs.mode == 'publish' }}
+    runs-on: ubuntu-latest
+    steps:
+      # Never rebuilds: downloads the exact artifact bytes uploaded by the
+      # prior BUILD-mode run identified by build_run_id (already proven, by
+      # the resolve-mode gates above, to be the run for this same
+      # source_commit/tag). If that run's artifacts are gone (expired,
+      # deleted), this step fails closed instead of silently falling back to
+      # a fresh build.
+      - name: Download validated build artifacts and checksum manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.inputs.build_run_id }}
+          path: artifacts
+          pattern: installers-*
+          merge-multiple: true
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: ${{ needs.resolve-mode.outputs.release_tag }}
           files: |
-            installer/linux/dist/*.deb
-            installer/linux/dist/*.rpm
-            installer/linux/dist/*.AppImage
-            installer/linux/dist/*.pkg.tar.zst
+            artifacts/STEMwerk-Setup-*.exe
+            artifacts/*.pkg
+            artifacts/*.AppImage
+            artifacts/SHA256SUMS-*.txt

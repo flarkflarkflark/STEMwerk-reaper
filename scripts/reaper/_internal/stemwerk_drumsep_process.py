@@ -34,6 +34,10 @@ REAPER_FILENAMES = {
 DIRECT_DEMIX_KEYS = ("Kick", "Snare", "Toms", "Hh", "Ride", "Crash")
 LOW_VRAM_THRESHOLD_BYTES = 6 * 1024 * 1024 * 1024
 CUDA_FAILURE_GUIDANCE = "CUDA Drum Kit Split failed on this GPU. Try CPU/low-VRAM mode or rebuild/repair runtime."
+CUDA_ARCHITECTURE_UNSUPPORTED_GUIDANCE = (
+    "This GPU's compute architecture is not supported by the installed CUDA runtime. "
+    "Run STEMwerk Repair to install a matched runtime, or use CPU/DirectML mode."
+)
 
 
 class DirectDemixValidationError(RuntimeError):
@@ -145,7 +149,27 @@ def _probe_gpu_device(device: str) -> tuple[bool, str, dict[str, str]]:
             return False, "cuda_runtime_is_rocm", {"torch_hip": hip, "torch_cuda": cuda_version}
         if not available:
             return False, "torch_cuda_unavailable", {"torch_hip": hip, "torch_cuda": cuda_version}
-        tensor = torch.ones(1, device="cuda:0")
+        compute_capability = ""
+        conv_device = ""
+        if requested == "cuda":
+            try:
+                major, minor = torch.cuda.get_device_capability(0)
+                compute_capability = f"{major}.{minor}"
+            except Exception:
+                compute_capability = ""
+            # torch.cuda.is_available() only proves the driver is visible; a cu121-era
+            # build on a Blackwell (sm_120) GPU still reports available=True and then
+            # fails at real inference with "no kernel image is available for execution
+            # on the device". Launch a real conv2d kernel so that failure is caught here.
+            # (ROCm is out of scope for this Windows Blackwell fix and keeps its
+            # existing bare-allocation probe below unchanged.)
+            tensor = torch.ones((1, 1, 8, 8), dtype=torch.float32, device="cuda:0")
+            weight = torch.ones((1, 1, 3, 3), dtype=torch.float32, device="cuda:0")
+            output = torch.nn.functional.conv2d(tensor, weight)
+            torch.cuda.synchronize()
+            conv_device = str(output.device)
+        else:
+            tensor = torch.ones(1, device="cuda:0")
         total_memory = 0
         try:
             props = torch.cuda.get_device_properties(0)
@@ -155,7 +179,9 @@ def _probe_gpu_device(device: str) -> tuple[bool, str, dict[str, str]]:
         return True, "ok", {
             "torch_hip": hip,
             "torch_cuda": cuda_version,
+            "compute_capability": compute_capability,
             "tensor_device": str(tensor.device),
+            "conv_device": conv_device,
             "device_name": str(torch.cuda.get_device_name(0)),
             "total_memory_bytes": str(total_memory or ""),
             "total_memory_gib": f"{(total_memory / float(1024 ** 3)):.1f}" if total_memory else "",
@@ -170,6 +196,8 @@ def _classify_runtime_exception(exc: Exception, device: str, gpu_probe: dict[str
     lower = text.lower()
     requested = str(device or "").strip().lower()
     if requested == "cuda":
+        if "no kernel image is available for execution on the device" in lower:
+            return "cuda_architecture_unsupported", CUDA_ARCHITECTURE_UNSUPPORTED_GUIDANCE
         if "illegal memory access was encountered" in lower:
             return "cuda_illegal_memory_access", CUDA_FAILURE_GUIDANCE
         if "cuda out of memory" in lower:
@@ -255,6 +283,114 @@ def normalize_outputs(output_dir: Path, raw_outputs: Any, before: set[Path]) -> 
             shutil.move(str(path), str(target))
         stems[stem_key] = str(target)
     return stems, raw_paths
+
+
+def _uvr_equivalent_mdxc_reconstruction(concrete, mix):
+    """Corrected MDX-C overlap-add reconstruction matching UVR 5.6.0's own
+    numerics, for the non-Roformer path only (the only path DrumSep's
+    Jarredou MDX23C model uses).
+
+    Forensic investigation (STEMwerk issue #118 DrumSep quality follow-up)
+    proved -- by holding checkpoint bytes, YAML config, device, and input
+    audio all identical between UVR 5.6.0 and audio-separator 0.34.1 -- that
+    the two only diverge meaningfully for the Snare stem of this model
+    (correlation ~0.68 vs >0.99 for every other stem). Reproducing UVR's own
+    chunk-building (explicit contiguous slicing, not mix.unfold()'s
+    non-contiguous strided view) together with its sequential incremental
+    overlap-add merge (instead of audio-separator's indexed range-add into a
+    pre-sized buffer) made the divergence disappear (correlation >0.9999 for
+    every stem including Snare; Hat->Snare leakage ratio moved from 1.72 to
+    0.82, matching UVR almost exactly). Both strategies are algebraically
+    equivalent in exact arithmetic; the difference is only numerically
+    consequential in combination with the non-contiguous unfold() view for
+    this specific model, which is why patching accumulation order alone
+    (keeping unfold()) reproduces byte-identical results to the unpatched
+    original -- verified directly, not merely reasoned about.
+
+    Pure tensor arithmetic, no CUDA-specific assumptions; identical on CPU,
+    CUDA, ROCm, and MPS.
+    """
+    import torch
+
+    try:
+        num_stems = concrete.model_run.num_target_instruments
+    except AttributeError:
+        num_stems = concrete.model_run.module.num_target_instruments
+
+    if concrete.override_model_segment_size:
+        mdx_segment_size = concrete.segment_size
+    else:
+        mdx_segment_size = concrete.model_data_cfgdict.inference.dim_t
+
+    chunk_size = concrete.model_data_cfgdict.audio.hop_length * (mdx_segment_size - 1)
+    hop_size = chunk_size // concrete.overlap
+    pad_size = hop_size - (mix.shape[1] - chunk_size) % hop_size
+    mix = torch.cat([torch.zeros(2, chunk_size - hop_size), mix, torch.zeros(2, pad_size + chunk_size - hop_size)], 1)
+
+    chunk_list = []
+    pos = 0
+    while pos + chunk_size <= mix.shape[1]:
+        chunk_list.append(mix[:, pos : pos + chunk_size])
+        pos += hop_size
+    chunks = torch.stack(chunk_list)
+    batches = [chunks[i : i + concrete.batch_size] for i in range(0, len(chunks), concrete.batch_size)]
+
+    overlap_width = chunk_size - hop_size
+    accumulator = torch.zeros(num_stems, 2, overlap_width) if num_stems > 1 else torch.zeros(2, overlap_width)
+
+    with torch.no_grad():
+        for batch in batches:
+            single_batch_result = concrete.model_run(batch.to(concrete.torch_device))
+            for individual_output in single_batch_result:
+                individual_output_cpu = individual_output.cpu()
+                merged_head = accumulator[..., -overlap_width:] + individual_output_cpu[..., :overlap_width]
+                fresh_tail = individual_output_cpu[..., overlap_width:]
+                accumulator = torch.cat([accumulator[..., :-overlap_width], merged_head, fresh_tail], -1)
+
+    inferenced_outputs = accumulator[..., overlap_width : -(pad_size + overlap_width)] / concrete.overlap
+    return {
+        key: value
+        for key, value in zip(concrete.model_data_cfgdict.training.instruments, inferenced_outputs.cpu().detach().numpy())
+    }
+
+
+def _run_uvr_equivalent_mdxc_separation(separator: Any, input_path: Path, output_dir: Path) -> list[str] | None:
+    """Run DrumSep separation using the UVR-equivalent reconstruction above
+    instead of audio_separator.Separator.separate()'s MDXC accumulation,
+    writing files with the same naming convention consumed downstream by
+    normalize_outputs(). Only applies to the exact six-target, non-Roformer,
+    non-pitch-shifted DrumSep model contract (Kick/Snare/Toms/Hh/Ride/Crash);
+    returns None if the loaded model doesn't match that shape so the caller
+    can fall back to the stock sep.separate() call unchanged.
+    """
+    concrete = getattr(separator, "model_instance", None)
+    if concrete is None or not hasattr(concrete, "model_data_cfgdict") or getattr(concrete, "is_roformer", True):
+        return None
+    if getattr(concrete, "pitch_shift", 0) != 0:
+        return None
+    training = concrete.model_data_cfgdict.training
+    if training.target_instrument or tuple(training.instruments) != DIRECT_DEMIX_KEYS:
+        return None
+
+    import soundfile as sf
+    from audio_separator.separator.uvr_lib_v5 import spec_utils
+
+    mix = concrete.prepare_mix(str(input_path))
+    mix = spec_utils.normalize(wave=mix, max_peak=concrete.normalization_threshold, min_peak=concrete.amplification_threshold)
+
+    import torch
+
+    mix_tensor = torch.tensor(mix, dtype=torch.float32)
+    sources = _uvr_equivalent_mdxc_reconstruction(concrete, mix_tensor)
+
+    audio_file_base = Path(str(input_path)).stem
+    raw_outputs: list[str] = []
+    for stem_name, value in sources.items():
+        stem_source = spec_utils.normalize(wave=value, max_peak=concrete.normalization_threshold, min_peak=concrete.amplification_threshold)
+        out_path = Path(output_dir) / f"{audio_file_base}_({stem_name}).wav"
+        sf.write(str(out_path), stem_source.T, 44100, subtype="PCM_16")
+        raw_outputs.append(str(out_path))
+    return raw_outputs
 
 
 def _error_payload(reason: str, stage: str, message: str, **extra: Any) -> dict[str, Any]:
@@ -371,6 +507,23 @@ def _direct_demix_model_device(separator: Any) -> str:
         return str(parameter.device)
     except Exception:
         return "unknown"
+
+
+def _apply_drumsep_amplification_policy(separator: Any) -> None:
+    """Force-disable low-peak stem amplification, version-independently.
+
+    audio-separator's own constructor default for amplification_threshold
+    has drifted across versions (0.6 in 0.23.0, 0.0 in 0.34.1), and 0.23.0's
+    constructor rejects an explicit 0.0 outright (it requires > 0). Applying
+    the value as a plain attribute write here -- after Separator() returns
+    but before load_model() -- skips __init__'s validation entirely while
+    still reaching the architecture model: load_model() reads the current
+    value of this attribute (not one captured at construction time) into
+    the common_config it hands to the concrete separator class. Proven
+    directly against both 0.23.0 and 0.34.1 source/runtime; do not gate this
+    on version or platform.
+    """
+    separator.amplification_threshold = 0.0
 
 
 def _apply_separator_requested_device(separator: Any, requested_device: str) -> None:
@@ -645,12 +798,17 @@ def run(args: argparse.Namespace) -> int:
     print(f"drumsep_helper_gpu_probe_low_vram={gpu_probe.get('low_vram', '')}", file=sys.stderr)
     print(f"drumsep_helper_gpu_probe_onnx_provider={gpu_probe.get('onnx_provider', '')}", file=sys.stderr)
     if not gpu_probe_ok:
+        probe_error_reason = "drumsep_helper_gpu_probe_failed"
+        probe_error_message = gpu_probe_reason
+        if "no kernel image is available for execution on the device" in gpu_probe_reason.lower():
+            probe_error_reason = "cuda_architecture_unsupported"
+            probe_error_message = CUDA_ARCHITECTURE_UNSUPPORTED_GUIDANCE
         write_result(
             result_json,
             _error_payload(
-                "drumsep_helper_gpu_probe_failed",
+                probe_error_reason,
                 "stage2_runtime",
-                gpu_probe_reason,
+                probe_error_message,
                 requested_helper_device=args.device,
                 gpu_probe=gpu_probe,
             ),
@@ -667,6 +825,14 @@ def run(args: argparse.Namespace) -> int:
             "model_file_dir": str(model_dir),
             "output_dir": str(output_dir),
             "output_format": "WAV",
+            # Preserve full-scale model input: audio-separator's own default
+            # (0.9) pre-attenuates any input mix already at/near full scale
+            # before MDXC inference ever sees it. 1.0 keeps such sources
+            # unscaled while still retaining the library's >1.0 downscale
+            # safety behavior. Investigated and proven safe (no clipping,
+            # max observed stem peak ~0.98) in the DrumSep normalization
+            # experiment.
+            "normalization_threshold": 1.0,
         }
         init_params = inspect.signature(Separator.__init__).parameters
         accepts_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in init_params.values())
@@ -687,9 +853,18 @@ def run(args: argparse.Namespace) -> int:
                 }
             )
         sep = Separator(**separator_kwargs)
+        _apply_drumsep_amplification_policy(sep)
+        print(f"amplification_threshold={sep.amplification_threshold}", file=sys.stderr)
+        print("amplification_policy=stemwerk_explicit_preload", file=sys.stderr)
         if model_resolution.action != "none":
             _configure_managed_drumsep_checkpoint(sep, model_resolution)
-        if args.route in {"mps-direct-demix", "direct-demix"}:
+        managed_macos_wrapper = (
+            args.route == "wrapper"
+            and model_resolution.action != "none"
+            and sys.platform == "darwin"
+            and args.device in {"cpu", "mps"}
+        )
+        if args.route in {"mps-direct-demix", "direct-demix"} or managed_macos_wrapper:
             _apply_separator_requested_device(sep, str(args.device or "cpu"))
         sep.load_model(model_name)
         print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_model_load_end", file=sys.stderr)
@@ -725,7 +900,10 @@ def run(args: argparse.Namespace) -> int:
             )
             raw_outputs = list(stems.values())
         else:
-            raw_outputs = sep.separate(str(input_path))
+            raw_outputs = _run_uvr_equivalent_mdxc_separation(sep, input_path, output_dir)
+            print(f"drumsep_uvr_equivalent_reconstruction_applied={'yes' if raw_outputs is not None else 'no'}", file=sys.stderr)
+            if raw_outputs is None:
+                raw_outputs = sep.separate(str(input_path))
             stems, raw_outputs = normalize_outputs(output_dir, raw_outputs, before)
         print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_separate_end", file=sys.stderr)
     except Exception as exc:

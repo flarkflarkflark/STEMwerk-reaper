@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import re
 import sys
 import threading
 import time
@@ -84,6 +85,69 @@ _SEPARATOR_CACHE_LOCK = threading.Lock()
 # established: "native" (configured at construction), "legacy" (post-construction
 # compatibility override) or "" (not a DirectML run).
 _DIRECTML_MODE_ATTR = "_stemwerk_directml_mode"
+
+_SEPARATOR_OUTPUT_TOKEN_RE = re.compile(
+    r"(?:^|_)\((?P<label>[^()]+)\)(?:_[^()]*)?$"
+)
+_SEPARATOR_OUTPUT_STEM_IDENTITIES = {
+    "vocals": "vocals",
+    "vocal": "vocals",
+    "drums": "drums",
+    "drum": "drums",
+    "bass": "bass",
+    "other": "other",
+    "no_vocals": "other",
+    "instrumental": "other",
+    "guitar": "guitar",
+    "piano": "piano",
+    "keys": "piano",
+}
+
+
+def _separator_output_stem_identity(output_file: Union[str, Path]) -> Optional[str]:
+    """Return the exact separator-generated stem identity from a filename."""
+    filename_stem = Path(output_file).stem
+    match = _SEPARATOR_OUTPUT_TOKEN_RE.search(filename_stem)
+    # Some supported/legacy separator paths return a canonical bare filename
+    # such as ``drums.wav``. Exact-name fallback preserves that contract while
+    # still preventing source-basename substrings from influencing identity.
+    label = match.group("label") if match is not None else filename_stem
+    label = label.strip().casefold()
+    return _SEPARATOR_OUTPUT_STEM_IDENTITIES.get(label)
+
+
+def _map_separator_output_files(
+    output_files: Sequence[Union[str, Path]],
+    output_path: Path,
+    required_stems: Optional[Sequence[str]] = None,
+) -> Dict[str, Path]:
+    """Map separator outputs by generated token, rejecting duplicates/misses."""
+    result: Dict[str, Path] = {}
+    for candidate in output_files:
+        output_file = Path(candidate)
+        if not output_file.is_absolute():
+            output_file = output_path / output_file
+
+        identity = _separator_output_stem_identity(output_file)
+        if identity is None:
+            continue
+        if identity in result:
+            raise ValueError(
+                "Duplicate separator output stem identity "
+                f"{identity!r}: {result[identity].name!r}, {output_file.name!r}"
+            )
+        result[identity] = output_file
+
+    if required_stems:
+        required = {str(stem).strip().casefold() for stem in required_stems}
+        missing = sorted(required.difference(result))
+        if missing:
+            raise RuntimeError(
+                "Missing required separator output stem identities: " + ", ".join(missing)
+            )
+        result = {name: path for name, path in result.items() if name in required}
+
+    return result
 
 
 def _mark_directml_mode(separator: Any, mode: str) -> None:
@@ -675,35 +739,7 @@ class StemSeparator:
 
         self._emit_progress(92.0, "Writing stems")
 
-        result: Dict[str, Path] = {}
-        stem_mapping = {
-            "vocals": ["vocals", "vocal", "Vocals"],
-            "drums": ["drums", "drum", "Drums"],
-            "bass": ["bass", "Bass"],
-            "other": ["other", "Other", "no_vocals", "instrumental", "Instrumental"],
-            "guitar": ["guitar", "Guitar"],
-            "piano": ["piano", "Piano", "keys", "Keys"],
-        }
-
-        for output_file in output_files:
-            output_file = Path(output_file)
-            if not output_file.is_absolute():
-                output_file = output_path / output_file
-
-            filename = output_file.stem.lower()
-            matched = False
-            for stem_name, patterns in stem_mapping.items():
-                for pattern in patterns:
-                    if pattern.lower() in filename:
-                        result[stem_name] = output_file
-                        matched = True
-                        break
-                if matched:
-                    break
-
-        if stems:
-            allowed = {stem.lower() for stem in stems}
-            result = {name: path for name, path in result.items() if name.lower() in allowed}
+        result = _map_separator_output_files(output_files, output_path, required_stems=stems)
 
         self._emit_progress(100.0, "Complete")
 

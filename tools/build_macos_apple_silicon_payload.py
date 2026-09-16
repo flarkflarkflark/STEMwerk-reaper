@@ -244,11 +244,24 @@ def python_version(python_executable: str) -> tuple[int, int]:
 
 
 def payload_python() -> str:
+    """Select the Python 3.12 interpreter used to assemble the payload.
+
+    The interpreter that actually invoked this script (sys.executable) is
+    preferred whenever it already satisfies the Python 3.12 requirement --
+    that is whatever a CI job's actions/setup-python step (or a developer's
+    own venv) deliberately provisioned, and trusting it is more deterministic
+    than any of the well-known install-location fallbacks below, which can
+    resolve to an unrelated system/Homebrew interpreter whose environment
+    (e.g. importable setuptools) was never controlled by this build. The
+    fallbacks exist for the case where the invoking interpreter itself isn't
+    Python 3.12 (e.g. this script run under a Python 3.11 tooling venv on a
+    Mac that also has a native 3.12 installed elsewhere).
+    """
     candidates = (
+        Path(sys.executable),
         Path.home() / "Library" / "Application Support" / "STEMwerk" / ".venv" / "bin" / "python",
         Path("/opt/homebrew/bin/python3.12"),
         Path("/usr/local/bin/python3.12"),
-        Path(sys.executable),
     )
     for candidate in candidates:
         if candidate.is_file() and python_version(str(candidate)) == (3, 12):
@@ -312,7 +325,27 @@ def download_closed_wheelhouse(
     subprocess.run(cmd, check=True, env=command_env())
 
 
+def _require_bootstrap_wheel(wheels_dir: Path, requirement: str) -> None:
+    name, version = requirement.split("==", 1)
+    if not any(wheels_dir.glob(f"{name}-{version}-*.whl")):
+        raise RuntimeError(
+            f"Closed wheelhouse at {wheels_dir} is missing the pinned PEP-517 build-backend "
+            f"wheel {requirement}, required to build stemwerk-core without network access. "
+            "download_closed_wheelhouse() must populate the wheelhouse before "
+            "build_stemwerk_core_wheel() runs."
+        )
+
+
 def build_stemwerk_core_wheel(repo_root: Path, wheels_dir: Path, python_executable: str) -> None:
+    # Normal PEP-517 build isolation, restricted to --no-index --find-links
+    # wheels_dir: pip installs the pyproject.toml build-system requirements
+    # (setuptools, wheel) into the isolated build env using the SAME
+    # index/find-links configuration as this command, so they resolve only
+    # from the already-populated closed wheelhouse -- never from PyPI. This
+    # keeps the build closed/reproducible without depending on setuptools
+    # being importable in whichever interpreter payload_python() selected.
+    for pinned in ("setuptools==83.0.0", "wheel==0.47.0"):
+        _require_bootstrap_wheel(wheels_dir, pinned)
     subprocess.run(
         [
             python_executable,
@@ -320,7 +353,9 @@ def build_stemwerk_core_wheel(repo_root: Path, wheels_dir: Path, python_executab
             "pip",
             "wheel",
             "--no-deps",
-            "--no-build-isolation",
+            "--no-index",
+            "--find-links",
+            str(wheels_dir),
             "--wheel-dir",
             str(wheels_dir),
             str(repo_root / "scripts" / "reaper" / "vendor" / "stemwerk-core"),
