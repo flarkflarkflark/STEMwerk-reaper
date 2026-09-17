@@ -186,6 +186,16 @@ bundled_stemwerk_core_wheel() {
   return 1
 }
 
+managed_stemwerk_core_wheel() {
+  [ -n "${MANAGED_WHEELS_DIR:-}" ] && [ -d "${MANAGED_WHEELS_DIR}" ] || return 1
+  for _wheel in "${MANAGED_WHEELS_DIR}"/stemwerk_core-*.whl; do
+    [ -f "${_wheel}" ] || continue
+    printf "%s\n" "${_wheel}"
+    return 0
+  done
+  return 1
+}
+
 bundled_models_dir() {
   [ -d "${BUNDLED_PAYLOAD_DIR}/models" ] || return 1
   printf "%s\n" "${BUNDLED_PAYLOAD_DIR}/models"
@@ -1344,6 +1354,13 @@ resolve_core_target() {
     fi
     log "STEMWERK_CORE_PATH is set but incomplete: ${STEMWERK_CORE_PATH}"
     log "Required: pyproject.toml, src/stemwerk_core/__init__.py, src/stemwerk_core/separator.py"
+  fi
+
+  _managed_core_wheel="$(managed_stemwerk_core_wheel || true)"
+  if [ -n "${_managed_core_wheel}" ]; then
+    CORE_TARGET="${_managed_core_wheel}"
+    CORE_TARGET_DESC="managed wheel"
+    return 0
   fi
 
   CORE_BUNDLE_DIR="${STEMWERK_CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"
