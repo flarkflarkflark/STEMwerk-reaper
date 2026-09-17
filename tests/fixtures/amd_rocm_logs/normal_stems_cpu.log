@@ -1,0 +1,128 @@
+STEMWERK_DIAG ffmpeg_path=/usr/bin/ffmpeg
+STEMWERK_DIAG ffmpeg_wrapper=/usr/bin/ffmpeg
+STEMWERK_DIAG path_prefix=/usr/bin
+STEMWERK_DIAG model_cache_dir=/home/flark/.local/share/STEMwerk/models
+STEMWERK_DIAG stemwerk_core_file=/mnt/PRODUCTION/GIT/STEMwerk-worktrees/2.3-amd-drumsep-cpu-via-rocm/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/__init__.py
+STEMWERK_DIAG audio_separator_process_file=/mnt/PRODUCTION/GIT/STEMwerk-worktrees/2.3-amd-drumsep-cpu-via-rocm/scripts/reaper/audio_separator_process.py
+STEMWERK_DIAG drumsep_helper_script=/mnt/PRODUCTION/GIT/STEMwerk-worktrees/2.3-amd-drumsep-cpu-via-rocm/scripts/reaper/_internal/stemwerk_drumsep_process.py
+STEMWERK_DIAG pythonpath_env=
+STEMWERK_DIAG source_contamination_detected=no
+STEMWERK_DIAG requested_device=cpu
+normal_workflow_backend_seen_device_request=cpu
+normal_workflow_live_device_ids=auto,cpu,cuda:0
+normal_workflow_backend_seen_device_resolved=cpu
+normal_workflow_backend_preview_device=cpu
+normal_workflow_backend_preview_name=CPU
+workflow_source=normal
+workflow_mode=stems
+route=normal
+stage=single_stage
+model_name=htdemucs
+device=cpu
+backend=cpu
+STEMWERK_DIAG python_executable=/home/flark/.local/share/STEMwerk/.venv/bin/python
+STEMWERK_DIAG python_version=3.12.13
+STEMWERK_DIAG platform=Linux machine=x86_64
+STEMWERK_DIAG torch_version=2.10.0+rocm7.0
+STEMWERK_DIAG torchaudio_version=2.10.0+rocm7.0
+STEMWERK_DIAG onnxruntime_version=1.29.0
+STEMWERK_DIAG cuda_available=True
+STEMWERK_DIAG cuda_count=2
+STEMWERK_DIAG cuda_primary_device_name=AMD Radeon RX 9070
+STEMWERK_DIAG cuda_primary_total_memory_bytes=17095983104
+STEMWERK_DIAG cuda_primary_total_memory_gib=15.9
+STEMWERK_DIAG cuda_low_vram=no
+STEMWERK_DIAG mps_built=False
+STEMWERK_DIAG mps_available=False
+STEMWERK_DIAG mps_fallback_env=None
+STEMWERK_DIAG selected_device=cpu
+STEMWERK_DIAG effective_device=cpu
+STEMWERK_DIAG torch_weights_only_compat=enabled mode=TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD torch_version=2.10.0+rocm7.0 model=htdemucs device=cpu
+2026-09-17 15:29:35,043 - INFO - separator - Separator version 0.23.0 instantiating with output_dir: ., output_format: WAV
+2026-09-17 15:29:35,043 - INFO - separator - Operating System: Linux #1 SMP PREEMPT_DYNAMIC Tue, 08 Sep 2026 10:48:06 +0000
+2026-09-17 15:29:35,044 - INFO - separator - System: Linux Node: flark-beyond Release: 6.18.50-2-lts Machine: x86_64 Proc: 
+2026-09-17 15:29:35,044 - INFO - separator - Python Version: 3.12.13
+2026-09-17 15:29:35,044 - INFO - separator - PyTorch Version: 2.10.0+rocm7.0
+2026-09-17 15:29:35,080 - INFO - separator - FFmpeg installed: ffmpeg version n9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+2026-09-17 15:29:35,080 - DEBUG - separator - Python package: onnxruntime-gpu not installed
+2026-09-17 15:29:35,080 - DEBUG - separator - Python package: onnxruntime-silicon not installed
+2026-09-17 15:29:35,080 - INFO - separator - ONNX Runtime CPU package installed with version: 1.29.0
+2026-09-17 15:29:35,080 - INFO - separator - CUDA is available in Torch, setting Torch device to CUDA
+2026-09-17 15:29:35,080 - WARNING - separator - CUDAExecutionProvider not available in ONNXruntime, so acceleration will NOT be enabled
+2026-09-17 15:29:35,081 - DEBUG - separator - File already exists at /home/flark/.local/share/STEMwerk/models/download_checks.json, skipping download
+2026-09-17 15:29:35,081 - DEBUG - separator - UVR model download list loaded
+2026-09-17 15:29:35,081 - DEBUG - separator - Audio-Separator model list loaded
+2026-09-17 15:29:35,081 - INFO - separator - Loading local Demucs asset htdemucs.yaml for model htdemucs...
+2026-09-17 15:29:35,623 - DEBUG - common_separator - Common params: model_name=htdemucs, model_path=/home/flark/.local/share/STEMwerk/models/htdemucs.yaml
+2026-09-17 15:29:35,623 - DEBUG - common_separator - Common params: output_dir=., output_format=WAV
+2026-09-17 15:29:35,623 - DEBUG - common_separator - Common params: normalization_threshold=0.9, amplification_threshold=0.6
+2026-09-17 15:29:35,623 - DEBUG - common_separator - Common params: enable_denoise=None, output_single_stem=None
+2026-09-17 15:29:35,623 - DEBUG - common_separator - Common params: invert_using_spec=False, sample_rate=44100
+2026-09-17 15:29:35,623 - DEBUG - common_separator - Common params: primary_stem_name=Vocals, secondary_stem_name=Instrumental
+2026-09-17 15:29:35,623 - DEBUG - common_separator - Common params: is_karaoke=False, is_bv_model=False, bv_model_rebalance=0
+2026-09-17 15:29:35,623 - DEBUG - demucs_separator - Demucs arch params: segment_size=Default, segments_enabled=True
+2026-09-17 15:29:35,623 - DEBUG - demucs_separator - Demucs arch params: shifts=1, overlap=0.25
+2026-09-17 15:29:35,623 - INFO - demucs_separator - Demucs Separator initialisation complete
+2026-09-17 15:29:35,624 - INFO - separator - Starting separation process for audio_file_path: /tmp/STEMwerk_1789609907_42465274_1/input.wav
+2026-09-17 15:29:35,624 - DEBUG - separator - Normalization threshold set to 0.9, waveform will lowered to this max amplitude to avoid clipping.
+2026-09-17 15:29:35,624 - DEBUG - separator - Amplification threshold set to 0.6, waveform will scaled up to this max amplitude if below it.
+2026-09-17 15:29:35,624 - DEBUG - separator - Autocast unavailable.
+2026-09-17 15:29:35,624 - DEBUG - demucs_separator - Starting separation process...
+2026-09-17 15:29:35,624 - DEBUG - demucs_separator - Preparing mix...
+2026-09-17 15:29:35,624 - DEBUG - common_separator - Loading audio from file: /tmp/STEMwerk_1789609907_42465274_1/input.wav
+2026-09-17 15:29:36,169 - DEBUG - common_separator - Audio loaded. Sample rate: 44100, Audio shape: (2, 1192760)
+2026-09-17 15:29:36,169 - DEBUG - common_separator - Audio file is valid and contains data.
+2026-09-17 15:29:36,169 - DEBUG - common_separator - Mix preparation completed.
+2026-09-17 15:29:36,169 - DEBUG - demucs_separator - Mix prepared for demixing. Shape: (2, 1192760)
+2026-09-17 15:29:36,169 - DEBUG - demucs_separator - Loading model for demixing...
+2026-09-17 15:29:36,753 - DEBUG - demucs_separator - Model loaded and set to evaluation mode.
+2026-09-17 15:29:36,753 - DEBUG - demucs_separator - Starting demixing process in demix_demucs...
+2026-09-17 15:29:36,756 - DEBUG - demucs_separator - Running model inference...
+  0%|          | 0/5 [00:00<?, ?it/s] 20%|##        | 1/5 [00:01<00:07,  1.91s/it] 40%|####      | 2/5 [00:03<00:04,  1.44s/it] 60%|######    | 3/5 [00:04<00:02,  1.28s/it] 80%|########  | 4/5 [00:05<00:01,  1.22s/it]100%|##########| 5/5 [00:06<00:00,  1.18s/it]100%|##########| 5/5 [00:06<00:00,  1.27s/it]
+2026-09-17 15:29:43,159 - DEBUG - common_separator - Running garbage collection...
+2026-09-17 15:29:43,249 - DEBUG - demucs_separator - Model and GPU cache cleared after demixing.
+2026-09-17 15:29:43,249 - DEBUG - demucs_separator - Processing output files...
+2026-09-17 15:29:43,249 - DEBUG - demucs_separator - Processing source array, source length is 4
+2026-09-17 15:29:43,249 - DEBUG - demucs_separator - Setting source map to 4-stem...
+2026-09-17 15:29:43,249 - DEBUG - demucs_separator - Processing for all stems...
+2026-09-17 15:29:43,249 - DEBUG - common_separator - Finalizing Bass stem processing and writing audio...
+/home/flark/.local/share/STEMwerk/.venv/lib/python3.12/site-packages/audio_separator/separator/common_separator.py:242: FutureWarning: get_duration() keyword argument 'filename' has been renamed to 'path' in version 0.10.0.
+	This alias will be removed in version 1.0.
+  duration_seconds = librosa.get_duration(filename=self.audio_file_path)
+2026-09-17 15:29:43,303 - INFO - common_separator - Audio duration is 0.01 hours (27.05 seconds).
+2026-09-17 15:29:43,303 - WARNING - common_separator - Using soundfile for writing.
+2026-09-17 15:29:43,303 - DEBUG - common_separator - Entering write_audio_soundfile with stem_path: input_(Bass)_htdemucs.wav
+2026-09-17 15:29:43,307 - DEBUG - common_separator - Interleaved audio data shape: (1192760, 2)
+2026-09-17 15:29:43,320 - DEBUG - common_separator - Exported audio file successfully to input_(Bass)_htdemucs.wav
+2026-09-17 15:29:43,320 - DEBUG - common_separator - Finalizing Drums stem processing and writing audio...
+2026-09-17 15:29:43,321 - INFO - common_separator - Audio duration is 0.01 hours (27.05 seconds).
+2026-09-17 15:29:43,321 - WARNING - common_separator - Using soundfile for writing.
+2026-09-17 15:29:43,321 - DEBUG - common_separator - Entering write_audio_soundfile with stem_path: input_(Drums)_htdemucs.wav
+2026-09-17 15:29:43,325 - DEBUG - common_separator - Interleaved audio data shape: (1192760, 2)
+2026-09-17 15:29:43,338 - DEBUG - common_separator - Exported audio file successfully to input_(Drums)_htdemucs.wav
+2026-09-17 15:29:43,338 - DEBUG - common_separator - Finalizing Other stem processing and writing audio...
+2026-09-17 15:29:43,340 - INFO - common_separator - Audio duration is 0.01 hours (27.05 seconds).
+2026-09-17 15:29:43,340 - WARNING - common_separator - Using soundfile for writing.
+2026-09-17 15:29:43,340 - DEBUG - common_separator - Entering write_audio_soundfile with stem_path: input_(Other)_htdemucs.wav
+2026-09-17 15:29:43,344 - DEBUG - common_separator - Interleaved audio data shape: (1192760, 2)
+2026-09-17 15:29:43,357 - DEBUG - common_separator - Exported audio file successfully to input_(Other)_htdemucs.wav
+2026-09-17 15:29:43,357 - DEBUG - common_separator - Finalizing Vocals stem processing and writing audio...
+2026-09-17 15:29:43,358 - INFO - common_separator - Audio duration is 0.01 hours (27.05 seconds).
+2026-09-17 15:29:43,358 - WARNING - common_separator - Using soundfile for writing.
+2026-09-17 15:29:43,358 - DEBUG - common_separator - Entering write_audio_soundfile with stem_path: input_(Vocals)_htdemucs.wav
+2026-09-17 15:29:43,362 - DEBUG - common_separator - Interleaved audio data shape: (1192760, 2)
+2026-09-17 15:29:43,375 - DEBUG - common_separator - Exported audio file successfully to input_(Vocals)_htdemucs.wav
+2026-09-17 15:29:43,375 - DEBUG - common_separator - Running garbage collection...
+2026-09-17 15:29:43,471 - INFO - common_separator - Clearing input audio file paths, sources and stems...
+2026-09-17 15:29:43,471 - DEBUG - separator - Separation process completed.
+2026-09-17 15:29:43,471 - INFO - separator - Separation duration: 00:00:07
+runtime_selected=cpu
+backend_runtime=cpu
+selected_device=cpu
+selected_device_name=CPU
+separator_torch_device=cpu
+device_name=CPU
+  bass:  /tmp/stemwerk-normal-cpu-trace/bass.wav
+  drums:  /tmp/stemwerk-normal-cpu-trace/drums.wav
+  other:  /tmp/stemwerk-normal-cpu-trace/other.wav
+  vocals:  /tmp/stemwerk-normal-cpu-trace/vocals.wav
