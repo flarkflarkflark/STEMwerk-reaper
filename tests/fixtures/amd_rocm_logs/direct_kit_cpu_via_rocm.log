@@ -1,0 +1,94 @@
+STEMWERK_DIAG ffmpeg_path=/usr/bin/ffmpeg
+STEMWERK_DIAG ffmpeg_wrapper=/usr/bin/ffmpeg
+STEMWERK_DIAG path_prefix=/usr/bin
+STEMWERK_DIAG model_cache_dir=/home/flark/.local/share/STEMwerk/models
+STEMWERK_DIAG stemwerk_core_file=/mnt/PRODUCTION/GIT/STEMwerk-worktrees/2.3-amd-drumsep-cpu-via-rocm/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/__init__.py
+STEMWERK_DIAG audio_separator_process_file=/mnt/PRODUCTION/GIT/STEMwerk-worktrees/2.3-amd-drumsep-cpu-via-rocm/scripts/reaper/audio_separator_process.py
+STEMWERK_DIAG drumsep_helper_script=/mnt/PRODUCTION/GIT/STEMwerk-worktrees/2.3-amd-drumsep-cpu-via-rocm/scripts/reaper/_internal/stemwerk_drumsep_process.py
+STEMWERK_DIAG pythonpath_env=
+STEMWERK_DIAG source_contamination_detected=no
+timing_utc=2026-09-17T03:05:50 drumsep_runtime_select_start
+Direct Drum Kit Split route detected: workflow_mode= workflow_source=dks_direct
+ui_device_selected_before_run=cpu
+backend_device_arg=cpu
+normalized_device_request=cpu
+drumsep_runtime_selection_policy=explicit_cpu
+timing_utc=2026-09-17T03:05:50 drumsep_runtime_probe_cpu_start
+timing_utc=2026-09-17T03:05:50 drumsep_runtime_probe_cpu_end detail=missing
+timing_utc=2026-09-17T03:05:50 drumsep_runtime_probe_rocm_as_cpu_start
+timing_utc=2026-09-17T03:05:52 drumsep_runtime_probe_rocm_as_cpu_end detail={"device_names": ["AMD Radeon RX 9070", "AMD Radeon 780M Graphics"], "directml_available": false, "directml_device_count": 0, "mps_available": false, "mps_built": false, "ok": true, "onnxruntime_providers": ["AzureExecutionProvider", "CPUExecutionProvider"], "torch_cuda_available": true, "torch_hip": "7.0.51831", "versions": {"audio-separator": "0.34.1", "numpy": "2.4.6", "onnx": "1.21.0", "onnx2torch": "1.5.15", "onnx2torch-py313": "1.6.0", "onnxruntime": "1.26.0", "torch": "2.10.0+rocm7.0"}}
+timing_utc=2026-09-17T03:05:52 drumsep_runtime_select_end
+drumsep_runtime_selected=cpu
+drumsep_runtime_selection_policy=explicit_cpu_via_rocm_runtime
+drumsep_python=/home/flark/.local/share/STEMwerk/.venv-drumsep-rocm/bin/python
+drumsep_gpu_capable=no
+drumsep_torch_version=2.10.0+rocm7.0
+drumsep_torch_hip=7.0.51831
+drumsep_device_names=AMD Radeon RX 9070|AMD Radeon 780M Graphics
+drumsep_runtime_fallback_reason=cpu_skipped:missing
+drumsep_direct_demix_gate=disabled
+drumsep_direct_demix_gate_reason=platform_not_darwin
+drumsep_mps_direct_demix_gate=disabled
+drumsep_mps_direct_demix_gate_reason=platform_not_darwin
+catalog_paths_checked=/home/flark/.local/share/STEMwerk/models/download_checks.json [exists]
+catalog_lookup_status=ok
+drumsep_catalog_asset=aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt|https://huggingface.co/Sucial/MSST-WebUI/resolve/main/All_Models/multi_stem_models/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt
+drumsep_catalog_asset=aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml|https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml
+processing_may_download=no
+requested_model=MDX23C-DrumSep-aufr33-jarredou.ckpt
+resolved_model=aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt
+catalog_source=/home/flark/.local/share/STEMwerk/models/download_checks.json
+model_id=MDX23C-DrumSep-aufr33-jarredou.ckpt
+yaml_path=/home/flark/.local/share/STEMwerk/models/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml
+yaml_source=https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml
+ckpt_path=/home/flark/.local/share/STEMwerk/models/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt
+ckpt_source=https://huggingface.co/Sucial/MSST-WebUI/resolve/main/All_Models/multi_stem_models/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt
+expected_schema=audio,model,training
+yaml_top_level_keys=audio,augmentations,inference,model,training
+drumsep_model_files_ready=yes
+timing_utc=2026-09-17T03:05:52 drumsep_helper_start
+bench_drumsep_helper_device_env=unset
+bench_drumsep_helper_device_requested=none
+bench_drumsep_helper_device_applied=none
+bench_drumsep_helper_device_ignored_reason=not_requested
+timing_utc=2026-09-17T03:05:52 drumsep_helper_start
+drumsep_helper_python=/home/flark/.local/share/STEMwerk/.venv-drumsep-rocm/bin/python
+drumsep_helper_script=/mnt/PRODUCTION/GIT/STEMwerk-worktrees/2.3-amd-drumsep-cpu-via-rocm/scripts/reaper/_internal/stemwerk_drumsep_process.py
+drumsep_helper_model=aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt
+drumsep_helper_route=wrapper
+drumsep_helper_device=cpu
+drumsep_helper_requested_device=cpu
+drumsep_helper_backend_runtime=cpu
+drumsep_helper_output_dir=/tmp/stemwerk-e2e-direct-kit-patched
+drumsep_helper_result_json=/tmp/stemwerk-e2e-direct-kit-patched/drumsep_result.json
+drumsep_helper_stdout=/tmp/stemwerk-e2e-direct-kit-patched/drumsep_helper_stdout.txt
+drumsep_helper_stderr=/tmp/stemwerk-e2e-direct-kit-patched/drumsep_helper_stderr.txt
+drumsep_subprocess_env_profile=cpu_isolated
+drumsep_helper_device_arg=cpu
+drumsep_python=/home/flark/.local/share/STEMwerk/.venv-drumsep-rocm/bin/python
+drumsep_virtual_env=/home/flark/.local/share/STEMwerk/.venv-drumsep-rocm
+drumsep_cuda_visible_devices=
+drumsep_nvidia_visible_devices=
+drumsep_ld_library_path_contains_main_venv=no
+drumsep_cuda_ld_library_path_contains_main_venv=no
+drumsep_cuda_main_venv_leak_path=
+drumsep_cuda_helper_runtime_venv=
+drumsep_cuda_runtime_lib_dirs=
+drumsep_path_starts_with_drumsep_venv=yes
+timing_utc=2026-09-17T03:05:52 drumsep_helper_python_start
+timing_utc=2026-09-17T03:07:44 drumsep_helper_returncode=0
+  kick:  /tmp/stemwerk-e2e-direct-kit-patched/kick.wav
+  snare:  /tmp/stemwerk-e2e-direct-kit-patched/snare.wav
+  toms:  /tmp/stemwerk-e2e-direct-kit-patched/toms.wav
+  hi-hat:  /tmp/stemwerk-e2e-direct-kit-patched/hi-hat.wav
+  ride:  /tmp/stemwerk-e2e-direct-kit-patched/ride.wav
+  crash:  /tmp/stemwerk-e2e-direct-kit-patched/crash.wav
+output_validation_reason=ok
+expected_stems=kick,snare,toms,hihat,ride,crash
+found_stems=kick,snare,toms,hihat,ride,crash
+backend_runtime=cpu
+audio_separator_version=0.34.1
+requested_device=cpu
+effective_device=cpu
+model_device=cpu
+timing_utc=2026-09-17T03:07:44 drumsep_helper_ok=true

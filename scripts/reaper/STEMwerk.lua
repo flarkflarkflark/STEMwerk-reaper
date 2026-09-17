@@ -14979,16 +14979,31 @@ function parseRuntimeMetadataFromLogFile(logFile, maxLines)
         end
         local torchVersion = line:match("torch_version=([^%s]+)")
         if torchVersion and tostring(torchVersion):lower():find("rocm", 1, true) then
-            info.runtimeSelected = "rocm"
+            -- torch_version proves the Python/Torch BUILD is ROCm-capable,
+            -- not that this job actually executed on the GPU (a ROCm build
+            -- can run device=cpu, e.g. .venv-drumsep-rocm serving explicit
+            -- CPU). Only fill runtimeSelected from this capability signal if
+            -- nothing has already reported an actual execution device/backend
+            -- (e.g. backend=cpu, drumsep_runtime_selected=cpu) -- mirroring
+            -- the existing backendRuntime guard just below, which already
+            -- gets this right.
             info.torchVersion = torchVersion
+            if not info.runtimeSelected or info.runtimeSelected == "" then
+                info.runtimeSelected = "rocm"
+            end
             if not info.backendRuntime or info.backendRuntime == "" then
                 info.backendRuntime = "rocm"
             end
         end
         local drumsepTorchHip = line:match("drumsep_torch_hip=([^\r\n]+)")
         if drumsepTorchHip and drumsepTorchHip ~= "" then
-            info.runtimeSelected = "rocm"
+            -- Same reasoning as torch_version above: torch.version.hip
+            -- being non-empty proves ROCm/HIP capability, not that this
+            -- specific run executed on the GPU.
             info.drumsepTorchHip = drumsepTorchHip
+            if not info.runtimeSelected or info.runtimeSelected == "" then
+                info.runtimeSelected = "rocm"
+            end
             if not info.backendRuntime or info.backendRuntime == "" then
                 info.backendRuntime = "rocm"
             end
