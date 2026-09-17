@@ -302,3 +302,180 @@ def test_direct_kit_and_kit_split_both_call_shared_resolver():
     direct_block = text[direct_idx : direct_idx + 3000]
     assert "_select_drumsep_runtime(device_preference)" in extract_block, "Kit Split must use the shared resolver"
     assert "_select_drumsep_runtime(device_preference)" in direct_block, "Direct Kit must use the shared resolver"
+
+
+# ===========================================================================
+# Explicit AMD GPU selection: "cuda:0" is a torch device NAMESPACE, not proof
+# of NVIDIA hardware. ROCm/HIP builds of PyTorch also report as torch.cuda,
+# so the REAPER UI selecting "RX 9070" ends up sending the same "cuda:0" a
+# real NVIDIA GPU would send. _select_drumsep_runtime's explicit_cuda-on-
+# Linux branch previously assumed "cuda:0" always means NVIDIA and only ever
+# probed cpu_candidates (.venv-drumsep) with require_cuda=True -- which is
+# always missing on this AMD install, giving drumsep_runtime_missing even
+# though .venv-drumsep-rocm is healthy and Auto already selects it correctly.
+#
+# The fix reuses the exact same live capability check Auto's gpu_prefer_rocm
+# branch already trusts (_verify_drumsep_runtime(..., require_gpu=True):
+# torch_hip non-empty, torch_cuda_available, real device names) against
+# rocm_candidates, before ever assuming the request is NVIDIA. On a genuine
+# NVIDIA machine that candidate is simply missing, so behavior is unchanged.
+# ===========================================================================
+
+
+def _make_fake_python_cuda(path: Path) -> Path:
+    return _make_fake_python(path)
+
+
+def _nvidia_versions_payload():
+    return {
+        "versions": {"audio-separator": "0.34.1", "torch": "2.4.1+cu121"},
+        "torch_hip": "",
+        "torch_cuda_available": True,
+        "device_names": ["NVIDIA GeForce RTX 3060"],
+    }
+
+
+# --- A: explicit cuda:0 on an AMD/ROCm install resolves through ROCm ------
+
+
+def test_explicit_cuda0_on_amd_resolves_to_healthy_rocm_runtime(tmp_path, monkeypatch):
+    module = _load_audio_process()
+    _set_linux(module, monkeypatch)
+    rocm_python = _make_fake_python(tmp_path / ".venv-drumsep-rocm" / "bin" / "python")
+    # .venv-drumsep never created -- the genuine-NVIDIA-CUDA check (tried
+    # first, so a machine with real CUDA available is never redirected to
+    # ROCm) correctly fails as "missing" before falling back to ROCm here.
+
+    probed_require_cuda = []
+
+    def fake_verify(path, require_gpu=False, require_cuda=False, **kwargs):
+        if require_cuda:
+            probed_require_cuda.append(path)
+            return False, "missing", {}
+        if path == rocm_python and require_gpu:
+            return True, "ok", _rocm_versions_payload()
+        return False, "missing", {}
+
+    monkeypatch.setattr(module, "_verify_drumsep_runtime", fake_verify)
+    selected, kind, info = module._select_drumsep_runtime("cuda:0", tmp_path)
+
+    assert selected == rocm_python
+    assert kind == "rocm", "execution backend must be rocm, not cuda"
+    assert info["selection_policy"] == "explicit_cuda_namespace_resolved_rocm"
+    assert info["torch_hip"] == "7.0.51831"
+    assert probed_require_cuda, "genuine NVIDIA CUDA must be checked first, so a real CUDA machine is never hijacked"
+
+
+# --- B: another cuda:N index reaching the resolver behaves the same -------
+
+
+def test_explicit_cuda_index_on_amd_resolves_to_rocm(tmp_path, monkeypatch):
+    module = _load_audio_process()
+    _set_linux(module, monkeypatch)
+    rocm_python = _make_fake_python(tmp_path / ".venv-drumsep-rocm" / "bin" / "python")
+
+    def fake_verify(path, require_gpu=False, **kwargs):
+        if path == rocm_python and require_gpu:
+            return True, "ok", _rocm_versions_payload()
+        return False, "missing", {}
+
+    monkeypatch.setattr(module, "_verify_drumsep_runtime", fake_verify)
+    selected, kind, info = module._select_drumsep_runtime("cuda:1", tmp_path)
+
+    assert selected == rocm_python
+    assert kind == "rocm"
+    assert info["selection_policy"] == "explicit_cuda_namespace_resolved_rocm"
+
+
+# --- C: ROCm runtime missing -> falls through to existing NVIDIA path -----
+
+
+def test_explicit_cuda0_falls_through_to_nvidia_path_when_rocm_missing(tmp_path, monkeypatch):
+    module = _load_audio_process()
+    _set_linux(module, monkeypatch)
+    # Neither .venv-drumsep-rocm nor .venv-drumsep exists -- a plausible
+    # plain NVIDIA machine that has never run DrumSep before.
+
+    def fake_verify(path, require_gpu=False, require_cuda=False, **kwargs):
+        return False, "missing", {}
+
+    monkeypatch.setattr(module, "_verify_drumsep_runtime", fake_verify)
+    selected, reason, info = module._select_drumsep_runtime("cuda:0", tmp_path)
+
+    assert selected is None
+    # Existing NVIDIA-path failure info, not relabeled as a ROCm failure.
+    assert "cuda_detail" in info
+    assert "cpu_detail" in info
+    assert info.get("selection_policy") != "explicit_cuda_namespace_resolved_rocm"
+    assert "rocm_python" not in info, ".venv-drumsep must not be misattributed as the ROCm runtime"
+
+
+# --- D: ROCm runtime present but broken -> deterministic ROCm failure -----
+
+
+def test_explicit_cuda0_reports_rocm_failure_when_rocm_runtime_broken(tmp_path, monkeypatch):
+    module = _load_audio_process()
+    _set_linux(module, monkeypatch)
+    rocm_python = _make_fake_python(tmp_path / ".venv-drumsep-rocm" / "bin" / "python")
+
+    def fake_verify(path, require_gpu=False, require_cuda=False, **kwargs):
+        if path == rocm_python:
+            return False, "rocm_no_hip", {}
+        return False, "missing", {}
+
+    monkeypatch.setattr(module, "_verify_drumsep_runtime", fake_verify)
+    selected, reason, info = module._select_drumsep_runtime("cuda:0", tmp_path)
+
+    assert selected is None
+    assert reason == "broken"
+    assert info["rocm_detail"] == "rocm_no_hip"
+    assert info["selection_policy"] == "explicit_cuda_namespace_resolved_rocm"
+    # The genuine-NVIDIA-CUDA check already ran (and missed) first, so its
+    # detail is present for diagnostics, but the CPU fallback must not have
+    # been chased -- this is a ROCm runtime problem, not a CPU-only machine.
+    assert info["cuda_detail"] == "missing"
+    assert "cpu_detail" not in info
+
+
+# --- E: genuine NVIDIA machine keeps its existing CUDA behavior -----------
+
+
+def test_explicit_cuda0_on_nvidia_machine_unchanged(tmp_path, monkeypatch):
+    module = _load_audio_process()
+    _set_linux(module, monkeypatch)
+    cuda_capable_python = _make_fake_python(tmp_path / ".venv-drumsep" / "bin" / "python")
+    # .venv-drumsep-rocm does not exist on an NVIDIA machine.
+
+    def fake_verify(path, require_gpu=False, require_cuda=False, **kwargs):
+        if require_gpu and not require_cuda:
+            # This is the ROCm disambiguation probe -- .venv-drumsep-rocm
+            # is absent on a genuine NVIDIA machine.
+            return False, "missing", {}
+        if require_cuda and path == cuda_capable_python:
+            return True, "ok", _nvidia_versions_payload()
+        return False, "missing", {}
+
+    monkeypatch.setattr(module, "_verify_drumsep_runtime", fake_verify)
+    selected, kind, info = module._select_drumsep_runtime("cuda:0", tmp_path)
+
+    assert selected == cuda_capable_python
+    assert kind == "cuda", "NVIDIA Linux explicit CUDA must remain unchanged"
+    assert info["selection_policy"] == "explicit_cuda"
+
+
+# --- I / J: the ROCm disambiguation is structurally Linux-only -------------
+
+
+def test_rocm_namespace_disambiguation_is_scoped_to_linux_explicit_cuda_branch():
+    text = AUDIO_PROCESS.read_text(encoding="utf-8")
+    linux_idx = text.index('if explicit_cuda and sys.platform.startswith("linux"):')
+    windows_idx = text.index("if _is_windows_runtime() and explicit_cuda:")
+    linux_block = text[linux_idx : linux_idx + 3200]
+    windows_block = text[windows_idx : windows_idx + 1600]
+    assert "explicit_cuda_namespace_resolved_rocm" in linux_block
+    assert "explicit_cuda_namespace_resolved_rocm" not in windows_block, "Windows explicit CUDA must be untouched"
+    # macOS never reaches an explicit_cuda branch at all: its GPU path is
+    # gated on _is_darwin_arm64() with device "mps"/"gpu"/"auto", which
+    # returns before explicit_cuda is ever evaluated.
+    darwin_idx = text.index("if _is_darwin_arm64() and normalized_request in")
+    assert darwin_idx < linux_idx, "macOS's mps-preferring branch must be evaluated before the Linux cuda:N branch"
