@@ -2602,13 +2602,48 @@ def _select_drumsep_runtime(
             info["selection_policy"] = "explicit_cpu"
             info["cpu_python_attempts"] = cpu_attempts
             return selected_cpu_python, "cpu", info
+
+        # No dedicated CPU DrumSep runtime (.venv-drumsep) exists or it is
+        # broken. On Linux, a ROCm DrumSep runtime (.venv-drumsep-rocm), when
+        # present, is a fully CPU-capable Python environment in its own
+        # right (proven: real production DrumSep helper run, device=cpu,
+        # inside .venv-drumsep-rocm -- effective_device/model_device=cpu,
+        # CPUExecutionProvider, no GPU touched). Probing it with
+        # require_gpu=False here only checks that its interpreter and
+        # required packages import cleanly, exactly like the cpu_candidates
+        # probe above -- it does not require the GPU to be present or
+        # working. This mirrors the existing cuda-falls-back-to-cpu and
+        # mps-falls-back-to-cpu conventions elsewhere in this function: fall
+        # through to the next tier regardless of whether the preferred tier
+        # was "missing" or "broken".
+        rocm_cpu_detail = "missing"
+        rocm_cpu_attempts: List[Dict[str, Any]] = []
+        if sys.platform.startswith("linux"):
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_as_cpu_start", file=sys.stderr)
+            selected_rocm_cpu_python, rocm_cpu_detail, rocm_cpu_payload, rocm_cpu_attempts = _probe_drumsep_runtime_candidates(
+                rocm_candidates, require_gpu=False
+            )
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_as_cpu_end detail={rocm_cpu_detail}", file=sys.stderr)
+            if selected_rocm_cpu_python is not None:
+                info = dict(rocm_cpu_payload or {})
+                info["kind"] = "cpu"
+                info["detail"] = rocm_cpu_detail
+                info["fallback_reason"] = f"cpu_skipped:{cpu_detail}"
+                info["selection_policy"] = "explicit_cpu_via_rocm_runtime"
+                info["runtime_source_family"] = "rocm"
+                info["cpu_python_attempts"] = cpu_attempts
+                info["rocm_cpu_python_attempts"] = rocm_cpu_attempts
+                return selected_rocm_cpu_python, "cpu", info
+
         info = {
             "cpu_detail": cpu_detail,
             "cpu_python": str(cpu_python),
             "cpu_python_attempts": cpu_attempts,
+            "rocm_cpu_detail": rocm_cpu_detail,
+            "rocm_cpu_python_attempts": rocm_cpu_attempts,
             "selection_policy": "explicit_cpu",
         }
-        reason = "missing" if cpu_detail == "missing" else "broken"
+        reason = "missing" if cpu_detail == "missing" and rocm_cpu_detail == "missing" else "broken"
         return None, reason, info
 
     if explicit_cuda and sys.platform.startswith("linux"):
