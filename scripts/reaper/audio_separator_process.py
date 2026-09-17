@@ -2663,6 +2663,50 @@ def _select_drumsep_runtime(
             info["cuda_python_attempts"] = cuda_attempts
             return selected_cuda_python, "cuda", info
 
+        # No genuine NVIDIA CUDA runtime verified. AMD/HIP GPUs also live
+        # under the torch.cuda / "cuda:N" namespace on ROCm builds of
+        # PyTorch -- a literal "cuda:0" request on Linux is not proof the
+        # physical backend is NVIDIA, so before falling back to CPU, check
+        # the ROCm candidate against the exact same live capability test
+        # Auto's gpu_prefer_rocm branch already trusts (require_gpu=True:
+        # torch_hip non-empty, torch_cuda_available, real device names) --
+        # not merely whether .venv-drumsep-rocm exists on disk. This only
+        # runs after the real NVIDIA check above has already failed, so a
+        # machine with genuine NVIDIA CUDA available is never redirected to
+        # ROCm. On a genuine NVIDIA machine with no ROCm runtime installed,
+        # this candidate is simply absent (detail=="missing"), so this falls
+        # straight through to the unmodified CPU fallback below.
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_for_cuda_namespace_start", file=sys.stderr)
+        selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(
+            rocm_candidates, require_gpu=True
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_for_cuda_namespace_end detail={rocm_detail}", file=sys.stderr)
+        if selected_rocm_python is not None:
+            info = dict(rocm_payload or {})
+            info["kind"] = "rocm"
+            info["detail"] = rocm_detail
+            info["fallback_reason"] = f"cuda_skipped:{cuda_detail}"
+            info["selection_policy"] = "explicit_cuda_namespace_resolved_rocm"
+            info["rocm_python_attempts"] = rocm_attempts
+            info["cuda_python_attempts"] = cuda_attempts
+            return selected_rocm_python, "rocm", info
+        if rocm_detail != "missing":
+            # .venv-drumsep-rocm exists (Setup/Repair specifically provisioned
+            # it for this machine) but failed its own ROCm capability check --
+            # this is a ROCm runtime problem, not evidence this is a plain
+            # CPU-only machine. Report it as such instead of chasing the
+            # (irrelevant here) CPU fallback below, which would otherwise
+            # misattribute the failure to .venv-drumsep.
+            info = {
+                "cuda_detail": cuda_detail,
+                "rocm_detail": rocm_detail,
+                "rocm_python": str(rocm_python),
+                "cuda_python_attempts": cuda_attempts,
+                "rocm_python_attempts": rocm_attempts,
+                "selection_policy": "explicit_cuda_namespace_resolved_rocm",
+            }
+            return None, "broken", info
+
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
         selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(
             cpu_candidates,
