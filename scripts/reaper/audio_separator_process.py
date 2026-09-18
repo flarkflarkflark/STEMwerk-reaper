@@ -241,9 +241,12 @@ def _should_use_drumsep_mps_direct_demix(
         return False, "not_direct_kit_stage2"
     if sys.platform != "darwin":
         return False, "platform_not_darwin"
-    machine = platform.machine().lower()
-    if machine not in {"arm64", "aarch64"}:
-        return False, "machine_not_apple_silicon"
+    # The managed wrapper's UVR-equivalent MDXC reconstruction (below) is
+    # pure tensor arithmetic with no CUDA/MPS/Apple-Silicon-specific
+    # assumptions -- proven CPU-capable end-to-end on Intel macOS (physical
+    # Intel MacBook Pro 11,2, torch 2.2.2, audio-separator 0.23.0,
+    # CPUExecutionProvider), not just Apple Silicon. No architecture
+    # restriction beyond Darwin itself is required here.
     normalized_request = str(requested_device or "").strip().lower()
     if normalized_request not in {"auto", "cpu", "mps"}:
         return False, "requested_device_not_supported"

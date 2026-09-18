@@ -84,7 +84,14 @@ def test_managed_apple_silicon_mps_routes_to_uvr_equivalent_wrapper(monkeypatch)
     [
         ("route", "not_direct_kit_stage2"),
         ("platform", "platform_not_darwin"),
-        ("machine", "machine_not_apple_silicon"),
+        # "machine" (machine_not_apple_silicon) intentionally removed: the
+        # Intel macOS CPU DrumSep six-stem wrapper slice removed that
+        # rejection -- the UVR-equivalent wrapper reconstruction is proven
+        # CPU-capable on both Intel and Apple Silicon, so Darwin alone (not
+        # architecture) is now the platform gate. See
+        # test_gate_no_longer_rejects_intel_x86_64_or_amd64 below and
+        # tests/test_2314_macos_intel_drumsep_wrapper.py for the positive
+        # coverage this case used to guard against a regression of.
         ("runtime", "effective_runtime_not_direct_demix_capable"),
         ("built", "mps_not_built"),
         ("available", "mps_not_available"),
@@ -109,8 +116,6 @@ def test_gate_rejects_each_failed_condition(monkeypatch, mutation, reason):
         workflow_mode, workflow_source = "stems", "normal"
     elif mutation == "platform":
         monkeypatch.setattr(module.sys, "platform", "linux")
-    elif mutation == "machine":
-        monkeypatch.setattr(module.platform, "machine", lambda: "x86_64")
     elif mutation == "runtime":
         info["kind"] = "rocm"
     elif mutation == "built":
@@ -133,6 +138,30 @@ def test_gate_rejects_each_failed_condition(monkeypatch, mutation, reason):
         info,
         model,
     ) == (False, reason)
+
+
+@pytest.mark.parametrize("machine", ["x86_64", "amd64", "AMD64"])
+def test_gate_no_longer_rejects_intel_x86_64_or_amd64(monkeypatch, machine):
+    # Real-hardware evidence (physical Intel MacBook Pro 11,2, torch 2.2.2,
+    # audio-separator 0.23.0, CPUExecutionProvider) proved the UVR-equivalent
+    # wrapper reconstruction is CPU-capable regardless of architecture.
+    # Darwin + CPU + audio-separator 0.23.0 + the exact supported DrumSep
+    # model must now reach the same wrapper reason arm64 already reaches,
+    # for any machine string a non-Apple-Silicon Mac might report.
+    module = _load_audio_process()
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(module.platform, "machine", lambda: machine)
+    monkeypatch.delenv(module.MPS_FALLBACK_ENV, raising=False)
+    cpu_runtime = _valid_runtime_info()
+    cpu_runtime["kind"] = "cpu"
+    cpu_runtime["mps_built"] = False
+    cpu_runtime["mps_available"] = False
+    cpu_runtime["mps_experimental"] = False
+
+    assert _gate(module, runtime_info=cpu_runtime, requested_device="cpu") == (
+        False,
+        module.DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON,
+    )
 
 
 def test_auto_linux_and_rocm_do_not_activate_direct_demix(monkeypatch):
