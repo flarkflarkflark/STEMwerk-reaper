@@ -2046,8 +2046,14 @@ applyPresetAll = function() GLUE_HELPERS.applyPresetAll(STEMS) end
 
 local dialogWorkflowSource = ""
 
+-- Historical blanket policy block: Intel macOS (x86_64/amd64) used to be
+-- rejected here purely by architecture, regardless of actual runtime
+-- readiness. Removed -- Direct Kit / Kit Split availability is now decided
+-- by the same real provisioning/readiness state (ready_to_go.env /
+-- capabilities.env) that already governs every other platform, not by
+-- architecture alone.
 function intelMacDksPolicyBlocked()
-    return OS == "macOS" and (ARCH == "x86_64" or ARCH == "amd64")
+    return false
 end
 
 function recordIntelMacDksPolicyBlock(source)
@@ -9129,8 +9135,12 @@ function trSafeValue(key, fallback)
     return value
 end
 
+-- Same historical blanket policy as intelMacDksPolicyBlocked() above, but
+-- gating the actual run (runSeparationWorkflow) rather than button
+-- visibility/selection. Removed for the same reason: architecture alone no
+-- longer decides Direct Kit / Kit Split availability.
 local function intelMacDrumsepUnsupported()
-    return OS == "macOS" and (ARCH == "x86_64" or ARCH == "amd64")
+    return false
 end
 
 local function showIntelMacDrumsepUnsupportedMessage()

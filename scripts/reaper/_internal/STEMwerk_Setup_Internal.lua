@@ -2037,19 +2037,19 @@ function resolveDrumsepPolicyState(readyState, profile, backend)
     local drumsepStatus = trim(readyState.DRUMSEP_STATUS or "")
     local dksSupported = trim(readyState.DKS_SUPPORTED or "")
     local normalStemsSupported = trim(readyState.NORMAL_STEMS_SUPPORTED or "")
-    local readyDetail = trim(readyState.READY_TO_GO_DETAIL or "")
     local runtimeStatus = trim(readyState.DRUMSEP_READY_RUNTIME_STATUS or "")
     local modelStatus = trim(readyState.DRUMSEP_READY_MODEL_STATUS or "")
     local mainRuntimeStatus = trim(readyState.MAIN_RUNTIME_STATUS or "")
 
-    if drumsepStatus == "" and OS == "macOS"
-        and MAC_ARCH == "x86_64"
-        and profile == "mac-cpu"
-        and backend == "cpu"
-        and (readyDetail == "unsupported_mac_intel" or runtimeStatus == "skipped" or modelStatus == "skipped")
-    then
-        drumsepStatus = "unsupported_mac_intel"
-    end
+    -- Historical fallback removed: this used to invent drumsepStatus =
+    -- "unsupported_mac_intel" from architecture alone (OS=macOS,
+    -- MAC_ARCH=x86_64) whenever the ready_to_go state was incomplete/blank.
+    -- Architecture no longer decides support; a blank/incomplete state now
+    -- falls through to the same generic ready/skipped/missing derivation
+    -- used for every other platform below. A literal "unsupported_mac_intel"
+    -- value already present in readyState.DRUMSEP_STATUS itself (e.g. from a
+    -- stale pre-fix ready_to_go.env still on disk) is still honored as-is,
+    -- since drumsepStatus is only empty here when DRUMSEP_STATUS was blank.
     if drumsepStatus == "" then
         if runtimeStatus == "ok" and modelStatus == "ok" then
             drumsepStatus = "ready"
@@ -3481,7 +3481,6 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         if OS == "macOS" and MAC_ARCH == "x86_64" and profile == "mac-cpu" and backend == "cpu" then
             finalMessage[#finalMessage + 1] = "Setup completed using Intel macOS CPU fallback."
             finalMessage[#finalMessage + 1] = "MPS is unavailable on Intel Macs; CPU processing is expected."
-            finalMessage[#finalMessage + 1] = "Drum Kit Split is not enabled on Intel Macs in this release."
         end
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Python path: " .. tostring(verification.pythonPath)

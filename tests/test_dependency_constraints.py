@@ -1580,7 +1580,11 @@ def test_setup_internal_writes_drumsep_policy_capabilities():
     assert 'f:write("DKS_SUPPORTED=" .. tostring(data.dksSupported or "") .. "\\n")' in setup_internal
     assert 'f:write("NORMAL_STEMS_SUPPORTED=" .. tostring(data.normalStemsSupported or "") .. "\\n")' in setup_internal
     assert "function resolveDrumsepPolicyState(readyState, profile, backend)" in setup_internal
-    assert 'drumsepStatus = "unsupported_mac_intel"' in setup_internal
+    # Architecture alone no longer synthesizes "unsupported_mac_intel" when
+    # ready_to_go state is blank/incomplete (see
+    # test_setup_internal_drumsep_fallback_no_longer_invents_unsupported_
+    # from_arch_alone); a stale literal value already present in
+    # DRUMSEP_STATUS is still mapped to dksSupported=false here.
     assert 'dksSupported = drumsepStatus == "unsupported_mac_intel" and "false" or "true"' in setup_internal
     assert 'normalStemsSupported = "true"' in setup_internal
     assert 'drumsepStatus = drumsepStatus,' in setup_internal
@@ -1743,15 +1747,21 @@ def test_reapack_payload_includes_managed_python_runtime_files():
     assert "scripts/reaper/i18n/stemwerk_language_wrapper.lua" in index
 
 
-def test_intel_mac_drumsep_policy_blocks_dks_before_runtime_setup():
+def test_intel_mac_drumsep_policy_no_longer_blocks_dks_before_runtime_setup():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
 
-    assert 'local function intelMacDrumsepUnsupported()' in main_script
-    assert 'return OS == "macOS" and (ARCH == "x86_64" or ARCH == "amd64")' in main_script
-    assert 'trSafeValue("drumsep_intel_mac_unsupported_title", "Drum Kit Split unavailable on Intel Mac")' in main_script
-    assert '"drumsep_intel_mac_unsupported_body",' in main_script
+    # intelMacDrumsepUnsupported() used to reject the actual DKS run purely
+    # by architecture (OS=macOS, ARCH=x86_64/amd64), independent of real
+    # runtime/model readiness. That blanket rejection is removed: the
+    # function is now an unconditional `return false`, so the dispatch
+    # guard below it can never fire again -- real readiness (verified via
+    # verifyProcessingAssetsReady/verifyDependenciesReadyForProcessing)
+    # governs whether the run actually proceeds.
+    assert 'return OS == "macOS" and (ARCH == "x86_64" or ARCH == "amd64")' not in main_script
+    fn_start = main_script.index('local function intelMacDrumsepUnsupported()')
+    fn_end = main_script.index('\nend', fn_start)
+    assert main_script[fn_start:fn_end].strip().endswith('return false')
     assert 'if isDrumKitWorkflow and intelMacDrumsepUnsupported() then' in main_script
-    assert 'showIntelMacDrumsepUnsupportedMessage()' in main_script
     assert main_script.index('if isDrumKitWorkflow and intelMacDrumsepUnsupported() then') < main_script.index('if isDirectDKS then')
 
 
@@ -6478,11 +6488,20 @@ def test_macos_bootstrap_seeds_bundled_models_and_drumsep_before_ready_checks():
     assert '_bundled_drumsep_dir="$(bundled_drumsep_dir || true)"' in script
     assert 'copy_bundled_models_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"' in script
     assert 'MACOS_BUNDLED_DRUMSEP_STATUS="seeded"' in script
-    assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then' in script
-    assert 'READY_RUNTIME_STATUS="skipped"' in script
-    assert 'READY_DRUMSEP_MODEL_STATUS="skipped"' in script
-    assert 'READY_DETAIL="unsupported_mac_intel"' in script
-    assert 'log "drumsep_ready_status=unsupported_mac_intel"' in script
+    # x86_64 no longer takes a blanket "skipped"/unsupported_mac_intel
+    # shortcut here -- it reaches the same ensure_drumsep_assets() call as
+    # every other architecture, seeded after the bundled-drumsep copy above
+    # (see test_2313_macos_intel_dks_policy_removal.py for the behavioral
+    # proof that x86_64 actually executes this call).
+    assert 'if ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"; then' in script
+    assert 'READY_RUNTIME_STATUS="ok"' in script
+    assert 'READY_DRUMSEP_MODEL_STATUS="ok"' in script
+    assert 'READY_DETAIL="ok"' in script
+    _seed_to_ready_segment = script[
+        script.index('_bundled_drumsep_dir="$(bundled_drumsep_dir || true)"'):
+        script.index('write_ready_to_go_state "${READY_RUNTIME_KIND}"')
+    ]
+    assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then' not in _seed_to_ready_segment
     assert Path("installer/linux/payload/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl").is_file()
 
 

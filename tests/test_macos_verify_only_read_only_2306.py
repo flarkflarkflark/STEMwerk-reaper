@@ -98,14 +98,23 @@ def test_repair_and_rebuild_routes_remain_mutating_and_separate():
     assert 'install_stemwerk_core_target "${VENV_PY}"' in bootstrap
 
 
-def test_intel_and_apple_silicon_policy_is_unchanged():
+def test_intel_dks_blanket_policy_removed_apple_silicon_policy_unchanged():
+    # Superseded by the macOS Intel DKS policy-removal slice: this used to
+    # lock in the blanket architecture-only rejection of Direct Kit / Kit
+    # Split on Intel macOS (independent of any real runtime/model
+    # readiness), which that slice intentionally removes. See
+    # tests/test_2313_macos_intel_dks_policy_removal.py for the behavioral
+    # proof of the new contract; this test now only guards that the
+    # blanket-block source is genuinely gone and that unrelated
+    # Apple-Silicon-specific behavior (arm64 -> mps runtime kind selection)
+    # is unchanged.
     setup = SETUP.read_text(encoding="utf-8")
     bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
     main = MAIN.read_text(encoding="utf-8")
-    assert 'drumsepStatus = "unsupported_mac_intel"' in setup
+    assert 'drumsepStatus = "unsupported_mac_intel"' not in setup
     assert 'dksSupported = drumsepStatus == "unsupported_mac_intel" and "false" or "true"' in setup
-    assert 'READY_DETAIL="unsupported_mac_intel"' in bootstrap
-    assert 'return OS == "macOS" and (ARCH == "x86_64" or ARCH == "amd64")' in main
+    assert 'READY_DETAIL="unsupported_mac_intel"' not in bootstrap
+    assert 'return OS == "macOS" and (ARCH == "x86_64" or ARCH == "amd64")' not in main
     assert 'READY_RUNTIME_KIND="mps"' in bootstrap
     assert 'if [ "${MAC_ARCH}" = "arm64" ]; then' in bootstrap
 
