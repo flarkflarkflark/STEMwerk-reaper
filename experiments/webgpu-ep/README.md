@@ -727,6 +727,74 @@ file was touched. No CUDA/ROCm/DirectML code was touched. `rocm_reference_benchm
 was not run or modified on macOS (Linux/ROCm-only, out of scope here per the brief's own
 §8 MPS-reference guidance). Nothing pushed in this phase.
 
+## Cross-platform regression check (Linux, after the macOS merge)
+
+Status date: 2026-09-19. After Phase M1's commit (`467c7ce2a`) was fast-forward-merged
+into the Linux worktree (`git merge --ff-only`, no rebase/reset), every Linux L1/L2 test
+was re-run unchanged, same model (`UVR_MDXNET_KARA_2.onnx`), same test clip, same
+`--pci-bus-id 0000:03:00.0` (still required explicitly — the CLI default change in §M1.11
+item 2 only affects single-GPU systems). Purpose: confirm the macOS-driven code changes
+(§M1.11 — all isolated to `resource_sampler.py`'s macOS-only branch, two CLI defaults, one
+dependency pin, one cross-platform bug fix) did not alter Linux/AMD/Vulkan behavior.
+`webgpu_adapter.py` — the module that actually does provider selection, device matching,
+and graph-placement verification — was not touched by the macOS work at all.
+
+| Check | Original L1/L2 (pre-merge) | Re-run (post-merge) | Regression? |
+|---|---|---|---|
+| RX 9070 correctly selected (of 2 GPUs) | PASS | PASS | No |
+| WebGPU dispatches via Vulkan | PASS (RADV) | PASS (RADV) | No |
+| Graph placement, real model | 185/185 nodes on WebGPU | **185/185 nodes on WebGPU** | No |
+| CPU fallback | 0 nodes | **0 nodes** | No |
+| End-to-end audio + output validation | PASS | PASS | No |
+| Stem routing | PASS (corr 1.0 vs 0.9989) | **PASS (corr 1.0 vs 0.9989, identical)** | No |
+| Raw numeric diff vs CPU (Vocals/Instr.) | 7.08e-08 / 6.61e-08 | **7.08e-08 / 6.61e-08 (bit-identical)** | No |
+| File numeric diff vs CPU | 1.00× PCM16 LSB (both stems) | **1.00× PCM16 LSB (both stems, bit-identical)** | No |
+| WebGPU warm median (4 runs) | 1.41 s | **1.41 s** | No |
+| CPU warm median (4 runs) | 8.13 s | 7.55 s | Within documented noise band (5.98–9.1 s across prior runs); not WebGPU-related |
+| Speedup vs CPU | 5.75× | 5.34× | Tracks the CPU-side noise above, not a WebGPU change |
+| ROCm graph placement | 139/139 nodes | **139/139 nodes** | No |
+| ROCm warm avg (4 runs) | 1.13 s | 1.12 s | No (within run-to-run stdev already documented, ~0.01 s) |
+| ROCm raw numeric diff vs CPU | 4.47e-08 / 4.10e-08 | **4.47e-08 / 4.10e-08 (bit-identical)** | No |
+
+**Conclusion: no regression.** Every GPU-execution-proof, correctness, and routing check
+reproduced exactly (several numbers bit-for-bit identical, which is expected — the code
+paths that produce them, `webgpu_adapter.py` and the ONNX graph/model itself, were not
+touched by the macOS commit). The only figures that moved at all are CPU-side wall-clock
+timings, and they moved by an amount already characterized as ordinary desktop
+scheduling noise in the original L2 report — not attributable to any code change.
+
+### Combined Linux/macOS status
+
+| Onderdeel | Linux AMD (RX 9070, Vulkan) | macOS M1 (Metal) |
+|---|---|---|
+| Native WebGPU EP | **PASS** — registers, 2 devices found, RX 9070 selected explicitly via `pci_bus_id` | **PASS** — registers, 1 device found, auto-selected |
+| Vulkan/Metal | **PASS** — Dawn→Vulkan via RADV (Mesa 26.2.2; RADV self-reports non-conformant, functioned correctly regardless) | **PASS** — Dawn→Metal, binary-verified (`otool -L`: Metal.framework only, no Vulkan/MoltenVK; embedded Dawn Metal-backend source paths) |
+| GPU graph execution | **PASS** — 185/185 nodes on WebGPU (log-verified) | **PASS** — 185/185 nodes on WebGPU (log-verified, identical node count) |
+| CPU fallback | **PASS** — 0/185 nodes | **PASS** — 0/185 nodes |
+| End-to-end audio | **PASS** — 2 stems, validated (sr/ch/duration/NaN/silence/clipping), stem routing correct | **PASS** — 2 stems, validated, stem routing correct |
+| Numerical validation | **PASS** — raw 7.08e-08/6.61e-08, file 1.00× PCM16 LSB, both within pre-declared tolerance | **PASS** — raw 3.58e-07/3.28e-07, file 1.00× PCM16 LSB, both within the same pre-declared tolerance |
+| Benchmark | **PASS** — warm median 1.41 s WebGPU vs 7.55–8.13 s CPU (5.3–5.75×); ROCm reference 1.12–1.13 s (7.2×) | **PASS** — warm median 4.11 s WebGPU vs 6.90 s CPU (1.68×); CoreML reference informational only (lower rigor) |
+| Memory validation | **RSS: PASS** (reliable, per-process) — **VRAM/GPU-util: BLOCKED** (whole-GPU only, not per-process attributable) | **RSS: PASS with caveat** (peak-since-process-start semantics, not per-phase) — **VRAM/GPU-util: BLOCKED** (no macOS tooling without privileged `powermetrics`, out of scope); real swap pressure observed on 8 GB unified memory, no OOM |
+
+Different hardware, different test clip lengths (20 s Linux vs 6 s macOS — the macOS clip
+was a separately-sourced file, not copied over git, per the "no large audio in Git" rule)
+and different GPU architectures mean the **absolute** benchmark numbers are not a
+head-to-head speed ranking. What *is* directly comparable: both platforms independently
+prove correct, log-verified, zero-fallback GPU execution and numerically-within-tolerance
+output for the same unmodified ONNX model and pipeline code.
+
+**First proven cross-platform WebGPU route for this model.** With Linux/AMD (RX 9070,
+Vulkan/RADV) and macOS/Apple Silicon (M1, Metal/Dawn) both independently confirmed —
+same branch, same unmodified ONNX graph, same `webgpu_adapter.py`, same verification
+standard (real per-node placement proof, not just "EP loaded") — `UVR_MDXNET_KARA_2.onnx`
+has now demonstrably run correctly and with real GPU execution, via the same experimental
+code, on two different GPU vendors and two different operating systems. **This is a
+statement about one tested model on two tested machines, not a production-readiness
+claim for WebGPU EP in general or for STEMwerk's wider model catalog** — see §9's
+operator-coverage caveat (untested ops may still fall back to CPU on other models) and
+the M1 report's own caveats (8 GB unified-memory pressure, CoreML-reference-only rigor,
+etc.) before drawing any broader conclusion.
+
 ## Reproducing this experiment
 
 ```bash
