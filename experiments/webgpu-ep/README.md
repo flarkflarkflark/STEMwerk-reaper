@@ -1147,6 +1147,37 @@ not fully rule out a real fidelity gap without a genuine multi-instrument test c
 which wasn't available in this environment. **This is the recommended next step**,
 ahead of any further hardware/platform validation.
 
+## Phase L5: Demucs Real-Music Parity
+
+Status date: 2026-09-19. Starting HEAD `008f7ebc8` (pushed to origin before this phase
+began, verified). Full report: **`DEMUCS_REAL_MUSIC_PARITY.md`**. Directly resolves L4's
+flagged open question by re-running the same PyTorch/ONNX-CPU/ONNX-WebGPU comparison on
+genuine, dynamic multi-instrument content instead of L4's synthetic near-flat signal.
+
+**Headline result: real-music parity holds, cleanly, once settings are controlled.**
+Found real dynamic content in the user's own private local test fixtures (never
+committed — `local/` is fully gitignored) and reconstructed a proxy mix from 4 already-
+separated real stems (115× more dynamic than L4's signal, measured not assumed). With
+`shifts=0` on both sides (a controlled, deterministic setting — Demucs' shift-averaging
+isn't implemented in the community ONNX package at all, see below), **PyTorch and ONNX
+CPU agree with correlation 0.997–0.9997 across all 4 stems**, and **ONNX CPU and ONNX
+WebGPU agree with correlation ≥0.99999** — both a materially cleaner result than L4's
+noisy synthetic-signal numbers. Graph placement re-confirmed: **1594/1594 nodes on
+WebGPU, zero CPU fallback**, matching L4 exactly on real content. Stem routing is now
+unambiguous (routing-matrix diagonal ≥0.9967 vs off-diagonal ≤0.062, vs L4's noisier
+matrix). Also strengthened L4's model-identity question: STEMwerk's actual PyTorch
+checkpoint (`955717e8-8726e21a.th`) carries Meta/FAIR's own self-checksummed filename
+convention, directly verified to match its content hash.
+
+**One real, disclosed gap remains**: comparing against STEMwerk's actual *production*
+setting (`shifts=2`, Demucs' shift-based test-time averaging) rather than the controlled
+`shifts=0` shows a larger gap — but a dedicated PyTorch-only diagnostic (`shifts=2` vs
+`shifts=0`, no ONNX involved at all) produces a gap of nearly identical size, pointing
+squarely at the missing shift-averaging feature in the community ONNX package (not an
+export or WebGPU defect) as the explanation. Recommended next step: implement
+shift-averaging around the existing ONNX session (a calling-code-only change, no model
+edits) and re-verify — before further hardware/platform validation.
+
 ## Reproducing this experiment
 
 ```bash
