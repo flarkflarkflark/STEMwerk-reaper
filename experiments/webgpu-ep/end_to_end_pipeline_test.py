@@ -21,6 +21,10 @@ Pre-declared tolerances (see README.md "Numerical tolerances" for the rationale)
 Usage:
     python end_to_end_pipeline_test.py <input.wav> [--model-cache DIR] [--out-dir DIR]
                                         [--pci-bus-id 0000:03:00.0]
+
+    --pci-bus-id is Linux/multi-GPU only (passed straight to webgpu_adapter.select_device());
+    omit it on macOS or any single-WebGPU-device system -- the one available device is
+    selected automatically.
 """
 import argparse
 import json
@@ -167,7 +171,7 @@ if __name__ == "__main__":
     ap.add_argument("input_wav")
     ap.add_argument("--model-cache", default="/home/flark/stemwerk-rnd/venvs/webgpu-ep/model-cache")
     ap.add_argument("--out-dir", default="/tmp/stemwerk-webgpu-l2/e2e")
-    ap.add_argument("--pci-bus-id", default="0000:03:00.0")
+    ap.add_argument("--pci-bus-id", default=None, help="Linux/multi-GPU only; omit on macOS/single-GPU systems")
     args = ap.parse_args()
 
     input_info = sf.info(args.input_wav)

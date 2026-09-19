@@ -340,9 +340,11 @@ EP for this exact ONNX file.
 
 ### 7. macOS M1 readiness
 
-**NOT TESTED / BLOCKED on hardware access** — no macOS execution occurred in either
-phase, per the brief's instruction not to report a Metal PASS without running on the
-actual M1.
+**Superseded — see "Phase M1: native macOS Metal validation" below.** Actual execution
+on a physical M1 has now occurred and is reported there, per the brief's instruction not
+to report a Metal PASS without running on the actual hardware. This section is kept
+for historical context (what was predicted before that run, and how close the
+prediction was).
 
 What's ready:
 - `webgpu_adapter.select_device()` isolates the one genuinely Linux/Vulkan-specific
@@ -414,7 +416,7 @@ opened as a PR in either phase.
 | WebGPU benchmark | **PASS** (warm median 1.41 s, stdev 0.007 s, 4 runs, 5.75× vs CPU) |
 | ROCm comparison | **PASS** — genuine same-graph comparison (139/139 nodes, warm median 1.13 s, 7.19× vs CPU) |
 | RAM/VRAM measurements | **RSS: PASS** (per-process, reliable) / **VRAM & GPU-util: BLOCKED** (whole-GPU only, not per-process attributable without more tooling — reported with explicit reliability caveats, not as clean numbers) |
-| macOS readiness | **READY** (code is platform-generic except one isolated device-selection function) / execution itself **BLOCKED** on M1 hardware access |
+| macOS readiness | See "Phase M1: native macOS Metal validation" below — actual M1 execution now done |
 
 ### Branch / commits / files (this update)
 
@@ -441,29 +443,321 @@ opened as a PR in either phase.
 - What's missing for macOS M1: see §7 (mainly: actual hardware execution, and an 8 GB
   unified-memory feasibility check before any perf claim).
 
+## Phase M1: native macOS Metal validation
+
+Status date: 2026-09-19. **These are macOS/Apple Silicon results, on different hardware,
+a different input clip, and a different CPU/GPU/memory architecture than Phase L1/L2's
+Linux/AMD RX 9070 results above — they are not directly comparable as absolute numbers
+and must not be read as a cross-platform speed ranking.** Same shared codebase, same
+branch, same ONNX model, same `audio-separator` pipeline.
+
+### M1.1 Hardware and environment
+
+- Machine: MacBook Air (MacBookAir10,1), Apple M1, **8 GB unified memory** (shared
+  CPU+GPU, not separate VRAM — see M1.6).
+- macOS 26.7 (build 25G229), native arm64 throughout — **no Rosetta/x86_64 anywhere**.
+- Python: the existing STEMwerk-managed Python 3.12.13 (arm64, already installed at
+  `~/Library/Application Support/STEMwerk/python/`, read-only — used only as the
+  interpreter to create a brand-new, fully separate venv; never modified). Homebrew's
+  only `python3` on this machine is 3.14, too new for reliable ARM64 wheel coverage
+  across this dependency set at the time of testing — the managed 3.12.13 was used
+  instead, consistent with "avoid improvising with an incompatible build."
+- Venv: `/Users/flark/stemwerk-m1-validation/venvs/webgpu-ep/` (outside git, outside
+  any STEMwerk production venv, local APFS).
+- Repo: canonical checkout `/Users/flark/GIT/STEMwerk` untouched; worktree
+  `/Users/flark/stemwerk-m1-validation/worktrees/webgpu-ep`, branch `experiment/webgpu-ep`
+  checked out from `origin/experiment/webgpu-ep` (HEAD `ae75db926`, the documented L2
+  commit) — same branch, no new branch, existing history preserved and confirmed present
+  (`dbfeab5` L1 + `ae75db9` L2 both verified as ancestors before any work started). All
+  other existing M1 STEMwerk worktrees (standalone, core, other STEMwerk checkouts)
+  confirmed untouched.
+
+### M1.2 Dependency install
+
+`pip install -r requirements-webgpu-experiment.txt` into the fresh venv: **every package
+resolved to a native `macosx_*_arm64`/`universal2` wheel** — `onnxruntime-ep-webgpu==0.3.0`,
+`onnxruntime==1.30.0`, `torch==2.14.0`, all of it. No source compilation needed except a
+small Cython extension (`diffq`, unrelated to this experiment's actual code path, pulled
+in transitively by `audio-separator`), which built natively without issue. **This alone
+already resolves the biggest open unknown**: the README's own §3 prediction of a
+`macosx_14_0_universal2` wheel for `onnxruntime-ep-webgpu` was correct, and no
+ARM64-compatibility blocker was hit.
+
+One real gap found and fixed: `audioread` (imported by
+`audio_separator.separator.uvr_lib_v5.spec_utils`) was **not** pulled in automatically by
+pip's resolver on this install, causing an immediate `ModuleNotFoundError` on the very
+first `import audio_separator`. Pinned explicitly in `requirements-webgpu-experiment.txt`
+(`audioread==3.1.0`) — a plain missing transitive dependency, not a platform-specific
+workaround, so this fix applies to both platforms' requirements file equally.
+
+### M1.3 WebGPU EP availability and device selection — zero code changes needed
+
+```
+EP beschikbaar: True (1 GPU device(s) found)
+  - vendor_id=4203 device_id=0 metadata={}
+```
+
+`vendor_id=4203` = `0x106B` = Apple Inc.'s registered PCI vendor id. Exactly **one**
+WebGPU-capable device, with **no `pci_bus_id` metadata at all** (as the README's own §3
+macOS port note predicted) — `webgpu_adapter.select_device()`'s existing "auto-pick the
+only device when none is given" branch handled this with **zero changes to
+`webgpu_adapter.py` itself**. The only device-selection code that needed touching was two
+scripts' CLI *default value*, not the shared adapter (§M1.7).
+
+### M1.4 Metal backend proof (objective, binary-level)
+
+The brief requires more than "WebGPU EP works" — it requires evidence the backend
+actually dispatching is Metal specifically. Two independent, verifiable proofs, not just
+an assumption:
+
+1. **Binary linkage**: `otool -L` on the installed
+   `libonnxruntime_providers_webgpu.dylib` shows exactly one linked framework:
+   `/System/Library/Frameworks/Metal.framework` — no Vulkan/MoltenVK library linked at
+   all. This `.dylib` architecturally *cannot* dispatch through anything but Metal on
+   this machine.
+2. **Embedded Dawn source paths**: `strings` on the same binary contains compiled-in
+   debug paths from Dawn's own Metal backend implementation
+   (`dawn-src/src/dawn/native/metal/DeviceMTL.mm`, `ComputePipelineMTL.mm`,
+   `ShaderModuleMTL.mm`, etc.) — the actual backend code that shipped in this build.
+3. (Runtime, weaker on its own but corroborating) onnxruntime's verbose C++ log during
+   a real session shows Dawn's `webgpu_context.cc` dispatching real named GPU programs
+   (`"Conv2dMM[...]"`, `"Transpose[...]"`, `"BatchNormalization[...]"`, `"MatMul[...]"`
+   — real MDX-Net UNet op names, not synthetic).
+
+**Metal-backend bewezen: PASS**, on binary/architectural evidence, not inference from
+"WebGPU probably means Metal on macOS."
+
+### M1.5 L1-equivalent probe (`webgpu_ep_probe.py`)
+
+Real run, unmodified conv-op test model, **PASS on every checkpoint**:
+
+| Checkpoint | Result |
+|---|---|
+| EP beschikbaar | **PASS** — 1 device found |
+| EP initialisatie geslaagd | **PASS** |
+| GPU-inferentie aangetoond | **PASS** — `"All nodes placed on [WebGpuExecutionProvider]. Number of nodes: 3"`, verified via the same stderr-fd log-capture standard as Linux (not just `get_providers()`) |
+| Numeriek gevalideerd | **PASS** — `max_abs_diff=1.91e-06 correlation=1.0000000000` vs CPU EP |
+
+### M1.6 L2-equivalent: full end-to-end audio pipeline (`end_to_end_pipeline_test.py`)
+
+**Input differs from Linux, documented explicitly per the brief's own allowance**: Linux
+L2 used a 20 s clip that was never committed to git (not reproducible from this repo).
+macOS M1 used an existing real 6.00 s / 44.1 kHz / stereo / PCM16 clip already present on
+this machine from prior STEMwerk validation work
+(`stemwerk-m1-validation/evidence/audio/m1a-test-clip-6s.wav`) — one single controlled
+file, used identically for both the CPU and WebGPU runs below, so the CPU-vs-WebGPU
+comparison *within* this table is still apples-to-apples; only the absolute Linux-vs-macOS
+numbers are not.
+
+Model: `UVR_MDXNET_KARA_2.onnx`, not present in the local STEMwerk model cache — fetched
+fresh by `audio-separator`'s own model catalog/download mechanism (the same "existing
+reliable model source" the Linux phases used) into an isolated cache dir outside git and
+outside the production STEMwerk model cache. No manual file copying between machines.
+
+| Check | Result |
+|---|---|
+| WebGPU graph execution | **PASS** — `"All nodes placed on [WebGpuExecutionProvider]. Number of nodes: 185"` — **identical node count to Linux** (same model, same graph, confirms the plugin-EP graph placement is hardware-independent for this model) |
+| CPU fallback detection | **PASS** — 0 fallback nodes |
+| End-to-end audio | **PASS** — both providers produced 2 stems (Vocals, Instrumental) each, no crash, complete export |
+| Output validation | **PASS** for both providers: sr=44100, ch=2, duration=6.00s, no NaN/Inf, no silence, no clipping |
+| Stem routing | **PASS** — same-stem corr ≈ 1.000000 vs other-stem corr ≈ 0.917 for both stems (cf. Linux's 0.999) |
+| Raw (pre-export) numeric comparison | **PASS** — Vocals: corr=1.00000000, max_abs_diff=**3.58e-07**; Instrumental: corr=1.00000000, max_abs_diff=**3.28e-07** — same order of magnitude as Linux's 7.08e-08/6.61e-08, both far inside the pre-declared 5e-3 ceiling |
+| File (exported WAV) numeric comparison | **PASS** — both stems: max_abs_diff=3.05e-05 = **exactly 1.00× PCM16 LSB**, identical pattern to Linux |
+
+Both comparisons pass their pre-declared tolerance by a wide margin, same as Linux;
+CPU-vs-WebGPU inference difference is again close to the float32 noise floor.
+
+### M1.7 Benchmark (`benchmark_resources.py`, 4 runs)
+
+**A real correctness bug was found and fixed while running this**: the script's
+real-time-factor line was hardcoded to `20.0` (seconds) — correct by coincidence for
+Linux's actual 20 s clip, silently wrong for any other input duration. Fixed to read the
+real input file's duration via `soundfile.info(...).duration`; this is a platform-generic
+correctness fix (§9), not a macOS-specific change, and benefits any future Linux run with
+a differently-sized clip too.
+
+| Metric | CPU EP | WebGPU EP (Apple M1) |
+|---|---|---|
+| Session/model load | 0.98 s | 0.10 s |
+| First ("cold") run | 7.87 s | 4.39 s |
+| Warm runs (3 repeats), min–max | 6.72–7.18 s | 4.08–4.12 s |
+| Warm median | 6.90 s | 4.11 s |
+| Warm stdev | 0.229 s | 0.023 s |
+| Real-time factor (6.00 s clip, warm) | 0.9× (sub-real-time) | 1.5× |
+| Speedup vs CPU (warm median) | 1.0× (ref) | **1.68×** |
+| Graph placement | 100% CPU (by definition) | **185/185 nodes on GPU, 0 fallback** |
+
+**This 1.68× speedup is real but modest compared to Linux's 5.75× (WebGPU) — read this
+as an M1-vs-RX-9070 hardware-and-clip-length comparison, not as evidence WebGPU EP
+"works less well" on Metal.** Plausible, undistinguished-in-this-experiment contributing
+factors: (a) discrete RX 9070 vs. M1's unified/lower-power GPU is a large raw-throughput
+gap in general; (b) the 6 s clip is short enough that fixed per-call overhead (STFT/iSTFT
+setup, Python/audio-separator dispatch overhead) is a much larger fraction of total time
+than on a 20 s clip, compressing the ratio between backends. No attempt was made here to
+separate these factors quantitatively — flagged as a genuine open question, not resolved.
+
+**RSS (process memory), reliable, macOS-specific implementation** — `resource_sampler.py`
+had no macOS RSS reader at all (`/proc/self/status` doesn't exist on macOS); added a
+`sys.platform == "darwin"` branch using `resource.getrusage(RUSAGE_SELF).ru_maxrss`
+(Linux path byte-for-byte unchanged). **Honesty caveat specific to this
+implementation**: unlike the Linux `/proc`-based reader (an instantaneous point-in-time
+reading, repeatedly sampled), `ru_maxrss` is the process's **peak-ever-reached** RSS,
+monotonically non-decreasing for the process's whole lifetime. Since both the CPU and
+WebGPU benchmark phases ran in the same process, the WebGPU phase's reported
+`peak_rss_mb` can never be *lower* than the CPU phase's — in this run both read exactly
+**1440.75 MB**, meaning the process-wide peak was reached during (or by the end of) the
+CPU phase and the WebGPU phase never exceeded it. This is a correct "peak RSS touched by
+the process up to this point" reading, but it is **not** a clean per-phase-isolated peak
+the way the Linux reader can approximate one — read the two phases' numbers as a shared
+running maximum, not as two independent measurements.
+
+VRAM / whole-GPU utilization: **BLOCKED**, exactly as predicted in the original §7 — no
+`rocm-smi` equivalent exists on macOS, `_rocm_smi_json()`'s existing blanket
+`except Exception` already degrades this to `"reliable": false` with an honest note,
+with zero macOS-specific code required. No `ioreg`/`powermetrics`-based replacement was
+implemented (`powermetrics` needs elevated privileges to read GPU counters — out of
+scope for this experiment's "no system changes" constraint) — reported as an honest gap,
+not silently as zero or omitted.
+
+### M1.8 Memory pressure and swap — real pressure observed, no OOM
+
+The M1's 8 GB unified memory is shared between the OS, every other running app, and this
+experiment — unlike Phase L2's 16 GB *discrete-GPU-plus-separate-system-RAM* desktop.
+Measured with `memory_pressure`/`vm_stat`/`sysctl vm.swapusage` before and after the full
+benchmark run (this machine had other normal background load throughout, not a clean
+dedicated test box):
+
+| | Before | After |
+|---|---|---|
+| System-wide free memory | 37% | 71%¹ |
+| Swap file size | 2048 MB | 4096 MB |
+| Swap used | 988 MB | ~3300–3400 MB |
+
+¹ Higher *after* than *before* only because the benchmark's own process had exited and
+its memory was reclaimed by the time this was sampled — not evidence the run itself was
+memory-light. **The swap file itself grew (macOS dynamically resizes swap) and swap usage
+roughly tripled during the run** — real memory pressure did occur. **No crash, no OOM
+kill, no failed allocation** — the full benchmark (both providers, 4 runs each) completed
+successfully with peak process RSS of ~1.4 GB, comfortably under 8 GB on its own, but the
+system as a whole was clearly under real pressure from the combination of this process
+plus everything else already running. This machine should not be assumed to have comfortable
+headroom for a longer clip or additional concurrent load without re-checking swap/pressure.
+
+### M1.9 CoreML reference (closest real "MPS-equivalent" route for this ONNX model)
+
+Per the brief: no new model conversion was performed to get a PyTorch/MPS number (out of
+scope) — the *existing*, no-conversion-needed Apple-Silicon-native onnxruntime EP for
+this exact `.onnx` file is `CoreMLExecutionProvider` (onnxruntime's real name for it;
+there is no separate onnxruntime EP literally named "MPS" — PyTorch's MPS backend is a
+different, unrelated technology that would require converting the ONNX model to a
+PyTorch module, which the brief explicitly disallows). `ort.get_available_providers()`
+confirms it ships in the standard macOS onnxruntime wheel with zero extra installation.
+
+Ran once (not a full 4-run benchmark — this is an exploratory supplementary data point,
+not a required deliverable; "a CPU-vs-WebGPU comparison is sufficient for this phase to
+pass" per the brief) through the real `Separator`/`audio-separator` pipeline, same model,
+same input clip:
+
+- `get_providers()` confirms `CoreMLExecutionProvider` is first/active (not silently
+  falling back to CPU) — but **verification stops there**: no per-node placement log
+  parser equivalent to `webgpu_adapter.py`'s was built or attempted for CoreML, so this
+  is confirmed *active*, not confirmed *every node ran on GPU/ANE* the way the WebGPU
+  numbers are. Report this distinction honestly rather than implying equal rigor.
+- Single cold run: load=2.52 s, run=8.96 s — **slower than both the CPU and WebGPU warm
+  medians above** in this one uncontrolled comparison (no warm-up repeats were run, so
+  this may include CoreML's own first-call graph-compilation cost, similar to WebGPU's
+  cold-start effect — not established either way here).
+- Numeric comparison vs CPU: Vocals corr=0.999986, max_abs_diff=6.41e-04; Instrumental
+  corr=0.9999998, max_abs_diff=5.80e-04 — correct and well within any audible-difference
+  threshold, but **visibly looser than the WebGPU-vs-CPU raw comparison** (3.58e-07 /
+  3.28e-07) by roughly three orders of magnitude, consistent with CoreML using a
+  different internal numeric path (e.g. reduced precision on ANE) rather than a bug.
+
+**Conclusion: informational only, not a rigorous PASS/FAIL** — real, unmodified-model,
+unmodified-pipeline execution confirmed, but neither the execution-proof rigor nor the
+run-count of the CPU/WebGPU comparison above. Not required for M1 phase success per the
+brief, included because it was available at essentially no extra cost.
+
+### M1.10 Deliverables summary
+
+| Test | Resultaat |
+|---|---|
+| macOS ARM64 runtime | **PASS** — native arm64 throughout, no Rosetta |
+| Native WebGPU EP | **PASS** — registers, 1 device found |
+| Apple M1 GPU-detectie | **PASS** — vendor_id 0x106B (Apple), single device |
+| Metal-backend bewezen | **PASS** — binary-level (Metal.framework-only linkage + embedded Dawn Metal backend source paths), corroborated by runtime dispatch log |
+| ONNX-model geladen | **PASS** — real `UVR_MDXNET_KARA_2.onnx`, fetched via audio-separator's own catalog |
+| Graph execution | **PASS** — 185/185 nodes on WebGPU, identical count to Linux |
+| CPU fallback | **PASS** — 0 fallback nodes |
+| End-to-end audio | **PASS** — both providers, no crash, complete export |
+| Stem routing | **PASS** |
+| Numerieke gelijkwaardigheid | **PASS** — raw and file comparisons both within pre-declared tolerance |
+| CPU benchmark | **PASS** — warm median 6.90 s, stdev 0.229 s, 4 runs |
+| WebGPU benchmark | **PASS** — warm median 4.11 s, stdev 0.023 s, 4 runs, 1.68× vs CPU |
+| Memory validation | **PASS with caveats** — RSS reliable (~1.4 GB peak, no OOM); VRAM/GPU-util BLOCKED (no macOS tooling, as predicted); real swap pressure observed and documented, not hidden |
+| CoreML/MPS reference | **INFORMATIONAL** — real execution confirmed, lower verification rigor and single-run only, not a required PASS |
+
+### M1.11 Code changes made (all on `experiment/webgpu-ep`, no new branch)
+
+Small, isolated, and where the fix was genuinely cross-platform (not macOS-specific),
+applied identically for Linux too:
+
+1. `webgpu_ep_probe.py` — replaced its own inline, AMD-PCI-bus-id-hardcoded device
+   selection with the existing, already cross-platform `webgpu_adapter.select_device()` /
+   `create_verified_webgpu_session()` (adds an optional `--pci-bus-id` flag for parity
+   with the other two scripts). Removes duplicated device-matching logic rather than
+   adding new platform-specific code.
+2. `end_to_end_pipeline_test.py`, `benchmark_resources.py` — `--pci-bus-id` default
+   changed from the hardcoded RX 9070 bus id (`"0000:03:00.0"`) to `None`, so
+   `select_device()`'s existing "auto-pick the only device" behavior applies on any
+   single-GPU system (macOS included) without an override; Linux multi-GPU users
+   already pass `--pci-bus-id` explicitly per the documented reproduction commands, so
+   this is not a behavior change for them.
+3. `resource_sampler.py` — added a `sys.platform == "darwin"` branch to `_read_rss_kb()`
+   using `resource.getrusage(RUSAGE_SELF).ru_maxrss` (macOS has no `/proc`); Linux path
+   completely unchanged. See M1.7 for the peak-vs-instantaneous semantic caveat this
+   introduces.
+4. `requirements-webgpu-experiment.txt` — added missing transitive dependency
+   `audioread==3.1.0` (§M1.2); applies to both platforms.
+5. `benchmark_resources.py` — fixed the hardcoded-`20.0`-second real-time-factor bug
+   (§M1.7); a genuine cross-platform correctness fix, not a macOS accommodation.
+
+No production STEMwerk venv, model registry, GPU resolver, release branch, or REAPER UI
+file was touched. No CUDA/ROCm/DirectML code was touched. `rocm_reference_benchmark.py`
+was not run or modified on macOS (Linux/ROCm-only, out of scope here per the brief's own
+§8 MPS-reference guidance). Nothing pushed in this phase.
+
 ## Reproducing this experiment
 
 ```bash
-# 1. venvs (must be on a POSIX filesystem, NOT exFAT)
-python3.11 -m venv /path/to/.venv-webgpu
-source /path/to/.venv-webgpu/bin/activate
+# 1. venvs (must be on a POSIX filesystem, NOT exFAT; on macOS, any local APFS path is fine)
+python3.11 -m venv /path/to/.venv-webgpu     # or python3.12 -- see "Phase M1" for the
+source /path/to/.venv-webgpu/bin/activate    # macOS interpreter choice and why
 pip install -r requirements-webgpu-experiment.txt
 
 # 2. cheap sanity probe (no real model / audio needed)
-python webgpu_ep_probe.py
+python webgpu_ep_probe.py                    # macOS/single-GPU: no flags needed
 
 # 3. full pipeline test with real GPU-execution proof + output validation
-python end_to_end_pipeline_test.py /path/to/some.wav --pci-bus-id 0000:xx:00.0
+python end_to_end_pipeline_test.py /path/to/some.wav                       # macOS/single-GPU
+python end_to_end_pipeline_test.py /path/to/some.wav --pci-bus-id 0000:xx:00.0  # Linux/multi-GPU
 
 # 4. fair CPU-vs-WebGPU benchmark with resource sampling
-python benchmark_resources.py /path/to/some.wav --pci-bus-id 0000:xx:00.0 --runs 4
+python benchmark_resources.py /path/to/some.wav --runs 4                       # macOS/single-GPU
+python benchmark_resources.py /path/to/some.wav --pci-bus-id 0000:xx:00.0 --runs 4  # Linux/multi-GPU
 
-# 5. (optional, separate venv) same-graph ROCm reference
+# 5. (optional, separate venv, Linux/ROCm only -- not applicable on macOS) same-graph ROCm reference
 python3.11 -m venv /path/to/.venv-rocmref
 source /path/to/.venv-rocmref/bin/activate
 pip install onnxruntime-rocm numpy soundfile audio-separator
 python rocm_reference_benchmark.py /path/to/some.wav --runs 4
 ```
+
+`--pci-bus-id` is optional everywhere now (all three scripts default to `None` and let
+`webgpu_adapter.select_device()` auto-pick the only device on a single-GPU system, which
+is what every macOS machine is). Pass it explicitly only when more than one WebGPU device
+exists (e.g. a Linux desktop with a discrete GPU + an iGPU) — `select_device()` refuses to
+guess in that case rather than silently picking one.
 
 Find your GPU's PCI bus id with `lspci -nn | grep -i vga`. If your machine has only one
 WebGPU-capable GPU, `select_device()` will pick it automatically without `--pci-bus-id`.

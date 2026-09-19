@@ -19,6 +19,8 @@ import statistics
 import sys
 import time
 
+import soundfile as sf
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webgpu_adapter import patch_inference_session_for_provider_swap, select_device, GpuExecutionNotProvenError  # noqa: E402
 from resource_sampler import ResourceSampler  # noqa: E402
@@ -83,7 +85,7 @@ if __name__ == "__main__":
     ap.add_argument("--model-cache", default="/home/flark/stemwerk-rnd/venvs/webgpu-ep/model-cache")
     ap.add_argument("--out-dir", default="/tmp/stemwerk-webgpu-l2/resources")
     ap.add_argument("--runs", type=int, default=4)
-    ap.add_argument("--pci-bus-id", default="0000:03:00.0")
+    ap.add_argument("--pci-bus-id", default=None, help="Linux/multi-GPU only; omit on macOS/single-GPU systems")
     args = ap.parse_args()
 
     original_cls, gpu_reports = patch_inference_session_for_provider_swap(
@@ -111,9 +113,10 @@ if __name__ == "__main__":
               f"{gpu_reports[0]['all_nodes_placed_line']} ===")
         results["gpu_execution_proof"] = gpu_reports[0]
 
-        cpu_rtf = 20.0 / results["cpu"]["warm_median_s"]
-        gpu_rtf = 20.0 / results["webgpu"]["warm_median_s"]
-        print(f"=== Real-time factor (20s test clip): CPU={cpu_rtf:.1f}x  WebGPU={gpu_rtf:.1f}x "
+        clip_duration_s = sf.info(args.input_wav).duration
+        cpu_rtf = clip_duration_s / results["cpu"]["warm_median_s"]
+        gpu_rtf = clip_duration_s / results["webgpu"]["warm_median_s"]
+        print(f"=== Real-time factor ({clip_duration_s:.2f}s test clip): CPU={cpu_rtf:.1f}x  WebGPU={gpu_rtf:.1f}x "
               f"({gpu_rtf/cpu_rtf:.2f}x speedup) ===")
         results["speedup_warm_median"] = results["cpu"]["warm_median_s"] / results["webgpu"]["warm_median_s"]
 

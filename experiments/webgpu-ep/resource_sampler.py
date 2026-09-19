@@ -11,14 +11,36 @@ baseline already includes the compositor and any other GPU clients. This sampler
 reports both the raw peak AND a delta against the pre-run baseline as a best-effort
 attribution estimate, and callers/reports must present the delta as "attributable
 (best-effort)", never as a clean per-process peak.
+
+Platform isolation: RSS reading is the one piece with a real per-platform branch
+(Linux: /proc/self/status; macOS: resource.getrusage, no /proc) -- see _read_rss_kb().
+`rocm-smi` doesn't exist on macOS at all; `_rocm_smi_json()`'s existing blanket
+`except Exception` already degrades VRAM/GPU-util to "not reliable" there with no
+macOS-specific code needed -- this was true before any macOS work and remains
+unchanged.
 """
 import json
 import subprocess
+import sys
 import threading
 import time
 
 
 def _read_rss_kb():
+    if sys.platform == "darwin":
+        # No /proc on macOS. resource.getrusage(RUSAGE_SELF).ru_maxrss is the
+        # process's own peak-RSS-so-far (monotonically non-decreasing across the
+        # process lifetime, not a live/instantaneous reading like /proc/self/status
+        # below) -- still correct for this sampler's only reported RSS metric,
+        # "peak_mb" (max() over samples), and per-process reliable (unlike the
+        # rocm-smi-based VRAM/GPU-util metrics below, which stay macOS-unavailable).
+        # BSD/macOS reports ru_maxrss in bytes; Linux reports it in KB -- this
+        # platform branch only ever runs on macOS, so no KB/bytes ambiguity here.
+        try:
+            import resource
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
+        except Exception:
+            return None
     try:
         with open("/proc/self/status") as f:
             for line in f:

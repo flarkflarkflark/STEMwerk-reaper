@@ -3,7 +3,7 @@ Step 1 of the WebGPU EP experiment: prove the EP is available, initializes,
 and correctly identifies the target GPU -- independent of any real model.
 
 Usage:
-    python webgpu_ep_probe.py
+    python webgpu_ep_probe.py [--pci-bus-id 0000:xx:00.0]
 
 Distinguishes:
   - EP beschikbaar        -> plugin library registers, ort.get_ep_devices() lists it
@@ -11,29 +11,32 @@ Distinguishes:
   - GPU-inferentie aangetoond -> onnxruntime's own node-placement log shows the op
                                   ran on WebGpuExecutionProvider, not CPU fallback
   - Numeriek gevalideerd  -> output matches CPUExecutionProvider within float tolerance
+
+Device selection (--pci-bus-id, optional) is delegated to webgpu_adapter.select_device()
+-- the same shared, cross-platform selector end_to_end_pipeline_test.py and
+benchmark_resources.py use (Linux/multi-GPU: pass --pci-bus-id explicitly; macOS/single-GPU:
+omit it, the one available device is used automatically). This used to duplicate its own
+inline PCI-bus-id-only matching here; now it reuses the one adapter function instead.
 """
+import argparse
+
 import numpy as np
 import onnx
 import onnxruntime as ort
-import onnxruntime_ep_webgpu as webgpu_ep
 from onnx import helper, TensorProto
 
-ort.register_execution_provider_library("webgpu", webgpu_ep.get_library_path())
+from webgpu_adapter import create_verified_webgpu_session, list_webgpu_devices, select_device
 
-devices = ort.get_ep_devices()
-webgpu_devices = [d for d in devices if d.ep_name == webgpu_ep.get_ep_name()]
+ap = argparse.ArgumentParser()
+ap.add_argument("--pci-bus-id", default=None, help="Linux/multi-GPU only; omit on macOS/single-GPU systems")
+args = ap.parse_args()
+
+webgpu_devices = list_webgpu_devices()
 print(f"EP beschikbaar: {len(webgpu_devices) > 0} ({len(webgpu_devices)} GPU device(s) found)")
 for d in webgpu_devices:
     print(f"  - vendor_id={d.device.vendor_id} device_id={d.device.device_id} metadata={dict(d.device.metadata)}")
 
-# AMD vendor_id = 0x1002 = 4098 decimal. Pick by PCI bus id to target a specific card
-# on multi-GPU systems (this machine has an RX 9070 discrete GPU + a Phoenix iGPU).
-target = None
-for d in webgpu_devices:
-    if d.device.metadata.get("pci_bus_id") == "0000:03:00.0":  # RX 9070, see lspci
-        target = d
-        break
-assert target is not None, "RX 9070 WebGPU device not found -- adjust pci_bus_id for your system"
+target = select_device(pci_bus_id=args.pci_bus_id)
 
 # Minimal Conv graph -- representative op family for MDX-Net (UNet-style Conv2d stack).
 X = helper.make_tensor_value_info("X", TensorProto.FLOAT, [1, 3, 8, 8])
@@ -46,11 +49,11 @@ model.ir_version = 8
 onnx.checker.check_model(model)
 onnx.save(model, "/tmp/webgpu_ep_probe_model.onnx")
 
-so = ort.SessionOptions()
-so.log_severity_level = 0  # verbose: emits "All nodes placed on [...]" line
-so.add_provider_for_devices([target], {})
-session = ort.InferenceSession("/tmp/webgpu_ep_probe_model.onnx", sess_options=so)
+# create_verified_webgpu_session() proves placement via onnxruntime's own C++ log (not
+# just get_providers()) -- see webgpu_adapter.py / README.md section 3.
+session, report = create_verified_webgpu_session("/tmp/webgpu_ep_probe_model.onnx", target)
 print(f"EP initialisatie geslaagd: session providers = {session.get_providers()}")
+print(f"GPU-inferentie aangetoond: {report['all_nodes_placed_line']}")
 
 np.random.seed(0)
 x = np.random.randn(1, 3, 8, 8).astype(np.float32)
