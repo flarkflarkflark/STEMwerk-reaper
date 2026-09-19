@@ -188,7 +188,7 @@ def create_verified_webgpu_session(model_path, device, extra_options=None):
     return session, report
 
 
-def patch_inference_session_for_provider_swap(target_device_selector):
+def patch_inference_session_for_provider_swap(target_device_selector, graph_optimization_level=None):
     """
     Monkeypatches onnxruntime.InferenceSession so that any code (e.g. audio-separator's
     MDXSeparator.load_model()) requesting providers=["WebGpuExecutionProvider"] via the
@@ -200,6 +200,17 @@ def patch_inference_session_for_provider_swap(target_device_selector):
 
     `target_device_selector` is a zero-arg callable returning the EpDevice to target,
     e.g. `lambda: select_device(pci_bus_id="0000:03:00.0")`.
+
+    `graph_optimization_level` (optional `ort.GraphOptimizationLevel`): override the
+    session's optimization level for the WebGPU path only. Added in Phase L4 after
+    discovering that onnxruntime's default `ORT_ENABLE_ALL` triggers a WebGPU-EP-side
+    `EP_FAIL` on Demucs' ONNX graph specifically (`ConvActivationFusion`'s fused-Conv
+    node hits an unhandled case in the WebGPU EP's own Conv kernel --
+    `GetFusedActivationAttr(...).IsOK() was false`, confirmed via direct SessionOptions
+    experimentation: `ORT_ENABLE_BASIC`/`ORT_DISABLE_ALL` both avoid it, `ORT_ENABLE_ALL`
+    does not) -- this is an onnxruntime WebGPU EP bug on this specific graph shape, not
+    something MDX-Net's graph triggered in L1/L2/L3. Defaults to `None`, meaning
+    onnxruntime's own default (`ORT_ENABLE_ALL`) is used, unchanged from L1-L3 behavior.
 
     Returns (original_cls, reports): `original_cls` so a caller can restore
     `ort.InferenceSession = original_cls` later, and `reports`, a list that
@@ -217,6 +228,8 @@ def patch_inference_session_for_provider_swap(target_device_selector):
                 device = target_device_selector()
                 so = ort.SessionOptions()
                 so.log_severity_level = 0
+                if graph_optimization_level is not None:
+                    so.graph_optimization_level = graph_optimization_level
                 so.add_provider_for_devices([device], {})
                 with _capture_stderr_fd() as log_path:
                     super().__init__(path_or_bytes, sess_options=so)

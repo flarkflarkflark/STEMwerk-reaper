@@ -1111,6 +1111,42 @@ driver, Vulkan, or ROCm changes. No models were exported or converted (§L3.6 st
 research-only, as instructed). No large audio/model files, benchmark JSON output, or
 caches were committed.
 
+## Phase L4: Demucs ONNX Feasibility
+
+Status date: 2026-09-19. Starting HEAD `a9a274217` (pushed to origin before this phase
+began, verified). Full report: **`DEMUCS_ONNX_FEASIBILITY.md`**. Central question:
+Phase L3 found that zero current STEMwerk workflows use ONNX models — can the actual
+model behind them (`htdemucs`, PyTorch, via `audio-separator`'s `DemucsSeparator`) run
+through native WebGPU instead, using the exact same unmodified weights?
+
+**Headline result: yes.** An independently-verified, real, unmodified community
+`htdemucs` ONNX export (`StemSplit/demucs-onnx` on GitHub/PyPI, `StemSplitio/htdemucs-onnx`
+on Hugging Face — checked out and run directly, not taken on faith: real repo, real
+package, SHA256-verified artifact `68d0bf16...59a53`) runs on the RX 9070 with **1594/1594
+graph nodes on WebGpuExecutionProvider, zero CPU fallback**, after finding and fixing a
+real onnxruntime WebGPU-EP bug (`ConvActivationFusion` + the WebGPU `Conv` kernel;
+worked around with `graph_optimization_level=ORT_ENABLE_BASIC`, now an optional
+parameter on `webgpu_adapter.py`'s `patch_inference_session_for_provider_swap`,
+backward-compatible with L1–L3). WebGPU output matches CPU-onnxruntime output on the
+identical ONNX graph to within 1e-6–7e-6 (correlation ≥0.99999, all 4 stems) — a clean,
+decisive pass. **Confirmed empirically**: this ONNX route needs no PyTorch at inference
+at all (pure numpy + onnxruntime), a real potential path to replacing STEMwerk's
+current per-vendor torch builds (CUDA/ROCm/MPS/DirectML) with one onnxruntime+WebGPU
+install, for the Demucs-family workflow specifically.
+
+**One real open question, not glossed over**: comparing the ONNX output against
+STEMwerk's actual production PyTorch model showed a clean match on the dominant signal
+(`other` stem, correlation 0.999990) but a noisy match on `drums`/`bass`/`vocals`.
+Investigated directly — this repo's available test audio turned out to be a synthetic,
+near-flat-energy clip with no real musical transients (confirmed by measuring
+frame-to-frame energy variance, not assumed), making those three stems near-silent in
+*every* run regardless of backend. The WebGPU-vs-CPU-ONNX comparison (same graph,
+different EP) stayed clean on all 4 stems using the exact same signal, which points to
+a test-signal artifact rather than a WebGPU-specific defect — but this experiment could
+not fully rule out a real fidelity gap without a genuine multi-instrument test clip,
+which wasn't available in this environment. **This is the recommended next step**,
+ahead of any further hardware/platform validation.
+
 ## Reproducing this experiment
 
 ```bash
