@@ -795,6 +795,322 @@ operator-coverage caveat (untested ops may still fall back to CPU on other model
 the M1 report's own caveats (8 GB unified-memory pressure, CoreML-reference-only rigor,
 etc.) before drawing any broader conclusion.
 
+## Phase L3: Model Compatibility & Cross-Platform Runtime Feasibility
+
+Status date: 2026-09-19. Starting commit: `1a3d4f9796e0936c4d6e0893d2cfe2ff8cd5fd68`
+(verified, matched expectation). Mission shift from L1/L2/M1 ("can WebGPU run one
+model") to: **how much of STEMwerk could realistically share one native ONNX/WebGPU
+inference route, and what would it cost?** Performance is explicitly secondary this
+phase; correctness, maintainability, and distribution simplicity are the design goals.
+
+### L3.1 Model inventory — the central finding
+
+Full matrix: **`MODEL_COMPATIBILITY_MATRIX.md`** (companion file, built from direct
+repo inspection + the live `audio-separator` catalog, not memory). Headline finding,
+confirmed by tracing all seven REAPER-facing workflow scripts back through
+`STEMwerk.lua`'s actual dispatch logic:
+
+**No currently-reachable STEMwerk workflow uses any `.onnx` model at all.** Every real
+workflow (All Stems, Vocals/Bass/Drums Only, Karaoke, AI Separate, Drum Kit Split) runs
+either Demucs (`htdemucs`/`htdemucs_ft`/`htdemucs_6s`, native PyTorch, no ONNX
+involvement whatsoever) or, for Drum Kit Split's second stage, a single MDX23C `.ckpt`
+(also PyTorch). "Karaoke" does not select a dedicated karaoke model — it's a
+stem-selection preset on top of the default Demucs separation. `Kim_Vocal_2.onnx` (an
+MDX-Net ONNX model) is mentioned only inside unreachable `--list-models` CLI help text.
+The `audio-separator` catalog does contain 39 real `.onnx` MDX-Net models (including
+`UVR_MDXNET_KARA_2`, the model this whole experiment has used since Phase L1), but
+**none of them are wired into any STEMwerk-reaper UI path today** — they are, in the
+brief's terminology, entirely "catalog" or "external," never "production."
+
+**Consequence for the whole feasibility question**: a native WebGPU EP integration
+would not accelerate anything STEMwerk currently does. Before WebGPU can help a real
+user, STEMwerk would need to either (a) introduce a new ONNX-based workflow/model
+option (straightforward — the catalog already has usable `.onnx` models), or (b) get
+an ONNX export of the models STEMwerk actually uses today (Demucs, MDX23C DrumSep) —
+which, per §L3.5 below, is unverified/uncertain for both. This reframes "WebGPU
+feasibility" from a backend-swap question into a **model-strategy** question.
+
+### L3.2 Additional ONNX models tested — shape diversity, not architectural diversity
+
+Selected `Reverb_HQ_By_FoxJoy.onnx` (66.8 MB, reverb removal — a different task, not
+just a different vocals/instrumental split), `kuielab_a_bass.onnx` (29.7 MB, bass
+isolation, different training lineage/n_fft=16384), and `UVR-MDX-NET-Inst_HQ_5.onnx`
+(59.1 MB, latest general instrumental/vocals HQ tier — closest of the catalog to a
+"Normal Stems"-relevant model). **Honest finding, exactly the kind the brief warned
+against inventing away**: all 4 tested `.onnx` models (these 3 plus `UVR_MDXNET_KARA_2`
+from L1/L2) share the **identical graph topology** — 178 raw nodes, the same 8 op types
+in the same counts (`Conv:40, Relu:66, BatchNormalization:27, MatMul:22, Add:11,
+ConvTranspose:5, Mul:5, Transpose:2`) — differing only in input/output tensor shape
+(`dim_f`×`dim_t`, driven by `n_fft`/`mdx_dim_t_set`), trained weights, and target stem.
+The `audio-separator` ONNX catalog is architecturally a single MDX-Net template
+reused across ~39 fine-tunes, not 39 distinct architectures. Shape diversity is still a
+meaningful WebGPU test dimension (different tensor sizes can hit different shader
+compilation paths, buffer-size limits, etc.) — this experiment tested it honestly as
+that, not overstated as operator-coverage diversity.
+
+Real, non-obvious finding discovered *during* this phase's own testing (not predicted
+in advance): the **segment_size / dim_t routing trap** — see
+`MODEL_COMPATIBILITY_MATRIX.md` for the full writeup. Two of the three new models
+(`Reverb_HQ_By_FoxJoy`, `kuielab_a_bass`, both `dim_t=512`) initially appeared to "pass"
+graph placement with zero code changes, but a first test run silently produced identical
+numeric results to `UVR_MDXNET_KARA_2` for all three models — impossible for three
+differently-trained models, and the giveaway that something was wrong (traced to a
+model-filename-parametrization bug in the test harness itself, fixed). Once fixed, a
+second, deeper bug surfaced: `audio-separator`'s `MDXSeparator` silently routes
+inference through `onnx2torch`→PyTorch instead of onnxruntime whenever the model's
+native `dim_t` doesn't match the configured `segment_size` (default 256) — with only a
+debug-level log line as evidence, `get_providers()` never even gets called because no
+`InferenceSession` is created at all. **A model that produces valid output entirely via
+PyTorch must not be reported as a WebGPU pass** — this experiment classifies it
+separately (`webgpu_uses_pytorch_inference` field in `l3_model_compatibility_test.py`'s
+report), matching the brief's explicit requirement in §6.
+
+### L3.3 Test evidence — all 4 tested `.onnx` models, real hardware, real pipeline
+
+Test script: `l3_model_compatibility_test.py` (reuses `webgpu_adapter.py` and
+`end_to_end_pipeline_test.py`'s functions directly — no second implementation, per the
+brief). Auto-detects the `segment_size`/`dim_t` trap per model (§L3.2) rather than
+hardcoding it. Run against the RX 9070 (`--pci-bus-id 0000:03:00.0`, explicit — this
+workstation has 2 GPUs, never auto-guessed), same 20 s test clip as L1/L2.
+
+| Model | A: inspect | B: CPU baseline | C: WebGPU init | D: graph placement | E: inference | F: end-to-end audio | Raw numeric (max abs diff) |
+|---|---|---|---|---|---|---|---|
+| `UVR_MDXNET_KARA_2.onnx` (L1/L2 regression) | PASS | PASS | PASS | **PASS — 185/185 WebGPU, 0 CPU** | PASS | PASS (validation+routing+raw+file) | 7.08e-08 / 6.61e-08 |
+| `Reverb_HQ_By_FoxJoy.onnx` | PASS | PASS | PASS (after `segment_size=512` override) | **PASS — 185/185 WebGPU, 0 CPU** | PASS | PASS | 1.49e-08 / 5.78e-09 |
+| `kuielab_a_bass.onnx` | PASS | PASS | PASS (after `segment_size=512` override) | **PASS — 185/185 WebGPU, 0 CPU** | PASS | PASS | 1.49e-08 / 4.03e-09 |
+| `UVR-MDX-NET-Inst_HQ_5.onnx` | PASS | PASS | PASS | **PASS — 185/185 WebGPU, 0 CPU** | PASS | PASS | 1.04e-07 / 1.08e-07 |
+
+All within the pre-declared L2 raw tolerance (correlation ≥0.999, max_abs_diff ≤5e-3) by
+4+ orders of magnitude margin. Note per the brief's own warning: onnxruntime's
+*optimized* graph has 185 nodes for every model (post graph-transformer fusion), not
+the raw file's 178 — this is expected EP-specific graph optimization, not a
+discrepancy, and this phase's test script explicitly does not compare raw-vs-optimized
+counts as a pass/fail criterion (an earlier draft of the test incorrectly did, and
+produced a false "PARTIAL/FAIL" until corrected — see git history on this branch for
+the fix).
+
+**Basic performance reference** (single run per provider, load separate from run,
+performance secondary this phase — not a repeated/warm benchmark like L2's):
+
+| Model | CPU load / run | WebGPU load / run | Speedup (single run) |
+|---|---|---|---|
+| `Reverb_HQ_By_FoxJoy.onnx` | 0.07 s / 13.04 s | 0.12 s / 1.83 s | 7.1× |
+| `kuielab_a_bass.onnx` | 0.04 s / 5.47 s | 0.06 s / 1.61 s | 3.4× |
+| `UVR-MDX-NET-Inst_HQ_5.onnx` | 0.05 s / 9.26 s | 0.08 s / 1.48 s | 6.2× |
+
+No obviously impractical performance found (all WebGPU runs comfortably faster than
+real-time for a 20 s clip); no shader-tuning or kernel-level optimization attempted, per
+the brief's instruction to keep this basic.
+
+### L3.4 Cross-platform backend matrix
+
+| Platform | GPU family | Officially documented (Dawn/onnxruntime docs) | Package available (pip wheel exists) | Tested by STEMwerk (this project) | Known limitation |
+|---|---|---|---|---|---|
+| Linux x86-64 | AMD | Yes (Vulkan) | Yes (`manylinux_2_28_x86_64`) | **Yes — PASS** (RX 9070, L1/L2/L3) | Multi-GPU systems need explicit device selection (§L3.4a) |
+| Linux x86-64 | NVIDIA | Yes (Vulkan) | Yes (same wheel, vendor-agnostic) | **Not tested** — no NVIDIA hardware available in this project | Unverified; Vulkan/NVIDIA is a very common, well-trodden combination industry-wide, but not verified by STEMwerk specifically |
+| Linux x86-64 | Intel | Yes (Vulkan) | Yes (same wheel) | **Not tested** | Unverified |
+| Linux ARM64 (aarch64) | any | Not documented for this specific plugin | **No** — `onnxruntime-ep-webgpu` 0.3.0 ships no `aarch64`/`arm64` Linux wheel (only `manylinux_2_28_x86_64`) despite base `onnxruntime` itself shipping a `manylinux_2_28_aarch64` wheel | Not tested, and not currently installable via pip regardless | Confirmed via direct PyPI wheel listing, not assumed |
+| Windows x86-64 | AMD/NVIDIA/Intel | Yes (D3D12 primary, Vulkan available) | Yes (`win_amd64`) | **Not tested** — no Windows hardware in this project | Do not read this as "tested" — deliberately excluded per the brief |
+| Windows ARM64 | Qualcomm/etc. | Yes (D3D12) | Yes (`win_arm64`) | Not tested | Unverified |
+| macOS Apple Silicon | Apple | Yes (Metal) | Yes (`macosx_14_0_universal2`) | **Yes — PASS** (M1, this branch) | 8 GB unified-memory models show real swap pressure under load (documented in Phase M1) |
+| macOS Intel (x86_64) | AMD (eGPU/iGPU) | Nominally yes (universal2 wheel tag covers x86_64) | **Verified NOT actually installable** — base `onnxruntime` (a hard `onnxruntime-ep-webgpu` dependency, required `>=1.24.4`) has published **only `macosx_14_0_arm64` wheels for every version from 1.24.4 through the current 1.30.0** — no macOS x86_64 wheel exists for the required base package at all, confirmed by checking every minor release on PyPI | **Not tested, and currently blocked** | This is exactly the "don't assume ARM64 proves Intel" trap the brief warned about — confirmed with real data, not assumed either way. STEMwerk does maintain a real macOS Intel production constraints file (`scripts/reaper/constraints/macos-intel.txt`), so this is a real, non-hypothetical gap for any future WebGPU work, not a hardware STEMwerk doesn't otherwise support |
+
+#### L3.4a Device selection strategy
+
+Directly informed by this project's own dual-GPU Linux workstation (RX 9070 discrete +
+Phoenix iGPU) — this was never a hypothetical edge case:
+
+- **Multiple GPUs / integrated vs discrete**: `ort.get_ep_devices()` enumerates every
+  WebGPU-capable adapter with no notion of "best" or "default" discrete GPU.
+  `webgpu_adapter.select_device()` (unchanged since L1, reused verbatim through L2/M1/L3)
+  **refuses to guess** — raises `GpuExecutionNotProvenError` when more than one device
+  exists and no explicit selector is given, and auto-selects only when exactly one
+  device exists (which is what happened, correctly, on the single-GPU M1). A production
+  integration would need either an explicit user-facing GPU picker (mirroring how
+  STEMwerk's existing `devices.py` already handles CUDA/ROCm/DirectML device choice) or
+  a documented heuristic (e.g. prefer the device with the most VRAM, or the one with a
+  non-zero `pci_bus_id` distinct from a known iGPU ID range) — this experiment
+  deliberately does not invent that heuristic, since it would be an unverified guess.
+- **Multi-vendor systems** (e.g. AMD iGPU + NVIDIA discrete, common on gaming laptops):
+  not tested; the same "explicit selection, no guessing" principle applies, but which
+  device is genuinely "best" cross-vendor is a real open question this project has no
+  data on.
+- **Systems without a suitable GPU**: `list_webgpu_devices()` returning an empty list is
+  already a defined, handled state (`GpuExecutionNotProvenError` with a clear message)
+  — a production integration should treat this as "fall back to the existing CPU/torch
+  route," exactly as STEMwerk's existing device resolver already does for missing
+  CUDA/ROCm.
+- **EP loads but the requested adapter is unavailable** (e.g. eGPU unplugged mid-session,
+  requested `pci_bus_id` no longer present): `select_device()` already raises cleanly
+  in this case (tested directly in L2 with a deliberately wrong `pci_bus_id`) rather than
+  silently falling back to a different device or to CPU — a production integration
+  would need to decide whether that should be a hard error (current adapter behavior) or
+  a soft fallback with a user-visible warning; this experiment intentionally kept it
+  strict, since silent fallback is exactly the failure mode the whole project has been
+  guarding against.
+
+### L3.5 Runtime packaging and dependencies
+
+**The WebGPU EP itself is small: `onnxruntime` (67 MB installed) +
+`onnxruntime-ep-webgpu` (16 MB installed) = ~83 MB, ~30 MB combined compressed wheel
+download.** This is the actual, isolated marginal cost of the WebGPU pieces, verified by
+directly measuring `du -sh` on the installed package directories — not estimated.
+
+**The real packaging risk is not WebGPU-specific at all.** A naive `pip install -r
+requirements-webgpu-experiment.txt` (i.e. `pip install audio-separator` without an
+`--index-url` override) pulled in **3.2 GB of NVIDIA CUDA libraries and 897 MB of
+Triton** on this AMD-only Linux workstation with no NVIDIA hardware present — because
+generic PyPI `torch` wheels bundle the full CUDA runtime unconditionally, and none of
+that is used by (or relevant to) the WebGPU/CPU code paths this experiment actually
+exercises. **This is not evidence against WebGPU** — it's evidence that `audio-separator`
++ generic `torch` is expensive regardless of inference backend, and this cost already
+exists in STEMwerk's production Demucs/DrumSep paths today. STEMwerk's actual Linux
+bootstrap (`STEMwerk_Bootstrap_Linux.sh`) already solves this correctly, installing torch
+via explicit `--index-url https://download.pytorch.org/whl/cpu` (or the matching
+`rocm6.4`/`rocm7.0`/`rocm7.1`/`rocm7.2` index once hardware is detected) specifically to
+avoid this bloat — this experiment's own venv did not replicate that flag (out of scope
+for a throwaway research venv), so the 4+ GB figure should be read as "what happens
+without STEMwerk's existing installer discipline," not as a WebGPU cost. **A real
+integration should reuse STEMwerk's existing `--index-url` pattern for the WebGPU
+venv/route too.**
+
+**Distribution requirements**: no system GPU drivers, Vulkan loader, or Dawn libraries
+need separate installation — `libvulkan.so.1` (Linux) was already present as part of the
+existing Mesa/RADV stack (confirmed in L1: `no system packages, drivers, or kernel
+changes were needed or made`), and Metal is a macOS system framework (confirmed in M1
+via `otool -L`). This is a genuine potential *advantage* over CUDA/ROCm (which need
+much larger, vendor-specific driver/runtime stacks) — but this experiment did not
+measure CUDA/ROCm's own driver-stack size for a fair side-by-side, so this is noted as a
+plausible advantage, not a quantified one.
+
+**ONNX Runtime distribution conflicts — verified, not assumed**: `onnxruntime-rocm`
+installs its own `onnxruntime/` package directory at the exact same import path as the
+base `onnxruntime` package (confirmed via `pip show onnxruntime-rocm` → same
+`site-packages/onnxruntime/__init__.py` location) — these **cannot coexist reliably in
+one venv**; whichever installs last silently overwrites the other's files. This is why
+L2's ROCm reference and the main WebGPU venv have been kept in two fully separate venvs
+since Phase L2, and this phase confirms that separation was a real technical necessity,
+not just caution. The monolithic `onnxruntime-webgpu` alternative (§3, not used in this
+project) would very likely have the same conflict with base `onnxruntime` +
+`onnxruntime-ep-webgpu` for the same reason (same top-level import path), though this
+was not directly tested since the plugin-EP route was used throughout.
+
+**Could WebGPU reduce vendor-specific dependency duplication?** Partially, and only for
+the *inference* layer: STEMwerk's current architecture needs separate CUDA/ROCm/
+DirectML/MPS-specific torch builds today (confirmed in `STEMwerk_Bootstrap_*` scripts —
+different `--index-url` per platform/vendor). A WebGPU EP route, if adopted for
+ONNX-format models, would need only one `onnxruntime` + `onnxruntime-ep-webgpu` pair
+across AMD/NVIDIA/Intel/Apple, *for the ONNX-model portion of inference only* — it would
+not replace the vendor-specific torch builds STEMwerk still needs for Demucs (PyTorch,
+not ONNX). **Could it introduce new conflicts?** Yes — the confirmed `onnxruntime` vs
+`onnxruntime-rocm` conflict above means a STEMwerk venv that wants both an accelerated
+ROCm path (for Demucs, via torch+ROCm — unaffected, separate from onnxruntime entirely)
+*and* a WebGPU-accelerated ONNX-model path would be fine (they use different underlying
+libraries: torch-ROCm vs onnxruntime-WebGPU, no shared package name) — the conflict only
+arises if STEMwerk ever wanted *both* `onnxruntime-rocm` (ROCm-accelerated ONNX,
+STEMwerk does not currently use this) *and* `onnxruntime-ep-webgpu` in the same venv,
+which would need the same two-venv isolation this project already uses.
+
+**Not investigated**: exact installed-size delta for Windows/macOS (only measured on
+this Linux machine); whether `onnxruntime-webgpu` (monolithic) has a smaller total
+footprint than `onnxruntime`+`onnxruntime-ep-webgpu` (plugin) — plausible but unverified.
+
+### L3.6 Demucs, RoFormer, and DrumSep feasibility (research only — nothing exported)
+
+**Demucs / htdemucs**: A web search this phase surfaced a cluster of very recent (2026)
+community sources (a GitHub repo, a Hugging Face upload, and a blog post, all from the
+same "StemSplit"/"StemSplitio" author) claiming a first successful, parity-verified
+ONNX export of `htdemucs_ft`, citing four specific technical blockers: complex64 `torch.stft`
+output (ONNX has no native complex dtype), non-tensor Python control flow
+(`fractions.Fraction`, `random.randrange` used in Demucs' own code), and
+`aten::_native_multi_head_attention` having no ONNX symbolic (worked around by
+substituting a Linear/bmm/softmax-based attention implementation). **This experiment
+did not independently verify this claim** — no download, no export attempt, no
+execution, per the brief's explicit instruction not to convert models this phase. Report
+it as an unverified but specific, technically-plausible lead (the four blockers are
+consistent with Demucs' known architecture) worth an independent read-through before
+committing to it as a strategy, not as confirmed feasibility. If real, it would directly
+resolve §L3.1's biggest gap (STEMwerk's actual default model, `htdemucs`, having no
+ONNX path).
+
+**RoFormer / MDXC**: No community ONNX export project was found for BS-RoFormer or
+Mel-RoFormer via this phase's research (in contrast to Demucs, where at least an
+unverified claim exists). Architecturally, RoFormer's core operations (MatMul, Softmax,
+rotary-embedding rotation — expressible as elementwise Mul/Add/Concat) are individually
+ONNX-exportable in principle, and RoFormer/MDXC's STFT/iSTFT preprocessing could
+plausibly live outside the ONNX graph the same way MDX-Net's does (§2a) — but this is
+architectural reasoning, not a verified path; audio-separator's own MDXC pipeline uses
+`.ckpt`+PyTorch exclusively today with no ONNX variant anywhere in its dependency chain.
+**Higher uncertainty than Demucs, not lower**, despite the seemingly simpler math —
+there is no existing artifact to point to at all.
+
+**DrumSep / Direct Kit / Kit Split**: STEMwerk's actual DrumSep model
+(`MDX23C-DrumSep-aufr33-jarredou`) is itself an MDX23C model — same family as MDXC/
+RoFormer above, inheriting the same "no existing ONNX artifact, plausible in principle,
+unverified in practice" status. The two-stage workflow (Demucs stage 1 → DrumSep stage
+2) means a WebGPU path here would need **both** stages converted for any real user-facing
+benefit — converting only stage 2 (DrumSep) while stage 1 (Demucs) stays PyTorch/torch-only
+would still leave the dominant-cost stage un-accelerated by WebGPU, and would add a
+second model-maintenance burden (two independently-versioned exports) rather than
+reducing one, cutting against this phase's own "reduce platform-specific complexity"
+goal.
+
+**Overall**: none of the three identified as a clear, low-risk proof-of-concept
+candidate this phase — Demucs has the most promising (if unverified) lead; RoFormer/
+MDXC/DrumSep have no existing lead at all. Do not read this as "not worth pursuing" —
+read it as "the next phase, if it goes this direction, starts from independent
+verification of the Demucs claim, not from a blank slate," per §L3.7.
+
+### L3.7 Next-phase decision
+
+Based on the evidence above, not a predetermined outcome:
+
+**Recommended next experiment: independently verify the Demucs-to-ONNX community claim
+(§L3.6) as a small, separately-scoped proof of concept — before any broader Windows/
+NVIDIA/Intel hardware validation.** Rationale: L3's central finding (§L3.1) is that
+WebGPU currently cannot help STEMwerk's *actual* users at all, because zero production
+workflows use ONNX models — validating WebGPU on more platforms (Windows/NVIDIA/Intel)
+would prove the backend works more broadly, which is real and valuable, but would still
+leave the "helps zero current users" problem completely unsolved. A verified,
+correctness-checked Demucs ONNX export (reusing this project's existing
+`end_to_end_pipeline_test.py`/`webgpu_adapter.py` verification standard: real per-node
+placement proof, raw-vs-file numeric comparison, stem routing, output validation) would
+be the single highest-leverage next step, because it's the one finding that would let
+WebGPU accelerate the workflow STEMwerk users actually run today (`htdemucs`/`All
+Stems`), on any of the three already-proven platforms (Linux/AMD, macOS/Apple Silicon),
+without waiting on new hardware.
+
+Other candidates considered and explicitly deprioritized, with reasoning:
+- *Broader ONNX model validation (remaining ~35 catalog models)*: low new-information
+  value — §L3.2 already established they share one graph template; would mostly
+  re-confirm what's already known rather than surface new risk.
+- *Windows AMD/NVIDIA/Intel validation*: valuable for the cross-platform-vendor claim,
+  but doesn't address §L3.1's core problem (still zero current STEMwerk users
+  benefiting), and requires hardware this project doesn't have access to right now.
+- *macOS validation of additional models*: same low-new-information issue as the first
+  bullet, on the platform side instead of the model side.
+- *Runtime packaging PoC*: §L3.5 already answered the open packaging questions with
+  real data; a PoC installer change isn't blocked on new information, it's blocked on a
+  product decision to actually adopt WebGPU for *something* — which circles back to
+  needing §L3.1 solved first.
+- *Experimental GPU backend integration (wiring WebGPU into STEMwerk's actual runtime
+  resolver)*: premature — integrating a backend that cannot yet accelerate any real
+  workflow would add maintenance surface for zero user-facing benefit, directly
+  contradicting this phase's stated "reduce complexity" design goal.
+
+### L3.8 Scope discipline (this phase)
+
+No production venv, installer pin, model registry, GPU resolver, release branch, or
+REAPER UI file was modified — all workflow/model tracing in §L3.1 was read-only
+inspection via a background research agent plus direct `grep`/`Read`. No new branch was
+created (continued on `experiment/webgpu-ep` as instructed). Both existing venvs
+(`.venv-webgpu`, `.venv-rocmref`) remained functional throughout and were not otherwise
+modified beyond downloading the 3 new `.onnx` model files (185.6 MB total) into the
+experiment-local model cache — never STEMwerk's production model cache. No system
+driver, Vulkan, or ROCm changes. No models were exported or converted (§L3.6 stayed
+research-only, as instructed). No large audio/model files, benchmark JSON output, or
+caches were committed.
+
 ## Reproducing this experiment
 
 ```bash

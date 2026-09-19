@@ -50,7 +50,8 @@ class ValidationError(RuntimeError):
     pass
 
 
-def run_provider(label, providers, input_wav, model_cache, out_dir, pci_bus_id):
+def run_provider(label, providers, input_wav, model_cache, out_dir, pci_bus_id, model_filename=MODEL_FILENAME,
+                  mdx_segment_size=None):
     from audio_separator.separator import Separator
     import audio_separator.separator.common_separator as common_separator_module
 
@@ -71,17 +72,28 @@ def run_provider(label, providers, input_wav, model_cache, out_dir, pci_bus_id):
     provider_out_dir = os.path.join(out_dir, label)
     os.makedirs(provider_out_dir, exist_ok=True)
 
-    sep = Separator(
+    sep_kwargs = dict(
         log_level=100,
         model_file_dir=model_cache,
         output_dir=provider_out_dir,
         sample_rate=44100,
         use_soundfile=True,  # single quantization step (float->target subtype), no pydub/ffmpeg int16 pre-stage
     )
+    if mdx_segment_size is not None:
+        # audio-separator silently routes MDX inference through onnx2torch/PyTorch
+        # instead of onnxruntime whenever segment_size != the model's native dim_t
+        # (see README.md Phase L3 "segment_size / dim_t routing trap") -- some models
+        # need a non-default segment_size to ever reach the ONNX Runtime code path at
+        # all. This is a legitimate, pre-existing audio-separator config knob (not a
+        # graph edit or precision change): it does not touch model weights or the ONNX
+        # graph.
+        sep_kwargs["mdx_params"] = {"hop_length": 1024, "segment_size": mdx_segment_size,
+                                     "overlap": 0.25, "batch_size": 1, "enable_denoise": False}
+    sep = Separator(**sep_kwargs)
     sep.onnx_execution_provider = providers
 
     t_load0 = time.time()
-    sep.load_model(MODEL_FILENAME)
+    sep.load_model(model_filename)
     t_load1 = time.time()
 
     common_separator_module.CommonSeparator.final_process = capturing_final_process
@@ -98,6 +110,7 @@ def run_provider(label, providers, input_wav, model_cache, out_dir, pci_bus_id):
         "load_time_s": t_load1 - t_load0,
         "run_time_s": t_run1 - t_run0,
         "raw_by_stem": captured,
+        "uses_pytorch_inference": bool(getattr(sep.model_instance, "uses_pytorch_inference", False)),
     }
 
 
