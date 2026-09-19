@@ -1,0 +1,12 @@
+model-cache/
+*.onnx
+audio_in/
+out/
+out_cpu/
+out_webgpu/
+warm_cpu/
+warm_webgpu/
+*.wav
+*.mp3
+*.flac
+.venv-webgpu/

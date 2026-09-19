@@ -1,0 +1,15 @@
+# Isolated experiment dependencies for the native ONNX Runtime WebGPU EP test.
+# Install into a dedicated venv (NOT any production STEMwerk venv):
+#   python3.11 -m venv /path/outside/exFAT/.venv-webgpu
+#   pip install -r requirements-webgpu-experiment.txt
+#
+# NOTE: the venv itself cannot live on an exFAT filesystem (no symlink support,
+# `python -m venv` always symlinks lib64 -> lib on Linux). Create it on a POSIX
+# filesystem (ext4/btrfs/etc) even if this repo checkout lives on exFAT.
+
+onnxruntime>=1.24.4      # base runtime; plugin EP requires >=1.24.4. Tested with 1.30.0.
+onnxruntime-ep-webgpu==0.3.0
+onnx==1.23.0
+numpy==2.4.6
+soundfile==0.14.0
+audio-separator==0.47.0  # same inference/pre/post-processing library STEMwerk uses in production
