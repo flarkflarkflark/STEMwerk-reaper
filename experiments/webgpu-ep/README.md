@@ -1178,6 +1178,52 @@ export or WebGPU defect) as the explanation. Recommended next step: implement
 shift-averaging around the existing ONNX session (a calling-code-only change, no model
 edits) and re-verify — before further hardware/platform validation.
 
+## Phase L6: Demucs Production Shift Parity
+
+Status date: 2026-09-19. Starting HEAD `4a3809098` (pushed to origin before this phase
+began, verified). Full report: **`DEMUCS_SHIFT_PARITY.md`**. Implements L5's identified
+fix (Demucs shift-based test-time averaging, `shifts=2`, STEMwerk's actual production
+default) as a small wrapper around the existing unmodified ONNX session, and re-measures
+production parity with it enabled.
+
+**Headline result: shift-averaging closes the gap to within PyTorch's own natural
+run-to-run variance.** Demucs' shift-averaging is a Monte-Carlo technique — even real
+production PyTorch doesn't produce bit-identical output run to run (verified directly:
+two independent seeded PyTorch `shifts=2` runs differ from each other by
+correlation 0.9975–0.9993). Measured against that honest noise floor rather than
+against zero, the PyTorch-vs-ONNX-WebGPU gap with shifts enabled lands at **1.0×–1.7×
+the noise floor** across the four stems (drums 1.01×, bass 1.11×, other 1.22×,
+vocals 1.67×) — materially closer than L5's uncontrolled `shifts=2`-vs-`shifts=0`
+comparison, and, for drums/bass, statistically indistinguishable from "just another
+random realization" of production's own output.
+
+**A genuinely interesting complication surfaced and fully root-caused, not glossed
+over**: exact offset matching between PyTorch and ONNX via simple `random.seed()`
+turned out to be impossible — HTDemucs' own positional-embedding code
+(`transformer.py:559`) draws from the *same* global Python `random` stream during every
+forward pass (a training-time augmentation left active at inference — the same
+mechanism L4 identified as an ONNX-export blocker), so the two routes' RNG streams
+drift apart after the first shift. Confirmed exactly: inserting the precise number of
+intervening calls (3, matching the number of internal segments that particular shifted
+window splits into) reproduces PyTorch's actual second offset bit-for-bit. Rather than
+engineering a fragile RNG-lockstep workaround, this phase used the brief's own sanctioned
+fallback — a repeated-run statistical comparison — which turned out to be the more
+scientifically honest framing anyway, given `shifts=2` is inherently non-deterministic
+in production itself.
+
+WebGPU backend fidelity holds unchanged under shift-averaging (ONNX CPU vs WebGPU with
+shifts: correlation 1.000000, all 4 stems; graph placement re-verified: 1594/1594 nodes,
+0 CPU fallback, one session reused across all 6 internal inference calls across 3 repeated
+runs). Speedup vs actual production settings drops from L4/L5's ~2.2× to **1.74×**
+(shift-averaging roughly doubles ONNX-side inference work; the GPU's relative advantage
+compresses somewhat, measured directly rather than assumed to persist). One residual,
+honestly unresolved: `vocals`/`other` show a larger gap (1.22–1.67× the noise floor)
+than `drums`/`bass` (1.01–1.11×) — plausibly the same export-fidelity pattern L5 already
+found even without shifts, not a new shift-specific defect, but not proven either way.
+Recommended next step: re-run this same methodology on a second, independent real-music
+fixture to distinguish "a property of this model/export" from "a property of this one
+clip," before macOS M1 validation.
+
 ## Reproducing this experiment
 
 ```bash
