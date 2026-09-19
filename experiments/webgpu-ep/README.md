@@ -1224,6 +1224,44 @@ Recommended next step: re-run this same methodology on a second, independent rea
 fixture to distinguish "a property of this model/export" from "a property of this one
 clip," before macOS M1 validation.
 
+## Phase L7: Independent Music Validation
+
+Status date: 2026-09-19. Starting HEAD `0fae0d613` (pushed to origin before this phase
+began, verified). Full report: **`DEMUCS_INDEPENDENT_MUSIC_VALIDATION.md`**. Does exactly
+what L6 recommended: re-runs L6's methodology on a second, genuinely independent
+real-music source, to test whether L6's `vocals`/`other` residual (1.22×–1.67× PyTorch's
+own noise floor) is a property of the model/export or an artifact of L5/L6's one fixture
+(itself a stem-sum reconstruction, not an original mix).
+
+**Headline result: the L6 residual does not reproduce.** Found a second fixture
+(`/home/flark/Music/modeltest.wav`, a personal STEMwerk test render, 25 s excerpt,
+genuine original mix — a strictly better provenance category than L5/L6's
+reconstructed one) and ran the identical repeated-run (3 seeds × PyTorch/ONNX-CPU/
+WebGPU × `shifts=0`/`shifts=2`) design. Result: **every one of the four stems**,
+including vocals and other, now shows a PyTorch-vs-ONNX-WebGPU gap *smaller* than
+PyTorch's own run-to-run noise floor (ratio 0.66×–0.73×, uniformly — compare L6's
+1.01×–1.67× with vocals as the worst case). This is evidence against, not proof against,
+a general vocals/other weakness — two fixtures is more information than one, not a
+statistical guarantee across all music — but it does support the hypothesis (raised as
+a caveat back in L5) that the reconstructed-mix provenance of the earlier fixture, not
+a structural property of the ONNX export, was the more likely driver of that residual.
+
+**A real bug in this phase's own analysis code was caught before trusting any result**:
+the first pass showed alarming negative correlations for `drums` even in the fully
+deterministic `shifts=0` case, traced to a shape-orientation bug in the comparison
+helper (computing array length from the wrong axis for PyTorch's `(samples, channels)`
+arrays vs ONNX's `(channels, samples)`) — fixed and re-verified before any numbers were
+reported, documented in full in the report rather than silently corrected.
+
+WebGPU backend fidelity, graph placement (1594/1594 nodes, 0 fallback, 1 session reused
+across all 7 internal inference calls), and regression against both L5 and L6 all hold
+unchanged on this new fixture. Speedup vs actual production settings measured at 1.43×
+on this clip (vs L6's 1.74× on the other — different absolute number, not reconciled,
+reported honestly). Recommended next step: macOS M1 validation of this same
+shift-averaging + real-music methodology, since the model-identity/export-fidelity
+question is now reasonably well-characterized on this platform and further same-platform
+fixtures have declining marginal value compared to testing a new GPU vendor/OS.
+
 ## Reproducing this experiment
 
 ```bash
