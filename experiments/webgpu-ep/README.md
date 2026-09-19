@@ -1262,6 +1262,50 @@ shift-averaging + real-music methodology, since the model-identity/export-fideli
 question is now reasonably well-characterized on this platform and further same-platform
 fixtures have declining marginal value compared to testing a new GPU vendor/OS.
 
+## Phase L8: macOS Apple Silicon Validation
+
+Status date: 2026-09-19. Starting HEAD `c59c8e421` (L7, pushed to origin, verified
+before this phase began — including that the earlier "Phase M1" MDX-Net commit,
+`467c7ce`, is an ancestor). Full report: **`DEMUCS_MACOS_APPLE_SILICON.md`**. Does what
+L7 recommended: validates the same, unmodified `demucs-onnx`/`webgpu_adapter.py`/
+`demucs_shift_wrapper.py` implementation on macOS/Apple Silicon/Metal (MacBook Air M1,
+8 GB unified memory) instead of accumulating further same-platform Linux fixtures.
+
+**Headline result: technically works end-to-end, identically to Linux — but is
+*slower* than STEMwerk's existing macOS production route, not faster.** Same
+1594/1594-node zero-fallback WebGPU graph placement as L4 (the `ConvActivationFusion`
+EP bug and its `ORT_ENABLE_BASIC` workaround both reproduce identically on Metal — an
+onnxruntime-internal issue, not Vulkan-specific). Numerical parity is as strong as or
+stronger than every prior Linux phase: `shifts=0` correlation 0.9967–0.9996 vs PyTorch
+(comparable to L5), and — using a different, well-characterized substitute fixture
+since L7's exact `modeltest.wav` isn't present on this machine, disclosed explicitly as
+a real limitation — the L6 residual again fails to reproduce (all four stems' `shifts=2`
+PT-vs-WebGPU gap below PyTorch's own noise floor, ratio 0.67×–0.80×, a *third*
+independent piece of evidence against it being a general model property, now also
+cross-platform).
+
+**Where this phase diverges sharply from every prior one: performance.** WebGPU (49.08 s
+warm, `shifts=2`) is ≈5.9× *slower* than STEMwerk's actual current production route
+(PyTorch MPS, 8.28 s) on this machine, and even slower than plain ONNX CPU (28.14 s) —
+the opposite of L4's Linux/RX-9070 result (WebGPU 2.2× faster than CPU there). This is
+not treated as a regression or an implementation defect: no macOS-specific code change
+was needed anywhere (every file used is byte-identical to what L4–L7 committed), and
+WebGPU's own CPU-vs-WebGPU internal fidelity is untouched (correlation 1.000000,
+matching L4/L6/L7 exactly) — the finding is that **WebGPU's advantage on Apple Silicon
+is model/graph-dependent, not a platform-wide property**: the much simpler 185-node
+MDX-Net graph *was* faster than CPU on this same M1 (see "Phase M1" above, 1.68×), while
+Demucs' 1594-node graph is not. `demucs-onnx`'s own native CoreML provider was also
+checked directly (not silently substituted for WebGPU) and fails to compile this
+model's graph entirely — a separate, genuine compatibility gap.
+
+**Practical conclusion: do not adopt ONNX/WebGPU-Demucs for STEMwerk's macOS production
+path on the basis of this phase's evidence** — the existing PyTorch/MPS route already
+wins on both speed and being the current, already-shipping reference. Recommended next
+steps: root-cause the WebGPU-slower-than-CPU-on-M1 result before drawing a stronger
+platform-level conclusion, and — if a cross-vendor WebGPU-Demucs route is still of
+interest — pursue it on non-Apple-Silicon platforms where no comparably mature
+first-party GPU backend already exists to lose to.
+
 ## Reproducing this experiment
 
 ```bash
