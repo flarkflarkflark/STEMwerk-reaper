@@ -2635,15 +2635,55 @@ def _select_drumsep_runtime(
                 info["rocm_cpu_python_attempts"] = rocm_cpu_attempts
                 return selected_rocm_cpu_python, "cpu", info
 
+        # No dedicated CPU DrumSep runtime (.venv-drumsep) exists or it is
+        # broken. On Windows, a DirectML DrumSep runtime
+        # (.venv-drumsep-directml), when present, is a fully CPU-capable
+        # Python environment in its own right: the DrumSep helper
+        # (stemwerk_drumsep_process.py) only calls torch_directml.device()
+        # / sets use_directml=True when --device directml is passed -- for
+        # --device cpu it always takes the plain mdx_params/demucs_params/
+        # mdxc_params={"device": "cpu"} path, identical to a dedicated CPU
+        # venv, regardless of which venv hosts the interpreter. Probing it
+        # here with require_gpu=False only checks that its interpreter and
+        # required packages import cleanly, exactly like the cpu_candidates
+        # probe above -- it does not require DirectML/the GPU to be present
+        # or working. This mirrors the Linux ROCm-as-CPU fallback above:
+        # fall through to the next tier regardless of whether the preferred
+        # tier was "missing" or "broken".
+        directml_cpu_detail = "missing"
+        directml_cpu_attempts: List[Dict[str, Any]] = []
+        if _is_windows_runtime():
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_directml_as_cpu_start", file=sys.stderr)
+            selected_directml_cpu_python, directml_cpu_detail, directml_cpu_payload, directml_cpu_attempts = _probe_drumsep_runtime_candidates(
+                directml_candidates, require_gpu=False
+            )
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_directml_as_cpu_end detail={directml_cpu_detail}", file=sys.stderr)
+            if selected_directml_cpu_python is not None:
+                info = dict(directml_cpu_payload or {})
+                info["kind"] = "cpu"
+                info["detail"] = directml_cpu_detail
+                info["fallback_reason"] = f"cpu_skipped:{cpu_detail}"
+                info["selection_policy"] = "explicit_cpu_via_directml_runtime"
+                info["runtime_source_family"] = "directml"
+                info["cpu_python_attempts"] = cpu_attempts
+                info["directml_cpu_python_attempts"] = directml_cpu_attempts
+                return selected_directml_cpu_python, "cpu", info
+
         info = {
             "cpu_detail": cpu_detail,
             "cpu_python": str(cpu_python),
             "cpu_python_attempts": cpu_attempts,
             "rocm_cpu_detail": rocm_cpu_detail,
             "rocm_cpu_python_attempts": rocm_cpu_attempts,
+            "directml_cpu_detail": directml_cpu_detail,
+            "directml_cpu_python_attempts": directml_cpu_attempts,
             "selection_policy": "explicit_cpu",
         }
-        reason = "missing" if cpu_detail == "missing" and rocm_cpu_detail == "missing" else "broken"
+        reason = (
+            "missing"
+            if cpu_detail == "missing" and rocm_cpu_detail == "missing" and directml_cpu_detail == "missing"
+            else "broken"
+        )
         return None, reason, info
 
     if explicit_cuda and sys.platform.startswith("linux"):
