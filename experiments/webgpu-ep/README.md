@@ -1590,6 +1590,63 @@ monitoring methodology and its disclosed limits, the decisive test's complete ev
 selection PASS"), the negative controls, the full device-isolation mechanism search
 (§7), and the capability-matrix/resolver implications (§10).
 
+## Phase W3: Windows Native Device-Selection Source Investigation
+
+Status date: 2026-09-20. Full report: **`WINDOWS_NATIVE_DEVICE_SELECTION.md`**. Goes
+one level deeper than W2's binary-only scan: locates and reads the **actual upstream
+source** for the installed `onnxruntime-ep-webgpu` 0.3.0 package, at the exact tagged
+release (`plugin-ep-webgpu/v0.3.0`, commit `caf2ed32972b8848277b2b9bcc8917e07bcfdb5c`),
+not current `main`.
+
+**Root cause confirmed at the exact source line.** `Factory::CreateEpImpl`
+(`onnxruntime/core/providers/webgpu/ep/factory.cc:150-219`) reads the caller-selected
+`OrtHardwareDevice` exactly once — to check an `IsVirtual` metadata flag — and never
+again; its vendor id/device id/LUID is never copied into the config passed down to
+`WebGpuContext::Initialize()` (`webgpu_context.cc:42-104`), which builds Dawn's
+`wgpu::RequestAdapterOptions` with only `backendType` and `powerPreference` populated
+(default `WGPUPowerPreference_HighPerformance`). Dawn's D3D12 backend then always
+returns the platform's high-performance-ranked adapter — the RTX 3060 on this machine,
+matching W2's own `DxgiHighPerformanceIndex=0` finding — regardless of which device
+Python selected. A pre-existing, confusingly-named provider option
+(`ep.webgpuexecutionprovider.deviceId`) was traced and confirmed to be a **logical
+WebGpuContext cache-slot index for cross-session device sharing**, not a physical
+hardware selector — explaining why W2's empirical `extra_options` probing of
+`device_id`-shaped keys had no effect.
+
+Dawn's own D3D12 native API already supports the missing capability: reading Dawn's
+actual pinned-tag source (`google/dawn@v20260714.215939`, the exact revision pinned in
+onnxruntime's own `cmake/deps.txt` at the tagged commit, not Dawn `main`) confirms
+`dawn::native::d3d::RequestAdapterOptionsLUID` (`include/dawn/native/D3DBackend.h`) is
+a real, exported, chainable struct (`::LUID adapterLUID`) — and is already compiled
+into the installed DLL (confirmed independently via binary string extraction, since
+Dawn source paths and the `RequestAdapterOptionsLUID` symbol are both embedded in it).
+It is simply never constructed or chained anywhere in the EP's call path.
+
+A minimal, source-grounded patch (one new provider-option key, one new optional config
+field, ~15-20 lines across 4 existing upstream files, reusing the EP's existing
+fail-closed `ORT_ENFORCE` on adapter-request failure) is proposed and documented in
+full, but **not implemented or built**: this machine has no CMake and no Visual Studio
+installation at all (checked directly, not assumed), so a native ONNX Runtime/Dawn
+build is not feasible in this session. No new GPU-execution tests were run this
+phase — W2 already obtained decisive, reproduced, per-process evidence for the
+underlying selection-enforcement question using the exact code path this phase's
+source reading confirms is the only call path into the plugin EP; re-running it against
+the same unmodified binary would add no new information. `capability_matrix.json`/`.py`
+are **unchanged** this phase — no new hardware/model combination was actually
+validated (source-level investigation only), consistent with the mission's own
+instruction not to mark anything PASS without real execution proof.
+
+**Classification: NOT VERIFIED** (source-level root cause and patch proposal
+established; no native build attempted or tested; L1-L11/N1/W1/W2 results all
+preserved unchanged). See `WINDOWS_NATIVE_DEVICE_SELECTION.md` for the full traced data
+flow with exact file/line references, the Dawn API availability findings, the complete
+patch proposal, cross-platform compatibility analysis (Linux/L10 and macOS/M1
+unaffected), and the explicit list of unverified assumptions and open items (most
+notably: the exact core-ORT function that attaches a Windows LUID to `OrtHardwareDevice`
+metadata was not located this session, and whether Dawn's D3D12 backend actually
+rejects a non-matching LUID rather than silently ignoring it was not empirically
+tested).
+
 ## Reproducing this experiment
 
 ```bash
