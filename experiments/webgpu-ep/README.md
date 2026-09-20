@@ -2,6 +2,24 @@
 
 Status date: 2026-09-20. Experimental, opt-in, isolated. Not integrated into STEMwerk.
 
+## Phase W5 — isolated native build preflight
+
+W5 re-verified the published W4 commit, exact isolated ORT/Dawn revisions, patch,
+installed runtime, model, and fixture. The supported native build is currently
+**BLOCKED at an explicit administrator installation boundary**: this workstation has
+no Visual Studio/MSVC, MSBuild, Windows SDK, CMake, Ninja, or alternate compiler, and
+the current shell is not elevated. Microsoft Visual Studio Build Tools 2022 with the
+Desktop development with C++ workload must be installed with user approval before an
+isolated build can start.
+
+No tool was installed, no build was started, no patched DLL was loaded, and physical
+RTX/AMD switching remains **NOT VERIFIED**. Safe regressions remain green (9/9 W4
+selector tests, 27/27 non-skipped resolver tests, capability matrix/schema validation,
+Windows DXGI mapping, and Python compilation). Full preflight, exact installer
+identity/action, resource state, and the post-approval build/A-B contract are in
+[`WINDOWS_NATIVE_BUILD_VALIDATION.md`](WINDOWS_NATIVE_BUILD_VALIDATION.md). The
+capability matrix and production STEMwerk remain unchanged.
+
 ## Phase W4 — Windows native DXGI LUID proof of concept
 
 W4 implements a minimal native patch against the exact
