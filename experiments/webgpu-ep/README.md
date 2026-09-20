@@ -1347,6 +1347,47 @@ backend proof methodology, the complete numerical/performance tables, all code
 changes with before/after evidence, and the cross-platform architecture assessment
 (now covering Linux/AMD, macOS/Apple Silicon, and Windows/NVIDIA).
 
+## Phase L9: AMD Radeon 780M Integrated GPU Validation
+
+Status date: 2026-09-20. Starting HEAD `c59c8e421`; synchronized L8 (macOS) + W1
+(Windows) first (`git merge --ff-only` to `2d1ed69d7`), then re-verified the RX 9070
+baseline by actual execution (not diff-reading) before touching the 780M — no Linux
+regression from W1's changes. Full report: **`RADEON_780M_IGPU_VALIDATION.md`**.
+
+**Headline result: a genuine, reproducible, vendor-documented plugin limitation was
+found, not a Radeon 780M defect — and not silently reported as a pass.** Device
+*enumeration* correctly identifies the 780M (`vendor_id=0x1002 device_id=0x15bf
+pci_bus_id=0000:69:00.0`, cross-verified against `lspci`/`vulkaninfo`). Device
+*selection* — passing that exact device object to `add_provider_for_devices()`,
+exactly as every prior phase has done — is **silently not honored**:
+`onnxruntime-ep-webgpu` 0.3.0's own packaged README states plainly, *"The WebGPU EP
+currently accepts one EP device and selects the physical GPU independently."*
+Independent, kernel-level verification (`/sys/class/drm/card{N}/device/gpu_busy_percent`
+— outside onnxruntime/Dawn/Vulkan entirely) confirms it: requesting the 780M for
+either MDX-Net or Demucs still executes on the RX 9070 every time (93–98% RX 9070
+engine load, 0% on the 780M), while onnxruntime's own log claims success regardless.
+**Per the brief's explicit instruction, this is classified BLOCKED, not substituted
+with RX 9070 numbers and reported as a pass** — no 780M performance, correctness, or
+memory figures are reported, because none could be genuinely obtained.
+
+A real memory/resource preflight was still completed (43 GB available RAM, 0 swap
+configured, 780M's 512 MB dedicated VRAM backed by ~31 GB of GTT/system-RAM headroom)
+and found no blocking constraint — moot once the selection blocker was established,
+but retained for whenever a fixed plugin version becomes available.
+
+**A genuinely important, disclosed methodological question this raises**: every prior
+phase's "explicit GPU selection" (RX 9070 over the Phoenix iGPU on Linux, RTX 3060
+over an AMD iGPU on Windows) requested the *same* adapter Dawn's own internal
+default/power-preference logic would plausibly pick anyway — this phase is the first
+case where the requested device diverges from that plausible default, and it's
+exactly the case that failed. Prior results are not invalidated (their own regression
+re-checks this phase and W1 both still hold), but "explicit selection genuinely
+worked" cannot be fully distinguished from "coincided with the plugin's own default"
+using only the evidence gathered so far. Recommended next step: apply this same
+kernel/OS-level independent-verification technique to a prior platform (Windows, via
+`nvidia-smi`) to check whether that selection was genuine or coincidental, before any
+further hardware validation.
+
 ## Reproducing this experiment
 
 ```bash
