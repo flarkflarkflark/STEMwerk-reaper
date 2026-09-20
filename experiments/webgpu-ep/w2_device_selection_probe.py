@@ -20,15 +20,18 @@ script is the tool that DID reliably catch it, and is the source of this phase's
 decisive per-process, per-physical-adapter evidence.
 
 Usage: python w2_device_selection_probe.py <device_id>
+   or: python w2_device_selection_probe.py --adapter-luid <decimal_luid>
   device_id=9504 -> NVIDIA GeForce RTX 3060 Laptop GPU on this machine
   device_id=5688 -> AMD Radeon(TM) Graphics (integrated) on this machine
-(Use webgpu_ep_probe.py or list_webgpu_devices() to re-discover these on another
+(W4 prefers adapter LUID for unique Windows physical identity. Use webgpu_ep_probe.py
+or list_webgpu_devices() to re-discover these on another
 machine -- do not assume these numbers are portable.)
 """
 import os
 import sys
 import tempfile
 import time
+import argparse
 
 import numpy as np
 import onnx
@@ -38,12 +41,20 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webgpu_adapter import select_device, create_verified_webgpu_session
 from windows_gpu_monitor import GpuEngineMonitor, enumerate_dxgi_adapters
 
-device_id = int(sys.argv[1]) if len(sys.argv) > 1 else 9504
+ap = argparse.ArgumentParser()
+ap.add_argument("device_id", nargs="?", type=int,
+                help="Legacy numeric PCI device ID (defaults to 9504 when no selector is supplied)")
+ap.add_argument("--adapter-luid", default=None,
+                help="Windows DXGI adapter LUID in unsigned decimal form")
+args = ap.parse_args()
+if args.device_id is not None and args.adapter_luid is not None:
+    ap.error("device_id and --adapter-luid are mutually exclusive")
+device_id = args.device_id if args.device_id is not None else (9504 if args.adapter_luid is None else None)
 pid = os.getpid()
-print(f"PID={pid} requesting device_id={device_id}")
+print(f"PID={pid} requesting device_id={device_id} adapter_luid={args.adapter_luid}")
 
 adapters = enumerate_dxgi_adapters()
-device = select_device(device_id=device_id)
+device = select_device(device_id=device_id, adapter_luid=args.adapter_luid)
 print(f"select_device() returned: vendor_id={device.device.vendor_id} device_id={device.device.device_id} "
       f"metadata={dict(device.device.metadata)}")
 

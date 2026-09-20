@@ -67,36 +67,82 @@ def list_webgpu_devices():
     return [d for d in ort.get_ep_devices() if d.ep_name == webgpu_ep.get_ep_name()]
 
 
-def select_device(pci_bus_id=None, device_id=None):
+def select_device(pci_bus_id=None, device_id=None, adapter_luid=None):
     """
-    Linux/Vulkan device selection. Matches by PCI bus id (preferred, cross-checkable
-    against `lspci -nn`) or numeric PCI device id.
+    Select exactly one physical adapter by PCI bus id, numeric PCI device id, or
+    Windows DXGI adapter LUID. The LUID is the unique physical identity exposed in
+    OrtHardwareDevice metadata by Windows device discovery; device_id identifies a
+    hardware model and is rejected if it is ambiguous.
 
-    macOS/Metal port note: neither `pci_bus_id` nor `device_id` metadata exists for
+    macOS/Metal port note: none of these Windows/Linux hardware selectors exists for
     Apple Silicon's integrated GPU under Dawn/Metal. A macOS variant of this function
     would need to match on a different key (e.g. `ep_metadata`/`device` name string,
     or simply take the single available device since Apple Silicon has one GPU) --
     everything else in this module (registration, session patching, log verification)
     is platform-generic and should not need changes.
     """
+    selectors = {
+        "pci_bus_id": pci_bus_id,
+        "device_id": device_id,
+        "adapter_luid": adapter_luid,
+    }
+    supplied = [name for name, value in selectors.items() if value is not None]
+    if len(supplied) > 1:
+        raise GpuExecutionNotProvenError(
+            f"Specify exactly one physical-GPU selector, not {', '.join(supplied)}."
+        )
+
     devices = list_webgpu_devices()
     if not devices:
         raise GpuExecutionNotProvenError("No WebGPU EP devices found at all -- EP not available on this system.")
     if pci_bus_id is not None:
-        for d in devices:
-            if d.device.metadata.get("pci_bus_id") == pci_bus_id:
-                return d
+        matches = [d for d in devices if d.device.metadata.get("pci_bus_id") == pci_bus_id]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise GpuExecutionNotProvenError(
+                f"pci_bus_id={pci_bus_id!r} matched {len(matches)} WebGPU devices; refusing ambiguity."
+            )
         raise GpuExecutionNotProvenError(f"No WebGPU device with pci_bus_id={pci_bus_id!r}. Found: "
                                           f"{[dict(d.device.metadata) for d in devices]}")
     if device_id is not None:
-        for d in devices:
-            if d.device.device_id == device_id:
-                return d
+        matches = [d for d in devices if d.device.device_id == device_id]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise GpuExecutionNotProvenError(
+                f"device_id={device_id!r} matched {len(matches)} WebGPU devices; use the unique "
+                "adapter_luid (Windows) or pci_bus_id (Linux)."
+            )
         raise GpuExecutionNotProvenError(f"No WebGPU device with device_id={device_id!r}.")
+    if adapter_luid is not None:
+        adapter_luid_text = str(adapter_luid)
+        if re.fullmatch(r"[0-9]+", adapter_luid_text) is None:
+            raise GpuExecutionNotProvenError(
+                f"adapter_luid={adapter_luid!r} is not an unsigned decimal DXGI LUID."
+            )
+        adapter_luid_value = int(adapter_luid_text, 10)
+        if adapter_luid_value > 0xffffffffffffffff:
+            raise GpuExecutionNotProvenError(
+                f"adapter_luid={adapter_luid!r} exceeds the 64-bit DXGI LUID range."
+            )
+        normalized_luid = str(adapter_luid_value)
+        matches = [d for d in devices if d.device.metadata.get("LUID") == normalized_luid]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise GpuExecutionNotProvenError(
+                f"adapter_luid={normalized_luid!r} matched {len(matches)} WebGPU devices; refusing ambiguity."
+            )
+        raise GpuExecutionNotProvenError(
+            f"No WebGPU device with adapter_luid={normalized_luid!r}. Found: "
+            f"{[dict(d.device.metadata) for d in devices]}"
+        )
     if len(devices) > 1:
         raise GpuExecutionNotProvenError(
             f"{len(devices)} WebGPU devices found and no selector given -- refusing to guess. "
-            f"Pass pci_bus_id or device_id explicitly. Found: {[dict(d.device.metadata) for d in devices]}"
+            "Pass adapter_luid (Windows), pci_bus_id (Linux), or device_id explicitly. "
+            f"Found: {[dict(d.device.metadata) for d in devices]}"
         )
     return devices[0]
 

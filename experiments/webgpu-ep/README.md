@@ -2,7 +2,24 @@
 
 Status date: 2026-09-20. Experimental, opt-in, isolated. Not integrated into STEMwerk.
 
-Two phases so far:
+## Phase W4 — Windows native DXGI LUID proof of concept
+
+W4 implements a minimal native patch against the exact
+`plugin-ep-webgpu/v0.3.0` source (`caf2ed32972b8848277b2b9bcc8917e07bcfdb5c`).
+It propagates the selected Windows hardware device's existing DXGI `LUID` metadata to
+the pinned Dawn `RequestAdapterOptionsLUID`, verifies requested versus returned
+adapter identity, and prevents WebGPU context-cache reuse across physical GPUs. The
+full patch and evidence are in
+[`WINDOWS_NATIVE_LUID_POC.md`](WINDOWS_NATIVE_LUID_POC.md).
+
+This machine still lacks Visual Studio/MSVC, a Windows SDK, and CMake. Consequently
+the patch is reviewable but unbuilt: no patched DLL was loaded and RTX-to-AMD physical
+switching remains **NOT VERIFIED**. The installed 0.3.0 runtime and production
+STEMwerk remain untouched; no capability-matrix claim was added. Experiment CLIs now
+accept `--adapter-luid` and reject ambiguous selectors, ready for the isolated build
+and fresh-process A/B validation described in the W4 report.
+
+The original Linux work began with two phases:
 - **Phase L1** — prove the native WebGPU EP can run a real STEMwerk ONNX model at all
   (single inference call, no real audio pipeline).
 - **Phase L2** (this update) — run the *same* model through STEMwerk's actual
@@ -156,7 +173,7 @@ A small, tested module, not tied to any one script:
 
 - `ensure_webgpu_library_registered()` / `list_webgpu_devices()` — registration +
   enumeration.
-- `select_device(pci_bus_id=..., device_id=...)` — explicit device selection;
+- `select_device(pci_bus_id=..., device_id=..., adapter_luid=...)` — explicit device selection;
   **raises `GpuExecutionNotProvenError`** if the requested device doesn't exist, or if
   more than one WebGPU device exists and no selector was given (no silent guessing).
   The Linux/PCI-bus-id logic is isolated in this one function — see §8 for the macOS

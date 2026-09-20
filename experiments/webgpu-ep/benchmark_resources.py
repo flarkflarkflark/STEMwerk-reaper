@@ -93,6 +93,8 @@ if __name__ == "__main__":
     ap.add_argument("--device-id", type=int, default=None,
                      help="Windows/multi-GPU only (no pci_bus_id metadata under Dawn/D3D12); "
                           "omit on macOS/single-GPU systems")
+    ap.add_argument("--adapter-luid", default=None,
+                    help="Windows DXGI adapter LUID in unsigned decimal form; preferred over device-id")
     ap.add_argument(
         "--gpu-monitor-backend", choices=("auto", "rocm", "nvidia"), default="auto",
         help="Whole-GPU resource monitor. 'auto' preserves the historical behavior: "
@@ -117,7 +119,8 @@ if __name__ == "__main__":
     )
 
     original_cls, gpu_reports = patch_inference_session_for_provider_swap(
-        lambda: select_device(pci_bus_id=args.pci_bus_id, device_id=args.device_id)
+        lambda: select_device(pci_bus_id=args.pci_bus_id, device_id=args.device_id,
+                              adapter_luid=args.adapter_luid)
     )
 
     results = {}

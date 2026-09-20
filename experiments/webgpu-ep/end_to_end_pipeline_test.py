@@ -193,6 +193,8 @@ if __name__ == "__main__":
     ap.add_argument("--device-id", type=int, default=None,
                      help="Windows/multi-GPU only (no pci_bus_id metadata under Dawn/D3D12); "
                           "omit on macOS/single-GPU systems")
+    ap.add_argument("--adapter-luid", default=None,
+                    help="Windows DXGI adapter LUID in unsigned decimal form; preferred over device-id")
     ap.add_argument("--torch-device", default=None,
                     help="Optional explicit PyTorch device for MDX STFT/iSTFT (for example 'cpu'); "
                          "the ONNX inference provider is selected independently")
@@ -203,7 +205,8 @@ if __name__ == "__main__":
     print(f"Input: {args.input_wav} ({input_info.samplerate} Hz, {input_info.channels}ch, {expected_duration:.2f}s)")
 
     original_cls, gpu_reports = patch_inference_session_for_provider_swap(
-        lambda: select_device(pci_bus_id=args.pci_bus_id, device_id=args.device_id)
+        lambda: select_device(pci_bus_id=args.pci_bus_id, device_id=args.device_id,
+                              adapter_luid=args.adapter_luid)
     )
 
     report = {"tolerances": {"raw": RAW_TOLERANCE, "file": FILE_TOLERANCE, "pcm16_lsb": PCM16_LSB}}

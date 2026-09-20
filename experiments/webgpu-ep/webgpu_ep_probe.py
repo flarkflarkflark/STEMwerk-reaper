@@ -34,6 +34,8 @@ ap.add_argument("--pci-bus-id", default=None, help="Linux/multi-GPU only; omit o
 ap.add_argument("--device-id", type=int, default=None,
                  help="Windows/multi-GPU only (no pci_bus_id metadata under Dawn/D3D12); "
                       "omit on macOS/single-GPU systems")
+ap.add_argument("--adapter-luid", default=None,
+                help="Windows DXGI adapter LUID in unsigned decimal form; preferred over device-id")
 args = ap.parse_args()
 
 webgpu_devices = list_webgpu_devices()
@@ -41,7 +43,8 @@ print(f"EP beschikbaar: {len(webgpu_devices) > 0} ({len(webgpu_devices)} GPU dev
 for d in webgpu_devices:
     print(f"  - vendor_id={d.device.vendor_id} device_id={d.device.device_id} metadata={dict(d.device.metadata)}")
 
-target = select_device(pci_bus_id=args.pci_bus_id, device_id=args.device_id)
+target = select_device(pci_bus_id=args.pci_bus_id, device_id=args.device_id,
+                       adapter_luid=args.adapter_luid)
 
 # Minimal Conv graph -- representative op family for MDX-Net (UNet-style Conv2d stack).
 X = helper.make_tensor_value_info("X", TensorProto.FLOAT, [1, 3, 8, 8])
