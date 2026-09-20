@@ -41,6 +41,7 @@ class ResolveRequest:
     explicit_gpu: Optional[GpuInfo] = None
     allow_fallback: bool = True
     webgpu_ep_available: bool = True    # runtime signal: did the plugin EP actually register on THIS machine
+    windows_native_luid_selection_available: bool = False  # exact W5-patched runtime capability, not stock 0.3.0
     capability_matrix: tuple = tuple(cm.MATRIX)
 
 
@@ -76,9 +77,10 @@ def _isolation_for(req: ResolveRequest, gpu: GpuInfo, entry: Optional[cm.Capabil
     Returns (enforceable: bool, plan_env: Optional[dict], note: str).
 
     Single-GPU systems need no isolation at all (nothing to isolate FROM). Multi-GPU
-    systems need a PROVEN platform-specific mechanism -- currently only Linux
-    (VK_LOADER_DEVICE_ID_FILTER, L10). Anything else is reported as unenforceable,
-    never assumed to work.
+    systems need a PROVEN platform-specific mechanism. Linux uses
+    VK_LOADER_DEVICE_ID_FILTER (L10); the exact experimental Windows native build
+    recorded by W5 uses Dawn's DXGI-LUID request and returned-adapter verification.
+    Anything else is reported as unenforceable, never assumed to work.
     """
     if len(req.available_gpus) <= 1:
         return True, None, "N/A -- single GPU present, no isolation needed"
@@ -89,7 +91,14 @@ def _isolation_for(req: ResolveRequest, gpu: GpuInfo, entry: Optional[cm.Capabil
         plan = lvi.build_isolation_plan(gpu.device_id_hex)
         return True, plan.env, f"PASS -- {plan.mechanism}"
 
-    # Windows/macOS/other: no proven mechanism in this project's evidence base.
+    if ("windows" in req.os_arch.lower() and
+            req.windows_native_luid_selection_available and entry is not None):
+        verdict = entry.device_selection_enforceable.strip()
+        if verdict.startswith("PASS") and "LUID" in verdict:
+            return True, None, verdict
+
+    # macOS, stock Windows plugin builds, and other configurations have no proven
+    # multi-GPU mechanism in this project's evidence base.
     enforceable_note = entry.device_selection_enforceable if entry else "no capability evidence for this platform"
     return False, None, f"NOT ENFORCEABLE -- {enforceable_note}"
 

@@ -1,0 +1,70 @@
+From 1070be0cf9b10ea9e45d42d30d307ba459e673e5 Mon Sep 17 00:00:00 2001
+From: flarkflarkflark <flarkflarkflark@gmail.com>
+Date: Mon, 21 Sep 2026 00:56:08 +0200
+Subject: [PATCH] WebGPU: retain selected default context for internal
+ transfers
+
+---
+ .../core/providers/webgpu/webgpu_context.cc    | 16 ++++++++++++++++
+ .../providers/webgpu/webgpu_context_test.cc    | 18 ++++++++++++++++++
+ 2 files changed, 34 insertions(+)
+
+diff --git a/onnxruntime/core/providers/webgpu/webgpu_context.cc b/onnxruntime/core/providers/webgpu/webgpu_context.cc
+index 9ebc2ba..96b53df 100644
+--- a/onnxruntime/core/providers/webgpu/webgpu_context.cc
++++ b/onnxruntime/core/providers/webgpu/webgpu_context.cc
+@@ -1337,6 +1337,22 @@ void WebGpuContextFactory::Cleanup() {
+ }
+ 
+ WebGpuContext& WebGpuContextFactory::DefaultContext() {
++  // Internal allocator/data-transfer paths acquire the already-created default
++  // context without supplying the provider's original configuration. Re-running
++  // Initialize with a value-initialized config would make a physically constrained
++  // context look like an unconstrained caller request. Retain the existing context
++  // directly so its adapter identity and initialization state remain authoritative.
++  {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (contexts_ != nullptr) {
++      auto it = contexts_->find(0);
++      if (it != contexts_->end()) {
++        it->second.ref_count++;
++        return *it->second.context;
++      }
++    }
++  }
++
+   WebGpuContextConfig config{};
+   return WebGpuContextFactory::CreateContext(config);
+ }
+diff --git a/onnxruntime/test/providers/webgpu/webgpu_context_test.cc b/onnxruntime/test/providers/webgpu/webgpu_context_test.cc
+index 418fcaf..44a8e3d 100644
+--- a/onnxruntime/test/providers/webgpu/webgpu_context_test.cc
++++ b/onnxruntime/test/providers/webgpu/webgpu_context_test.cc
+@@ -315,6 +315,24 @@ TEST(WebGpuContextTest, D3D12AdapterLuidPropagationAndMatchingCacheReuse) {
+ #endif
+ }
+ 
++TEST(WebGpuContextTest, D3D12AdapterLuidInternalDefaultContextRetainsSelectedIdentity) {
++#if defined(_WIN32) && !defined(USE_EXTERNAL_DAWN)
++  auto ep = WebGpuProviderFactoryCreator::Create(CompileOnlyLuidOptions("64318"))->CreateProvider();
++  ASSERT_NE(ep, nullptr);
++
++  auto* selected_context = &webgpu::WebGpuContextFactory::GetContext(0);
++  auto* retained_context = &webgpu::WebGpuContextFactory::DefaultContext();
++  const auto retained_luid = retained_context->RequestedD3D12AdapterLuid();
++  webgpu::WebGpuContextFactory::ReleaseContext(0);
++
++  EXPECT_EQ(retained_context, selected_context);
++  ASSERT_TRUE(retained_luid.has_value());
++  EXPECT_EQ(*retained_luid, 64318u);
++#else
++  GTEST_SKIP() << "D3D12 LUID context identity is Windows-specific.";
++#endif
++}
++
+ TEST(WebGpuContextTest, D3D12AdapterLuidRejectsMalformedValue) {
+ #if defined(_WIN32) && !defined(USE_EXTERNAL_DAWN)
+   EXPECT_THROW(WebGpuProviderFactoryCreator::Create(CompileOnlyLuidOptions("64318junk")), OnnxRuntimeException);
+-- 
+2.52.0.windows.1
+

@@ -1,8 +1,9 @@
 # Windows isolated native build and physical GPU A/B validation (W5)
 
-Status date: 2026-09-20. Experimental only. W5 stopped at the explicitly required
-administrator installation boundary. No build tool was installed, no native build was
-started, and no production or existing experiment runtime was changed.
+Status date: 2026-09-21. Experimental only. The latest W5 continuation root-caused
+and fixed the patch-induced first-inference abort, then completed controlled RTX/AMD
+physical-GPU and full MDX/audio validation. The chronological earlier sections are
+retained as evidence; the final section is authoritative for current status.
 
 ## Executive result
 
@@ -752,3 +753,177 @@ proof — the central question the whole W1-W5 arc has been building toward — 
 open, despite this session's real progress (first successful build, first loaded
 patched DLL, first confirmed-correct adapter selection and placement on real hardware
 for both hardware paths, and first confirmed-correct native rejection-path behavior).
+
+## W5 completed — controlled A/B root cause, minimal fix, and physical RTX/AMD proof
+
+This section supersedes the earlier crash-blocked conclusion while preserving it as
+the chronological record. No production environment or installed provider DLL was
+used for these tests.
+
+### Controlled A/B: the crash was patch-induced
+
+An unpatched control was built from the W4 parent
+`caf2ed32972b8848277b2b9bcc8917e07bcfdb5c` with the identical source pins, build
+configuration, toolchain, local-disk layout, and caches. It was packaged and installed
+into a separate runtime. The exact same fresh-process Conv test then established:
+
+| Runtime | Live DLL SHA-256 | First Conv inference |
+|---|---|---|
+| Exact unpatched same-build control | `3436ba1467685626f0a840a5d2bbd874626f6b8d26cf7064c032ef7def65f794` | **PASS**, exit 0 |
+| Original W4 patch | `d5ed4d5ed6d53a384594f626c7d2090fbc3ea8a53897507747226d6065bd422b` | **ABORT**, `0xC0000409` |
+
+The control wheel SHA-256 is
+`39da61d928e450c42be412a7ce183c71c7bbb4de099baaed10e93cf272d76a33`.
+The control was repeated after the fix validation and passed again. This removes the
+earlier hypothesis that the failure was a generic property of the locally built
+Dawn/DXC/ORT configuration.
+
+### Native crash diagnosis
+
+Four full dumps were captured and retained under
+`M:\stemwerk-w5\evidence\crash-dumps\`. A Win32 debug harness decoded the exception
+record and the live MSVC exception object. The observable chain was:
+
+1. The first tensor-transfer/inference path requested
+   `WebGpuContextFactory::DefaultContext()`.
+2. `DefaultContext()` constructed an empty `WebGpuContextConfig` and called
+   `CreateContext(config)` even though context ID 0 already existed.
+3. `CreateContext()` incremented the cached context refcount and called
+   `Initialize(config)` again.
+4. W4's correct cross-GPU cache guard compared the retained requested LUID with the
+   new empty config and threw:
+
+   `WebGPU context ID 0 is already initialized for a different D3D12 adapter LUID; refusing to reuse a physical GPU context for another request.`
+
+5. That exception crossed a non-throwing C callback boundary, producing fast-fail
+   subcode 7 (`FAST_FAIL_FATAL_APP_EXIT`) and process status `0xC0000409`.
+
+Therefore the status was a deliberate fatal abort after an uncaught
+`OnnxRuntimeException`, not evidence of a stack-buffer overwrite. The W4 assertion
+was correct for an explicit caller requesting a different GPU, but an internal
+default-context acquisition had been incorrectly made to look like an unconstrained
+new caller.
+
+The competing lifetime/ABI hypotheses were checked rather than assumed. The local
+`RequestAdapterOptionsLUID` and its chained toggle descriptor remain in scope until
+the synchronous `WaitAny(..., UINT64_MAX)` request completes; the returned adapter is
+then independently queried through DXGI before either local leaves scope. The exact
+unpatched A/B, decoded exception, and successful post-fix execution provide no
+evidence of a Dawn chained-pointer lifetime, adapter/device ownership, or ABI/layout
+fault.
+
+### Minimal source correction
+
+`WebGpuContextFactory::DefaultContext()` now locks the factory, retains and returns
+the existing context ID 0 when present, and calls `CreateContext` with a default
+config only when no default context exists. Explicit `CreateContext` calls still run
+the LUID identity check, so cross-GPU reuse remains rejected.
+
+The isolated source commit is:
+
+`1070be0cf9b10ea9e45d42d30d307ba459e673e5` —
+`WebGPU: retain selected default context for internal transfers`
+
+The preserved incremental patch is
+`patches/0002-WebGPU-retain-selected-default-context.patch`, SHA-256
+`fa3f51aaaf858fc68834481049b85fd01932ad0af7cb908a6df32d349c7f7f8a`.
+It applies after the unchanged W4 patch/commit
+`ab4ae2d6888f1a7f383427ca0701944c3a0954f3`.
+
+A focused native regression test,
+`D3D12AdapterLuidInternalDefaultContextRetainsSelectedIdentity`, verifies that an
+internal `DefaultContext()` acquisition returns the same context object and retains
+its selected LUID. As documented earlier, this source file is excluded by upstream
+CMake in the required shared/plugin-EP build mode, so the test could not be executed
+without changing the pinned build topology. The direct first-inference regression on
+both GPUs covers the failing runtime path.
+
+### Incremental rebuild and loaded-binary proof
+
+Only `onnxruntime_providers_webgpu` was rebuilt in the existing tree, with four jobs.
+Only `webgpu_context.cc` recompiled; LTO reported 11 of 183,410 functions compiled.
+`INCREMENTAL_BUILD_EXIT_CODE=0`. The build log is
+`C:\stemwerk-w5-local\build_log_incremental_fix.txt`.
+
+| Artifact | Size | SHA-256 |
+|---|---:|---|
+| Fixed provider DLL | 10,443,264 B | `b7a1c62395a5ae953cd362528d9856184fe231e9337289265d84397c963d3248` |
+| Fixed wheel `0.3.0+w5fix1` | 12,724,115 B | `e1469a3623609c10382839a07103b37a37600055673ca26642e42104e68dd74d` |
+
+Fresh-process module enumeration re-hashed the actually loaded DLL. The first Conv
+inference then passed with shape `(1, 32, 256, 256)` and exit 0. The DLL hash remained
+unchanged before and after all physical-GPU and MDX tests.
+
+### Decisive physical GPU A/B
+
+Each direction ran in a fresh process. Windows GPU Engine performance counters were
+keyed to the process PID and independently mapped from the registry's DXGI adapter
+LUIDs. A dense repeated Conv workload provided a sufficiently wide sampling window.
+
+| Requested GPU | Process/workload | Independent result | Verdict |
+|---|---|---|---|
+| RTX 3060, LUID `64318` | PID 6336; 714 Conv calls | Only LUID `64318`; 2 nonzero 3D samples; 38.65% peak; no AMD sample | **PASS** |
+| AMD Radeon iGPU, LUID `59967` | PID 6608; 618 Conv calls | Only LUID `59967`; 3 nonzero 3D samples; 59.37% peak; no RTX sample | **PASS** |
+
+The earlier nested-monitor attempt produced no attributable samples and is retained
+as a negative measurement artifact, not counted as evidence. The decisive runs used
+one same-process monitor each. Their logs are
+`M:\stemwerk-w5\evidence\w5_fix1_rtx_dense_direct.log` and
+`w5_fix1_amd_dense_direct.stdout.log`.
+
+### Full MDX-Net numerical and audio validation
+
+The pinned model SHA-256 was
+`bf32e15105a09c0f7dddd2b67346146334d6f3ecb399ed7638eba2ab07cbf5f4`;
+the 25-second fixture SHA-256 was
+`658380a556000aaf38e8502cf3276ba2b9291f4b6eeffc82d48863fd91385b32`.
+Both GPU directions used fresh processes and the same fixed DLL:
+
+| Requested GPU | Placement | Raw CPU/WebGPU comparison | Export/audio | Exit |
+|---|---|---|---|---:|
+| RTX LUID `64318` | 185/185 WebGPU | corr 1.00000000; max abs `1.10e-06` vocals, `1.03e-06` instrumental | Both 44.1 kHz stereo 25.00 s stems valid; file diff <= 1 PCM16 LSB; routing PASS | 0 |
+| AMD LUID `59967` | 185/185 WebGPU | corr 1.00000000; max abs `1.07e-06` vocals, `1.01e-06` instrumental | Both 44.1 kHz stereo 25.00 s stems valid; file diff <= 1 PCM16 LSB; routing PASS | 0 |
+
+The MDX burst itself was not caught by the outer low-frequency counter sampler, so it
+is not used as physical-selection proof; the dense per-PID/LUID runs above supply
+that independent proof. The MDX runs supply model, numerical, and output-audio proof.
+Reports, WAVs, logs, and monitor JSON are retained under `M:\stemwerk-w5\evidence\`.
+
+### Regression and safety results
+
+- W4 selector unit tests: **9/9 PASS**.
+- Capability resolver policy: **29/29 non-skipped PASS**, with 2 expected Linux-only
+  skips. This includes stale-W2/stock-plugin and missing-runtime-capability negative
+  controls that remain fail-closed.
+- Capability matrix/schema: **PASS**, 11 entries × 24 fields, JSON exactly regenerated
+  from the Python source.
+- Python compile checks: **PASS**.
+- Explicit cross-GPU context reuse: **REJECTED as designed**.
+- Same-GPU context reuse: **PASS**.
+- Malformed/out-of-range LUIDs: **REJECTED as designed**.
+- Raw ORT provider creation may silently retry on CPU after native rejection; the
+  project wrapper detects that provider loss and rejects it, preventing a false PASS.
+
+The capability matrix was updated only for the two W5-tested Windows MDX-Net rows.
+The AMD row remains excluded from Auto pending repeated performance/stability
+characterization. Demucs was not run and its row was not upgraded.
+
+### Final layered status
+
+| Layer | Verdict |
+|---|---|
+| BUILT / PACKAGED / LOADED | **PASS** — exact hashes above |
+| PATCH-INDUCED CRASH ROOT CAUSE | **FOUND AND FIXED** |
+| FIRST INFERENCE REGRESSION | **PASS** on fixed build; exact unpatched control also PASS |
+| SESSION / LUID MATCH / PLACEMENT | **PASS** on RTX and AMD |
+| PHYSICAL DEVICE SELECTION | **PASS** in both directions with positive per-PID DXGI-LUID activity |
+| MDX-NET NUMERICAL CORRECTNESS | **PASS** on RTX and AMD |
+| FULL AUDIO | **PASS** on RTX and AMD |
+| DEMUCS | **NOT TESTED** |
+
+The two protected production provider DLLs remain byte-identical at SHA-256
+`b05a6d5187885be9133ac383d5271af20b76f281e72d8bfe933f35a23d05b94f`.
+The unpatched control checkout remains clean at `caf2ed32972b8848277b2b9bcc8917e07bcfdb5c`.
+The original network-share W4 checkout was not modified; its SMB ownership behavior
+still prevents an ordinary status read without changing global Git trust settings,
+which W5 intentionally did not do. No source or experiment commit was pushed.

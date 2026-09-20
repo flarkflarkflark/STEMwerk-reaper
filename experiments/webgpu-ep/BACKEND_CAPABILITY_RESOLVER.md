@@ -6,6 +6,11 @@ model-aware **backend resolver** prototype: something that decides, for a given
 (model, platform, physical GPU) combination, whether STEMwerk's shared WebGPU
 inference route should be offered at all — not just whether it technically runs.
 
+W5 update (2026-09-21): the exact experimental Windows native build now has verified
+DXGI-LUID enforcement on RTX and AMD for MDX-Net. The resolver requires both the W5
+matrix verdict and an explicit runtime capability signal; the stock 0.3.0 behavior
+documented below remains historical negative evidence and stays fail-closed.
+
 **Not a replacement for CUDA/ROCm/MPS/DirectML.** The goal, per the brief, is to offer
 WebGPU only where it is demonstrably correct, stable, and practically useful for that
 exact model/GPU pair — supplementing existing vendor backends, never silently
@@ -112,7 +117,9 @@ machine-readable artifact) from the single Python source of truth. Both are comm
 `available_gpus` (tuple of `GpuInfo`), `desired_backend`
 (`"Auto"`/`"CPU"`/`"WebGPU"`/`"Vendor"`), optional `explicit_gpu`, `allow_fallback`,
 `webgpu_ep_available` (a runtime signal, separate from historical evidence — did the
-plugin actually register on THIS machine right now), and an injectable
+plugin actually register on THIS machine right now),
+`windows_native_luid_selection_available` (default `False`; set only after verifying
+the actually loaded runtime has W5's native LUID patch and context fix), and an injectable
 `capability_matrix` (defaults to the real one; overridable for testing, see Section 5's
 contradictory-evidence test). Output (`ResolveResult`): `selected_backend`,
 `selected_gpu`, `device_selection_enforceable`, `required_process_isolation` (an env
@@ -133,9 +140,9 @@ Key policy rules, each directly traceable to a brief requirement:
 3. **Device-selection enforceability is checked separately from correctness.** A
    GPU/model pair can be `found_correct=True` on some other machine's single-GPU
    system and still resolve to `BLOCKED` here if this system has multiple GPUs and no
-   proven mechanism exists to force the right one (Section 4) — this is exactly the
-   Windows multi-GPU case in the matrix (`device_selection_enforceable: "UNKNOWN / NOT
-   PROVEN"`).
+   proven mechanism exists to force the right one (Section 4). W5 added a proven
+   Windows mechanism for its exact experimental native build, but the separate runtime
+   capability flag must also be true; matrix history alone cannot authorize a stock DLL.
 4. **Auto prefers an already-proven-superior vendor backend over WebGPU**, per the
    brief's own "Doel" — even where WebGPU itself is `suitable_for_auto`. This is why
    Apple M1 + Demucs and RTX 3060 + Demucs resolve Auto requests to
@@ -160,8 +167,10 @@ subprocess's environment**, never on the calling process, never globally.
 `build_isolation_plan(target_device_id_hex)` raises `IsolationNotAvailableError`
 immediately on any non-Linux platform — the shared resolver calls this only behind a
 `sys.platform.startswith("linux")` check (`backend_resolver._isolation_for`) and
-otherwise reports `device_selection_enforceable=False` rather than assuming the
-mechanism generalizes, exactly per L10 Section 12's no-portability claim. No global
+otherwise reports `device_selection_enforceable=False` unless both W5's exact matrix
+evidence and `windows_native_luid_selection_available=True` are present. The Windows
+path needs no process environment isolation: the patched provider sends and verifies
+the selected DXGI LUID inside Dawn. No global
 environment changes, no driver changes, no GPU disabling — verified again by direct
 use in Section 6 below (the isolation env dict is only ever passed to
 `subprocess.run(..., env=...)`, never applied to the calling process's own
@@ -190,7 +199,7 @@ rules in Section 3:
 | 7 | Unknown Intel GPU | `UNKNOWN`, not `PASS` |
 | 8 | Unknown ONNX model | `UNKNOWN`, not `PASS` |
 | 9 | Nonexistent GPU (explicit) | `FAIL`, no substitute picked |
-| 10 | Multiple GPUs, no enforceable selection (Windows) | `BLOCKED`, not a guess |
+| 10 | Windows multi-GPU with verified W5 native-LUID capability | Enforced WebGPU PASS; missing capability signal remains `BLOCKED` |
 | 11 | WebGPU EP missing at runtime | `FAIL` |
 | 12a/b | CPU fallback allowed / forbidden | Honored exactly, on the same unknown combination |
 | 13 | Contradictory/outdated evidence | Swapping in a modified matrix changes the resolver's own decision (proves it reads its evidence input rather than hardcoding conclusions) |

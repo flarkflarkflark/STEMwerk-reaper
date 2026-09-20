@@ -1,65 +1,49 @@
-# WebGPU EP experiment — native ONNX Runtime WebGPU Execution Provider (Linux/AMD+NVIDIA, macOS/Apple Silicon, Windows/NVIDIA)
+# WebGPU EP experiment — native ONNX Runtime WebGPU Execution Provider (Linux/AMD+NVIDIA, macOS/Apple Silicon, Windows/AMD+NVIDIA)
 
-Status date: 2026-09-20. Experimental, opt-in, isolated. Not integrated into STEMwerk.
+Status date: 2026-09-21. Experimental, opt-in, isolated. Not integrated into STEMwerk.
 
-## Phase W5 — isolated native build preflight, then a real local-disk build attempt
+## Phase W5 — native build, crash correction, and physical RTX/AMD validation
 
-W5 originally re-verified the published W4 commit, exact isolated ORT/Dawn revisions,
-patch, installed runtime, model, and fixture, and stopped **BLOCKED at an explicit
-administrator installation boundary** (no compiler/SDK/CMake present at all). Build
-Tools 2022 was subsequently installed with user approval in an intervening session.
+W5 built the W4 native DXGI-LUID patch from the pinned ORT/Dawn source in an isolated
+local tree. The first patched build exposed a reproducible first-inference abort on
+both GPUs. An identical-source/configuration unpatched control passed, proving the
+regression was introduced by W4 rather than by the toolchain or Dawn build.
 
-A follow-on attempt then tried to build directly on the network share (`M:`,
-`\\192.168.68.99\music`) and root-caused a real, systemic problem: Git's
-"dubious ownership" check silently rejected every one of Dawn's `third_party/*`
-checkouts because of how SMB reports file ownership. A narrowly scoped fix was applied
-on `M:` for the record, but the decision was made to stop fighting the share and move
-the build to local disk instead, where a local owner SID makes the problem moot.
+Native dumps showed that `0xC0000409` was fast-fail subcode 7 after an uncaught
+`OnnxRuntimeException`, not demonstrated buffer corruption. The first internal tensor
+transfer called `DefaultContext()` with an empty config; that path incorrectly
+re-initialized the already LUID-constrained context and triggered W4's cross-GPU cache
+guard. Dawn request-chain lifetime and ABI hypotheses were checked and did not match
+the observed exception or controlled A/B.
 
-That relocation happened next: the reviewed W4 source (clean at commit
-`ab4ae2d6888f1a7f383427ca0701944c3a0954f3`) was copied — not re-cloned — from
-`M:\stemwerk-w4\...` to `C:\stemwerk-w5-local\...` via robocopy, verified clean and
-still at the exact same commit with no ownership error, and every pinned reference
-hash (installed DLL, MDX model, test fixture, patch file, live DXGI LUID map) was
-independently recomputed and matched. The build then ran for real for the first time
-in this experiment's history — well past vcpkg dependency compilation and CMake
-configuration, into genuine MSVC/MSBuild compilation of ORT and Dawn targets — before
-failing on a single, clearly diagnosed compile error: Dawn's bundled
-DirectXShaderCompiler needed ATL headers (`atlbase.h`) that the Build Tools
-installation did not yet include (the "C++ ATL for latest v143 build tools" optional
-component was missing).
+The minimal correction makes `DefaultContext()` retain and return an existing context
+ID 0 without re-running `Initialize`; explicit caller-created contexts still enforce
+LUID identity. It is committed only in the isolated source checkout as
+`1070be0cf9b10ea9e45d42d30d307ba459e673e5` and preserved as
+[`patches/0002-WebGPU-retain-selected-default-context.patch`](patches/0002-WebGPU-retain-selected-default-context.patch).
+Only the affected provider target was rebuilt, with the four-job limit.
 
-After the user installed that component (independently re-verified before resuming:
-`vswhere`, the header on disk, no stray processes), the build was resumed unchanged
-and **completed successfully — `BUILD_EXIT_CODE=0`**, the first fully successful
-native build in this experiment's history. The new
-`onnxruntime_providers_webgpu.dll` (10,443,264 bytes, SHA-256 `d5ed4d5e...`, distinct
-from the unpatched `b05a6d51...`) was packaged into a coherent wheel and installed
-into a new isolated runtime venv. Its loaded-module identity was proven in a live
-process (not just import): `psutil`-resolved and re-hashed, matching exactly. Fresh
-per-GPU sessions were then created for both the RTX 3060 (LUID `64318`) and the AMD
-iGPU (LUID `59967`) — both succeeded, both correctly placed all nodes on
-`WebGpuExecutionProvider`, and the patch's native invalid-LUID and cross-GPU-context
-rejection paths were confirmed working exactly as designed, with the native error
-text matching the patch's own source strings.
+The fixed DLL is 10,443,264 bytes with SHA-256
+`b7a1c62395a5ae953cd362528d9856184fe231e9337289265d84397c963d3248`.
+Fresh-process live-module verification matched that exact file. First Conv inference
+passed. Independent per-PID Windows GPU Engine counters then proved both selection
+directions using dense workloads:
 
-**The decisive physical-execution proof remains blocked by a new, different problem**:
-the very first real inference call after a successful, correctly placed WebGPU
-session crashes the process with `STATUS_STACK_BUFFER_OVERRUN` (`0xC0000409`),
-reproduced identically on both GPUs for even a single-node graph. This is a new,
-serious, unexplained crash surfaced for the first time by this session's build
-success — not something a prior session could have found without a working build —
-and is reported rather than worked around. MDX-Net execution was not attempted given
-the reliably reproducing simpler crash. Physical RTX/AMD switching therefore remains
-**NOT VERIFIED**, now for a materially different and better-understood reason than
-every prior phase's "no build exists" boundary.
+- RTX request LUID `64318`: only the RTX LUID was active, peak 38.65%, 714 inferences.
+- AMD request LUID `59967`: only the AMD LUID was active, peak 59.37%, 618 inferences.
 
-Safe regressions remain green (9/9 W4 selector tests, 27/27 non-skipped resolver
-tests, capability matrix/schema validation, Windows DXGI mapping, and Python
-compilation). Full detail, exact hashes, exact error text, and next-step
-root-causing options are in
-[`WINDOWS_NATIVE_BUILD_VALIDATION.md`](WINDOWS_NATIVE_BUILD_VALIDATION.md). The
-capability matrix and production STEMwerk remain unchanged.
+Full 25-second MDX-Net/audio runs also passed independently on both GPUs: 185/185
+nodes on WebGPU, raw CPU/WebGPU correlation 1.00000000, maximum absolute error about
+`1.1e-6`, valid stereo stems, correct routing, and exported differences no greater
+than one PCM16 LSB. AMD PASS therefore rests on positive AMD physical activity plus
+model/numerical/audio success—not session creation alone.
+
+Regressions are green: selector 9/9, resolver 29/29 non-skipped with 2 expected
+Linux-only skips, capability matrix/schema 11×24, and Python compilation. The
+capability matrix upgrades only the two actually tested Windows MDX-Net rows; AMD is
+still excluded from Auto pending repeated performance/stability work, and Demucs is
+unchanged. Full provenance and evidence are in
+[`WINDOWS_NATIVE_BUILD_VALIDATION.md`](WINDOWS_NATIVE_BUILD_VALIDATION.md).
 
 ## Phase W4 — Windows native DXGI LUID proof of concept
 
@@ -71,8 +55,9 @@ adapter identity, and prevents WebGPU context-cache reuse across physical GPUs. 
 full patch and evidence are in
 [`WINDOWS_NATIVE_LUID_POC.md`](WINDOWS_NATIVE_LUID_POC.md).
 
-This machine still lacks Visual Studio/MSVC, a Windows SDK, and CMake. Consequently
-the patch is reviewable but unbuilt: no patched DLL was loaded and RTX-to-AMD physical
+At the end of W4 this machine still lacked Visual Studio/MSVC, a Windows SDK, and
+CMake. Consequently the patch was then reviewable but unbuilt: no patched DLL was
+loaded and RTX-to-AMD physical
 switching remains **NOT VERIFIED**. The installed 0.3.0 runtime and production
 STEMwerk remain untouched; no capability-matrix claim was added. Experiment CLIs now
 accept `--adapter-luid` and reject ambiguous selectors, ready for the isolated build

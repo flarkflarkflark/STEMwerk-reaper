@@ -188,11 +188,13 @@ r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="linux",
 check("Nonexistent GPU: status is FAIL, no substitute silently selected",
       r.status == "FAIL" and r.selected_gpu is None)
 
-# 10. Multiple GPUs without reliable/enforceable selection (Windows: no proven isolation mechanism)
+# 10. Multiple GPUs with the W5 native DXGI-LUID enforcement evidence.
 r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
-                            available_gpus=(RTX3060, GpuInfo("AMD", "AMD iGPU")), desired_backend="Auto"))
-check("Multiple GPUs, no enforceable selection on Windows: BLOCKED, not a guessed PASS",
-      r.status == "BLOCKED" and r.selected_gpu is None)
+                            available_gpus=(RTX3060, GpuInfo("AMD", "AMD iGPU")), desired_backend="Auto",
+                            windows_native_luid_selection_available=True))
+check("W5 native Windows LUID enforcement lets Auto select the proven RTX row",
+      r.status == "PASS" and r.selected_backend == "WebGPU" and r.selected_gpu == RTX3060 and
+      r.device_selection_enforceable is True)
 
 # 11. EP missing at runtime
 r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="linux",
@@ -233,74 +235,55 @@ r_stale = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="l
 check("Resolver decision changes when the evidence it's given changes (not hardcoded)",
       r_live.status == "PASS" and r_stale.status == "BLOCKED")
 
-# --- W2: Windows multi-GPU physical-selection-enforcement tests -----------------
-# Phase W2 (WINDOWS_MULTI_GPU_SELECTION.md) ran the decisive reversed-selection test
-# this project's own L9/L10 recommended: on a real Windows/D3D12 laptop with an
-# NVIDIA RTX 3060 (discrete) + an AMD Radeon iGPU, an explicit request for the AMD
-# iGPU still executed on the RTX 3060 -- independently confirmed via OS-level GPU
-# Engine performance counters (keyed to DXGI adapter LUID) and nvidia-smi whole-GPU
-# utilization, in two separate fresh processes. This directly disproves W1's
-# unverified assumption that the RTX 3060 selection in W1 was caused by the request
-# rather than coinciding with Dawn's own high-performance-adapter default. These
-# tests assert the resolver's policy correctly reflects that finding: never PASS an
-# explicit Windows multi-GPU selection, and never silently substitute a different
-# physical GPU than what was asked for.
+# --- W5: Windows native DXGI-LUID selection regression tests ---------------------
+# W2 proved the stock 0.3.0 plugin ignored its Windows device request. W5's isolated
+# native build passes the selected hardware device's DXGI LUID to Dawn, verifies the
+# returned adapter identity, and was physically validated in both directions. These
+# policy tests capture the new evidence while retaining a stale-W2 negative control.
 
 RTX3060_WIN = GpuInfo("NVIDIA", "RTX 3060 Laptop GPU")
 AMD_IGPU_WIN = GpuInfo("AMD", "AMD Radeon(TM) Graphics", "0x1638", None)
 INTEL_IGPU_WIN = GpuInfo("Intel", "Intel Iris Xe Graphics")
 
-# W2a. Windows multi-GPU selection: with two real GPUs present and no Linux-style
-# isolation mechanism available (W2's Section 7 finding), Auto must NOT claim a
-# WebGPU PASS on this model even though the RTX 3060 alone is otherwise a proven,
-# suitable_for_auto candidate -- selection cannot be safely enforced with a second
-# GPU in the picture, so the resolver falls back rather than guessing (mirrors the
-# pre-existing test #10, restated here with the real W2-derived GpuInfo objects and
-# explicit reference to the finding that produced this policy).
+# W5a. Auto prefers the already Auto-suitable RTX row and may enforce that choice.
 r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
-                            available_gpus=(RTX3060_WIN, AMD_IGPU_WIN), desired_backend="Auto"))
-check("W2a Windows RTX3060+iGPU present, MDX-Net, Auto: BLOCKED, no enforced-selection PASS claimed",
-      r.status == "BLOCKED" and r.selected_gpu is None and r.device_selection_enforceable is False)
+                            available_gpus=(RTX3060_WIN, AMD_IGPU_WIN), desired_backend="Auto",
+                            windows_native_luid_selection_available=True))
+check("W5a Windows RTX3060+iGPU present, MDX-Net, Auto: enforced RTX PASS",
+      r.status == "PASS" and r.selected_gpu == RTX3060_WIN and r.device_selection_enforceable is True)
 
-# W2b. Physical-GPU-proof vs. claimed-selection distinction: the capability matrix
-# itself must record W1's Windows RTX 3060 rows as DISPROVEN/not-enforced (not a
-# bare "PASS"), now that W2 has actual reversed-selection evidence -- guards against
-# ever re-collapsing "GPU executed" and "selector caused it" back into one claim.
+# W5b. The matrix must distinguish the patched-build result from W2's stock-plugin
+# failure and record the independently proven LUID selection.
 win_rtx_mdx = cm.lookup("windows", "RTX 3060", "MDXNET")
-check("W2b Windows RTX3060 MDX-Net matrix row: device_selection_enforceable is DISPROVEN, not PASS/UNKNOWN",
-      win_rtx_mdx is not None and "DISPROVEN" in win_rtx_mdx.device_selection_enforceable)
+check("W5b Windows RTX3060 MDX-Net matrix row: native LUID selection is PASS",
+      win_rtx_mdx is not None and win_rtx_mdx.device_selection_enforceable.startswith("PASS") and
+      "LUID 64318" in win_rtx_mdx.physical_gpu_verification)
 
-# W2c. Requested GPU differing from observed GPU: the new Windows AMD iGPU matrix
-# row itself must record found_correct=False and a FAIL selector verdict -- this is
-# the "requested != observed" case the brief asked for, backed by the real W2 result
-# (RTX 3060 executed despite the iGPU being requested), not a hypothetical.
+# W5c. The reversed AMD request must be a positive physical AMD result, not session
+# creation alone and not the old W2 RTX substitution.
 win_igpu_mdx = cm.lookup("windows", "AMD Radeon(TM) Graphics", "MDXNET")
-check("W2c Windows AMD iGPU MDX-Net matrix row: found_correct is False and selector verdict is FAIL",
-      win_igpu_mdx is not None and win_igpu_mdx.found_correct is False and
-      "FAIL" in win_igpu_mdx.device_selection_enforceable and
-      "RTX 3060" in win_igpu_mdx.physical_gpu_verification)
+check("W5c Windows AMD iGPU MDX-Net row: correct, LUID-enforced, physically AMD",
+      win_igpu_mdx is not None and win_igpu_mdx.found_correct is True and
+      win_igpu_mdx.device_selection_enforceable.startswith("PASS") and
+      "LUID 59967" in win_igpu_mdx.physical_gpu_verification)
 
-# W2d. Explicit GPU request failing closed: an explicit request for the Windows AMD
-# iGPU (the disproven combination) must be refused outright (BLOCKED), and with
-# fallback disabled must select nothing -- never silently rerouted to the RTX 3060
-# that W2 showed actually executes instead.
+# W5d. An explicit AMD request is allowed even though the row remains unsuitable for
+# Auto pending repeated performance/stability characterization.
 r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
                             available_gpus=(RTX3060_WIN, AMD_IGPU_WIN), desired_backend="WebGPU",
-                            explicit_gpu=AMD_IGPU_WIN, allow_fallback=False))
-check("W2d Windows explicit iGPU request fails closed: BLOCKED, no fallback, no silent RTX 3060 substitution",
-      r.status == "BLOCKED" and r.selected_backend is None and r.selected_gpu is None)
+                            explicit_gpu=AMD_IGPU_WIN, allow_fallback=False,
+                            windows_native_luid_selection_available=True))
+check("W5d Windows explicit AMD request: enforced WebGPU PASS with no substitution",
+      r.status == "PASS" and r.selected_backend == "WebGPU" and r.selected_gpu == AMD_IGPU_WIN and
+      r.device_selection_enforceable is True)
 
-# W2e. No-safe-isolation-mechanism case, explicit RTX 3060 request this time (the
-# GPU that DID physically execute in W1/W2): even the "right" GPU on a multi-GPU
-# Windows system cannot be marked as an ENFORCED selection, because W2 proved this
-# platform has no mechanism to guarantee the opposite outcome either -- the matrix's
-# own DISPROVEN verdict (W2b) means backend_resolver.py must still refuse to promise
-# enforcement even for a request that happens to match what actually ran.
+# W5e. The opposite explicit direction is also enforceable.
 r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
                             available_gpus=(RTX3060_WIN, AMD_IGPU_WIN), desired_backend="WebGPU",
-                            explicit_gpu=RTX3060_WIN))
-check("W2e Windows explicit RTX3060 request (2 GPUs present): still BLOCKED, no enforcement promised",
-      r.status == "BLOCKED" and r.selected_gpu is None)
+                            explicit_gpu=RTX3060_WIN,
+                            windows_native_luid_selection_available=True))
+check("W5e Windows explicit RTX3060 request: enforced WebGPU PASS",
+      r.status == "PASS" and r.selected_gpu == RTX3060_WIN and r.device_selection_enforceable is True)
 
 # W2f. Unknown iGPU capability: a different, never-tested Windows iGPU vendor
 # (Intel) must resolve UNKNOWN, not PASS -- no evidence exists for it at all.
@@ -308,18 +291,39 @@ r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows
                             available_gpus=(INTEL_IGPU_WIN,), desired_backend="Auto"))
 check("W2f Unknown Windows Intel iGPU: status is UNKNOWN, not PASS", r.status == "UNKNOWN")
 
-# W2g. Correct handling of DISPROVEN iGPU evidence (the "if obtained" case from the
-# brief -- W2 obtained real evidence, but it disproves rather than validates iGPU
-# execution): Auto with ONLY the AMD iGPU present (no RTX 3060 to fall back to
-# in the available_gpus list) must still refuse WebGPU as BLOCKED, distinguishing
-# "known bad" from "no evidence" (UNKNOWN) -- this is a genuinely different failure
-# reason than the Radeon 780M/Linux BLOCKED case (device-loss crash) or the Windows
-# multi-GPU-present case (W2a/e, unenforceable selection): here it is disproven
-# physical correctness for this GPU specifically.
+# W5g. AMD is correct but intentionally not Auto-suitable from a single timing run.
 r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
                             available_gpus=(AMD_IGPU_WIN,), desired_backend="Auto"))
-check("W2g Windows AMD iGPU alone, Auto: BLOCKED (disproven-correct), not silently PASS",
-      r.status == "BLOCKED" and r.selected_backend != "WebGPU")
+check("W5g Windows AMD iGPU alone, Auto: UNKNOWN/not WebGPU pending Auto qualification",
+      r.status == "UNKNOWN" and r.selected_backend != "WebGPU")
+
+# W5h. Regress the old W2 evidence explicitly: without a PASS/LUID matrix verdict,
+# Windows multi-GPU selection must still fail closed.
+stale_windows_matrix = tuple(
+    dataclasses.replace(e, device_selection_enforceable="DISPROVEN (W2 stock plugin)")
+    if "windows" in e.os_arch.lower() and "RTX 3060" in e.gpu_model and "MDXNET" in e.model_name
+    else dataclasses.replace(e, found_correct=False, suitable_for_auto=False,
+                             device_selection_enforceable="FAIL (W2 stock plugin)")
+    if "windows" in e.os_arch.lower() and "AMD Radeon(TM) Graphics" in e.gpu_model
+       and "MDXNET" in e.model_name
+    else e
+    for e in cm.MATRIX
+)
+r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
+                            available_gpus=(RTX3060_WIN, AMD_IGPU_WIN), desired_backend="WebGPU",
+                            explicit_gpu=RTX3060_WIN, allow_fallback=False,
+                            windows_native_luid_selection_available=True,
+                            capability_matrix=stale_windows_matrix))
+check("W5h stale W2 stock-plugin evidence remains fail-closed",
+      r.status == "BLOCKED" and r.selected_backend is None and r.selected_gpu is None)
+
+# W5i. A matching matrix row is not enough: the caller must also prove that the
+# actually loaded runtime has the native LUID patch/fix rather than stock 0.3.0.
+r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
+                            available_gpus=(RTX3060_WIN, AMD_IGPU_WIN), desired_backend="WebGPU",
+                            explicit_gpu=RTX3060_WIN, allow_fallback=False))
+check("W5i Windows LUID capability absent at runtime remains fail-closed",
+      r.status == "BLOCKED" and r.selected_backend is None and r.selected_gpu is None)
 
 print(f"\n{_count - len(_failures)}/{_count} policy tests passed"
       f"{f' ({len(_skipped)} skipped, non-Linux host -- see ON_LINUX above)' if _skipped else ''}.")
