@@ -1,6 +1,6 @@
-# WebGPU EP experiment — native ONNX Runtime WebGPU Execution Provider on Linux/AMD
+# WebGPU EP experiment — native ONNX Runtime WebGPU Execution Provider (Linux/AMD, macOS/Apple Silicon, Windows/NVIDIA)
 
-Status date: 2026-09-19. Experimental, opt-in, isolated. Not integrated into STEMwerk.
+Status date: 2026-09-20. Experimental, opt-in, isolated. Not integrated into STEMwerk.
 
 Two phases so far:
 - **Phase L1** — prove the native WebGPU EP can run a real STEMwerk ONNX model at all
@@ -1305,6 +1305,47 @@ steps: root-cause the WebGPU-slower-than-CPU-on-M1 result before drawing a stron
 platform-level conclusion, and — if a cross-vendor WebGPU-Demucs route is still of
 interest — pursue it on non-Apple-Silicon platforms where no comparably mature
 first-party GPU backend already exists to lose to.
+
+## Phase W1: Windows NVIDIA Validation
+
+Status date: 2026-09-20. Starting HEAD `0e8d825fc` (L8, verified against
+`origin/experiment/webgpu-ep` before this phase began). Full report:
+**`DEMUCS_WINDOWS_NVIDIA.md`**. Validates the same, unmodified (three small,
+Windows-only bug fixes aside — see below) `demucs-onnx`/`webgpu_adapter.py`/
+`demucs_shift_wrapper.py` implementation on Windows/NVIDIA (RTX 3060 Laptop GPU),
+this project's first Windows hardware and first genuinely new GPU-vendor validation
+(NVIDIA) since L1.
+
+**Headline result: technically works end-to-end on the actually-confirmed D3D12
+backend (proven via live module-load evidence, not assumed from "it's Windows") —
+185/185 MDX-Net nodes and 1594/1594 Demucs nodes on WebGPU, zero CPU fallback,
+bit-for-bit-identical graph node counts to both Linux and macOS. But exactly like
+macOS/MPS in L8, Demucs-WebGPU is measurably slower (≈4.8×) than STEMwerk's existing
+production PyTorch/CUDA route on this hardware — the practical case for adopting it
+over an already-shipping accelerated backend is now negative on two platforms, not
+one.** Three genuine, previously-latent bugs in the shared adapter code were found
+and fixed, none of them Vulkan- or Metal-specific: a `ctypes.CDLL(None)` fflush
+crash that also silently left the process's real stderr fd un-restored, a UTF-16LE-
+vs-UTF-8 log-decoding mismatch that would have made every Windows GPU-execution
+proof a false negative, and a `ctypes.GetProcessMemoryInfo` call that silently
+returned failure without a declared function signature. All three confirmed with
+direct before/after evidence; none guessed. `select_device()`'s own device-matching
+logic needed zero changes despite this being the project's first genuinely new
+scenario (NVIDIA discrete + AMD integrated GPU on one machine) — the existing
+`device_id` selector (added originally for Linux) was sufficient.
+
+MDX-Net: WebGPU 5.17× faster than CPU (4-run warm benchmark), identical 185-node
+placement to Linux/macOS. Demucs: WebGPU 1.39–1.75× faster than plain ONNX CPU (so
+not "broken," just uncompetitive against CUDA specifically), 1594/1594 nodes, zero
+fallback, numerical parity within the established tolerances (with one disclosed,
+root-caused caveat: this phase's real-music fixture happens to be a mostly-
+instrumental track, so its vocals/other-stem parity numbers are dominated by
+near-silence, not export fidelity — see `DEMUCS_WINDOWS_NVIDIA.md` §6e).
+
+See `DEMUCS_WINDOWS_NVIDIA.md` for full hardware/driver/version details, the D3D12
+backend proof methodology, the complete numerical/performance tables, all code
+changes with before/after evidence, and the cross-platform architecture assessment
+(now covering Linux/AMD, macOS/Apple Silicon, and Windows/NVIDIA).
 
 ## Reproducing this experiment
 

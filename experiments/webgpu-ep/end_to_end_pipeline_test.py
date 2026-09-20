@@ -185,6 +185,9 @@ if __name__ == "__main__":
     ap.add_argument("--model-cache", default="/home/flark/stemwerk-rnd/venvs/webgpu-ep/model-cache")
     ap.add_argument("--out-dir", default="/tmp/stemwerk-webgpu-l2/e2e")
     ap.add_argument("--pci-bus-id", default=None, help="Linux/multi-GPU only; omit on macOS/single-GPU systems")
+    ap.add_argument("--device-id", type=int, default=None,
+                     help="Windows/multi-GPU only (no pci_bus_id metadata under Dawn/D3D12); "
+                          "omit on macOS/single-GPU systems")
     args = ap.parse_args()
 
     input_info = sf.info(args.input_wav)
@@ -192,7 +195,7 @@ if __name__ == "__main__":
     print(f"Input: {args.input_wav} ({input_info.samplerate} Hz, {input_info.channels}ch, {expected_duration:.2f}s)")
 
     original_cls, gpu_reports = patch_inference_session_for_provider_swap(
-        lambda: select_device(pci_bus_id=args.pci_bus_id)
+        lambda: select_device(pci_bus_id=args.pci_bus_id, device_id=args.device_id)
     )
 
     report = {"tolerances": {"raw": RAW_TOLERANCE, "file": FILE_TOLERANCE, "pcm16_lsb": PCM16_LSB}}

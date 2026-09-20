@@ -29,6 +29,12 @@ import onnxruntime as ort  # noqa: E402
 
 MODEL_FILENAME = "UVR_MDXNET_KARA_2.onnx"
 
+# resource_sampler.py's GPU reader is Linux/rocm-smi by default, unchanged from L2;
+# Windows (this experiment's W1 phase) has no rocm-smi at all, but does have
+# nvidia-smi for an NVIDIA discrete GPU -- same whole-GPU-only honesty caveat applies,
+# just a different vendor tool. Non-Windows platforms get the exact original kwargs.
+_SAMPLER_KWARGS = {"gpu_backend": "nvidia", "nvidia_gpu_index": 0} if sys.platform == "win32" else {"card_key": "card0"}
+
 
 def bench_provider(label, providers, input_wav, model_cache, out_dir, runs):
     from audio_separator.separator import Separator
@@ -39,7 +45,7 @@ def bench_provider(label, providers, input_wav, model_cache, out_dir, runs):
                      sample_rate=44100, use_soundfile=True)
     sep.onnx_execution_provider = providers
 
-    with ResourceSampler(card_key="card0") as load_sampler:
+    with ResourceSampler(**_SAMPLER_KWARGS) as load_sampler:
         t0 = time.time()
         sep.load_model(MODEL_FILENAME)
         t1 = time.time()
@@ -48,7 +54,7 @@ def bench_provider(label, providers, input_wav, model_cache, out_dir, runs):
     run_times = []
     run_samplers = []
     for i in range(runs):
-        with ResourceSampler(card_key="card0") as sampler:
+        with ResourceSampler(**_SAMPLER_KWARGS) as sampler:
             t0 = time.time()
             sep.separate(input_wav)
             t1 = time.time()
@@ -86,10 +92,13 @@ if __name__ == "__main__":
     ap.add_argument("--out-dir", default="/tmp/stemwerk-webgpu-l2/resources")
     ap.add_argument("--runs", type=int, default=4)
     ap.add_argument("--pci-bus-id", default=None, help="Linux/multi-GPU only; omit on macOS/single-GPU systems")
+    ap.add_argument("--device-id", type=int, default=None,
+                     help="Windows/multi-GPU only (no pci_bus_id metadata under Dawn/D3D12); "
+                          "omit on macOS/single-GPU systems")
     args = ap.parse_args()
 
     original_cls, gpu_reports = patch_inference_session_for_provider_swap(
-        lambda: select_device(pci_bus_id=args.pci_bus_id)
+        lambda: select_device(pci_bus_id=args.pci_bus_id, device_id=args.device_id)
     )
 
     results = {}

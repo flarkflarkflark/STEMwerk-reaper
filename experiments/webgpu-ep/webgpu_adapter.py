@@ -34,6 +34,7 @@ import contextlib
 import ctypes
 import os
 import re
+import sys
 import tempfile
 
 import onnxruntime as ort
@@ -100,6 +101,25 @@ def select_device(pci_bus_id=None, device_id=None):
     return devices[0]
 
 
+def _libc_for_fflush():
+    """
+    `ctypes.CDLL(None)` opens the calling process's own already-loaded symbols via
+    `dlopen(NULL)` on POSIX (Linux/macOS) -- there is no Windows equivalent of a "null"
+    module handle; `CDLL(None)` raises `TypeError` there (confirmed directly on Windows
+    11 / Python 3.11, not assumed: passing None reaches ctypes' own `'/' in name`
+    membership check on the raw name before any OS call, so this fails identically
+    across every CRT-linkage combination). Windows Python is itself always linked
+    against `msvcrt.dll` (the platform C runtime `python.exe`/`pythonXY.dll` builds
+    against), which is what onnxruntime's own bundled CRT-linked `fflush` calls also
+    resolve through in practice for this fd-flushing purpose -- `ctypes.CDLL("msvcrt")`
+    is the standard, stable stand-in used for exactly this "flush the C stdio buffers
+    before touching a raw OS fd" pattern on Windows.
+    """
+    if sys.platform == "win32":
+        return ctypes.CDLL("msvcrt")
+    return ctypes.CDLL(None)
+
+
 @contextlib.contextmanager
 def _capture_stderr_fd():
     """
@@ -114,7 +134,7 @@ def _capture_stderr_fd():
         os.dup2(tmp.fileno(), 2)
         yield tmp.name
     finally:
-        libc = ctypes.CDLL(None)
+        libc = _libc_for_fflush()
         libc.fflush(None)
         os.dup2(saved_fd, 2)
         os.close(saved_fd)
@@ -123,6 +143,29 @@ def _capture_stderr_fd():
 
 _NODE_PLACEMENT_RE = re.compile(r"All nodes placed on \[(?P<ep>[^\]]+)\]\. Number of nodes: (?P<n>\d+)")
 _FALLBACK_HINTS = ("kernel not found in registries", "not supported", "falls back", "fallback")
+
+
+def _read_captured_log(log_path):
+    """
+    Reads back the file `_capture_stderr_fd()` redirected the process's raw stderr fd
+    into. On Linux/macOS, onnxruntime's C++ core writes plain UTF-8/ASCII bytes to that
+    fd, same as any other stdio write. On Windows, confirmed directly (not assumed) on
+    this exact onnxruntime 1.30.0 win_amd64 build: the identical redirected fd instead
+    receives pure UTF-16LE (every ASCII byte followed by a literal 0x00 -- verified via
+    raw hex dump, ~100% of odd-position bytes zero) -- Windows' CRT routes `stderr`
+    through its wide-character-oriented stdio path once something upstream has
+    "wide-oriented" the stream, independent of what byte-oriented API a caller thinks
+    it's using. Reading those bytes with a single-byte text codec (the original
+    `open(path, "r", errors="replace")`) interleaves a NUL between every character and
+    the node-placement regex never matches, even though the real placement line is
+    present in the file (confirmed: decoding the same bytes as UTF-16LE recovers
+    "All nodes placed on [WebGpuExecutionProvider]. Number of nodes: N" exactly).
+    """
+    with open(log_path, "rb") as f:
+        raw = f.read()
+    if sys.platform == "win32":
+        return raw.decode("utf-16-le", errors="replace")
+    return raw.decode("utf-8", errors="replace")
 
 
 def _parse_placement_log(log_text, session_providers):
@@ -177,8 +220,7 @@ def create_verified_webgpu_session(model_path, device, extra_options=None):
     with _capture_stderr_fd() as log_path:
         session = _ORIGINAL_INFERENCE_SESSION_CLASS(model_path, sess_options=so)
 
-    with open(log_path, "r", errors="replace") as f:
-        log_text = f.read()
+    log_text = _read_captured_log(log_path)
     try:
         os.unlink(log_path)
     except OSError:
@@ -233,8 +275,7 @@ def patch_inference_session_for_provider_swap(target_device_selector, graph_opti
                 so.add_provider_for_devices([device], {})
                 with _capture_stderr_fd() as log_path:
                     super().__init__(path_or_bytes, sess_options=so)
-                with open(log_path, "r", errors="replace") as f:
-                    log_text = f.read()
+                log_text = _read_captured_log(log_path)
                 try:
                     os.unlink(log_path)
                 except OSError:
