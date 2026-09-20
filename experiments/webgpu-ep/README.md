@@ -2,21 +2,42 @@
 
 Status date: 2026-09-20. Experimental, opt-in, isolated. Not integrated into STEMwerk.
 
-## Phase W5 — isolated native build preflight
+## Phase W5 — isolated native build preflight, then a real local-disk build attempt
 
-W5 re-verified the published W4 commit, exact isolated ORT/Dawn revisions, patch,
-installed runtime, model, and fixture. The supported native build is currently
-**BLOCKED at an explicit administrator installation boundary**: this workstation has
-no Visual Studio/MSVC, MSBuild, Windows SDK, CMake, Ninja, or alternate compiler, and
-the current shell is not elevated. Microsoft Visual Studio Build Tools 2022 with the
-Desktop development with C++ workload must be installed with user approval before an
-isolated build can start.
+W5 originally re-verified the published W4 commit, exact isolated ORT/Dawn revisions,
+patch, installed runtime, model, and fixture, and stopped **BLOCKED at an explicit
+administrator installation boundary** (no compiler/SDK/CMake present at all). Build
+Tools 2022 was subsequently installed with user approval in an intervening session.
 
-No tool was installed, no build was started, no patched DLL was loaded, and physical
-RTX/AMD switching remains **NOT VERIFIED**. Safe regressions remain green (9/9 W4
-selector tests, 27/27 non-skipped resolver tests, capability matrix/schema validation,
-Windows DXGI mapping, and Python compilation). Full preflight, exact installer
-identity/action, resource state, and the post-approval build/A-B contract are in
+A follow-on attempt then tried to build directly on the network share (`M:`,
+`\\192.168.68.99\music`) and root-caused a real, systemic problem: Git's
+"dubious ownership" check silently rejected every one of Dawn's `third_party/*`
+checkouts because of how SMB reports file ownership. A narrowly scoped fix was applied
+on `M:` for the record, but the decision was made to stop fighting the share and move
+the build to local disk instead, where a local owner SID makes the problem moot.
+
+That relocation happened next: the reviewed W4 source (clean at commit
+`ab4ae2d6888f1a7f383427ca0701944c3a0954f3`) was copied — not re-cloned — from
+`M:\stemwerk-w4\...` to `C:\stemwerk-w5-local\...` via robocopy, verified clean and
+still at the exact same commit with no ownership error, and every pinned reference
+hash (installed DLL, MDX model, test fixture, patch file, live DXGI LUID map) was
+independently recomputed and matched. The build then ran for real for the first time
+in this experiment's history — well past vcpkg dependency compilation and CMake
+configuration, into genuine MSVC/MSBuild compilation of ORT and Dawn targets — before
+failing on a single, clearly diagnosed compile error: Dawn's bundled
+DirectXShaderCompiler needs ATL headers (`atlbase.h`) that the current Build Tools
+installation does not include (the "C++ ATL for latest v143 build tools" optional
+component is missing). No `onnxruntime_providers_webgpu.dll` was produced. Adding that
+component is a machine-level Build Tools modification requiring elevation the current
+session does not have (confirmed via a read-only Windows-token check) and which the
+experiment's own rules reserve for explicit user check-in, so this session stopped
+there rather than proceeding.
+
+No patched DLL was loaded, and physical RTX/AMD switching remains **NOT VERIFIED**.
+Safe regressions remain green (9/9 W4 selector tests, 27/27 non-skipped resolver
+tests, capability matrix/schema validation, Windows DXGI mapping, and Python
+compilation). Full detail, exact error text, independent root-cause confirmation, and
+the next-step build-resume plan are in
 [`WINDOWS_NATIVE_BUILD_VALIDATION.md`](WINDOWS_NATIVE_BUILD_VALIDATION.md). The
 capability matrix and production STEMwerk remain unchanged.
 

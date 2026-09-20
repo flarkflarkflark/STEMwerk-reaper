@@ -301,9 +301,242 @@ listing, session success, adapter name, graph-placement log, or quiet alternate 
 No new hardware/model fact was established, so `capability_matrix.py` and
 `capability_matrix.json` remain unchanged.
 
-## Next step
+## Next step (superseded by the section below)
 
 Obtain explicit approval and complete the elevated Build Tools installation above.
 Then resume W5 from toolchain verification—not from a claimed build—and execute the
 isolated build, native tests, complete-wheel packaging, loaded-DLL proof, and fresh
 default/RTX/AMD/negative/cache matrix. Production integration remains out of scope.
+
+By the time the session below ran, Build Tools 2022 (MSVC v143, Windows SDK, CMake,
+Ninja, vcpkg) had already been installed with user approval in an intervening session,
+so this "Next step" (obtain approval, install) was already satisfied. It is kept here
+verbatim as the historical record of what W5 originally asked for.
+
+## W5 continued — network-share root cause, local-disk relocation, first real build attempt
+
+Status date: 2026-09-20, same day, later session. Toolchain preflight from the
+sections above is no longer current: VS Build Tools 2022 (MSVC 14.44.35207, Windows
+SDK, CMake, Ninja, vcpkg at
+`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\vcpkg\vcpkg.exe`)
+was installed and confirmed working by an intervening session. This session picks up
+from there.
+
+### What happened on the network share (for the record; not used going forward)
+
+An intervening session attempted the isolated build directly on `M:` (the SMB share
+`\\192.168.68.99\music`, mapped `M:`) under `M:\stemwerk-w5\build\ort-webgpu-luid`. It
+root-caused a real, systemic problem: Git's "dubious ownership" check (the
+CVE-2022-24765 mitigation) silently rejected every one of Dawn's 19 fetched
+`third_party/*` checkouts under that build tree, because SMB reports file ownership in
+a way that does not match the local Windows user's SID. That session applied a
+user-authorized, narrowly scoped fix — 19 individual
+`git config --global --add safe.directory` entries for the exact 19 affected paths, no
+wildcard — and cleared the 19 stale/broken checkouts, then was blocked by this
+environment's own permission system from verifying the fix or relaunching the build in
+that session.
+
+This session independently reproduced the same class of failure directly against the
+W4 source checkout itself (not just the build tree) before touching anything:
+
+```
+$ git -C M:\stemwerk-w4\onnxruntime-plugin-ep-webgpu-v0.3.0 status
+fatal: detected dubious ownership in repository at
+'//192.168.68.99/music/stemwerk-w4/onnxruntime-plugin-ep-webgpu-v0.3.0'
+```
+
+That confirms the SMB-ownership problem is systemic to `M:`, not confined to the one
+build tree the prior session found. Given that, and given the user's decision to stop
+fighting the share, this session did not add any further `safe.directory` entries
+(no additional git config changes were made anywhere, global or local) and instead
+copied the source to local disk, where a normal local owner SID makes the whole
+problem moot.
+
+`M:\stemwerk-w5\build\ort-webgpu-luid` (the prior network-share build tree) was left
+untouched, as instructed — it is historical evidence of the SMB root-cause finding,
+not a live build.
+
+### Local working area
+
+New local root: `C:\stemwerk-w5-local\`. Chosen because it is clearly outside
+`C:\Users\Administrator\Documents\GIT\STEMwerk` (the canonical checkout), outside any
+worktree, and outside both protected venvs
+(`C:\Users\Administrator\stemwerk-rnd\venvs\webgpu-ep` and
+`...\webgpu-ep-demucsonnx`, neither of which was opened, imported from in a way that
+mutates them, or modified — see verification below).
+
+Free space before starting: 59.07 GiB on `C:`. Plan (source copy + build venv + full
+vcpkg/Dawn/ORT build tree) was judged to fit comfortably against the 2.3–60 GB Build
+Tools range already spent and the 10–20 GB estimated for the build tree itself, so the
+work proceeded without asking first, per the standing free-space guidance in the brief.
+
+### Source copy (not re-clone)
+
+`M:\stemwerk-w4\onnxruntime-plugin-ep-webgpu-v0.3.0` was copied with
+`robocopy /E /COPY:DAT /R:2 /W:2 /MT:8` (multi-threaded, data+attributes+timestamps,
+includes `.git`) to
+`C:\stemwerk-w5-local\onnxruntime-plugin-ep-webgpu-v0.3.0`. Robocopy's own summary:
+
+```
+Dirs :      1328      1328         0         0         0         0
+Files :     10971     10971         0         0         0         0
+Bytes :  778.01 m  778.01 m         0         0         0         0
+```
+
+(Robocopy's process exit code was `1`, which in Robocopy's own bitmask convention means
+"one or more files copied successfully," not failure — verified against the log
+above, which shows 0 Failed for both dirs and files.)
+
+Post-copy verification, all independently checked, not assumed:
+
+- `git -C C:\stemwerk-w5-local\onnxruntime-plugin-ep-webgpu-v0.3.0 status`: clean
+  working tree, branch `w4-native-luid-poc`, **no dubious-ownership error** (confirms
+  the local-disk relocation actually fixes the SMB ownership problem, as expected —
+  the local copy is owned by the local user SID).
+- `git rev-parse HEAD`: `ab4ae2d6888f1a7f383427ca0701944c3a0954f3` — matches the
+  required W4 patch commit exactly.
+- `git log --oneline -3` shows the patch commit directly on top of upstream base
+  `caf2ed3` (`caf2ed32972b8848277b2b9bcc8917e07bcfdb5c`), i.e. exactly the reviewed W4
+  history, not a re-clone or re-applied patch.
+
+### Independent re-verification of every pinned identity (before building)
+
+All of the following were recomputed fresh in this session, not copied from prior
+reports:
+
+| Item | Recorded reference | Recomputed this session | Match |
+|---|---|---|---|
+| Installed unpatched DLL SHA-256 | `b05a6d5187885be9133ac383d5271af20b76f281e72d8bfe933f35a23d05b94f` | same (10,522,976 bytes) | **YES** |
+| MDX model SHA-256 | `bf32e15105a09c0f7dddd2b67346146334d6f3ecb399ed7638eba2ab07cbf5f4` | same (52,786,726 bytes) | **YES** |
+| 25s fixture SHA-256 | `658380a556000aaf38e8502cf3276ba2b9291f4b6eeffc82d48863fd91385b32` | same (4,410,044 bytes) | **YES** |
+| W4 patch file SHA-256 | `ebf88909a5023182005dccf46aea0d2d42e5073a20e777fb719e0978416c00ca` | same | **YES** |
+| RTX 3060 DXGI LUID | `64318` | same, via live `webgpu_adapter.list_webgpu_devices()` against the existing unpatched venv (read-only import; venv not modified) | **YES** |
+| AMD iGPU DXGI LUID | `59967` | same, via the same live enumeration | **YES** |
+
+The DLL hash check reads the file only (`Get-FileHash`); the device enumeration only
+imports `webgpu_adapter` and calls `list_webgpu_devices()` in the existing
+`webgpu-ep` venv's own interpreter, which performs no writes. Neither protected venv
+was installed into, upgraded, or had its DLL touched.
+
+### Build venv and launch
+
+```
+py -3.11 -m venv C:\stemwerk-w5-local\venvs\build
+C:\stemwerk-w5-local\venvs\build\Scripts\python.exe -m pip install --upgrade pip
+C:\stemwerk-w5-local\venvs\build\Scripts\python.exe -m pip install -r C:\stemwerk-w5-local\onnxruntime-plugin-ep-webgpu-v0.3.0\tools\ci_build\github\windows\python\requirements.txt
+```
+
+installed cleanly (onnx 1.22.0, onnxscript 0.6.2, numpy 2.4.2, etc., matching the
+pinned CI requirements file for this ORT revision).
+
+The build was launched via a small `run_build.bat` under `C:\stemwerk-w5-local\` that
+calls `VsDevCmd.bat -arch=x64` and then the exact build command from the brief,
+adapted only for local paths (`--build_dir C:\stemwerk-w5-local\build\ort-webgpu-luid`,
+same `--parallel 4` and all other flags unchanged), launched with
+`run_in_background: true` and its own log redirected to
+`C:\stemwerk-w5-local\build_log.txt` — the same proven pattern used successfully by
+the prior session.
+
+### Build result: real progress, then a genuine new failure (not a timeout, not "needs more time")
+
+This is materially further than any prior W4/W5 session reached: the build was never
+blocked at a toolchain-absence boundary this time. vcpkg fetched and built its
+dependency set (e.g. abseil), CMake configuration completed (`-- Generating done`),
+and MSBuild successfully compiled a large number of real ORT/Dawn targets, including
+MLAS's hand-written x64 assembly kernels (`SgemmKernelFma3.asm`,
+`SconvKernelAvx512F.asm`, etc.), `onnxruntime_flatbuffers.lib`, and Dawn's bundled
+`LLVMTableGen.lib` (part of the DirectXShaderCompiler dependency tree). `cl.exe` and
+`MSBuild.exe` processes were confirmed actively running via `Get-Process` during this
+window.
+
+The build then failed with exactly one root-cause compiler error (confirmed to be the
+only `error C####`/`error LNK`/`error MSB` line anywhere in the 4,664-line build log):
+
+```
+C:\stemwerk-w5-local\build\ort-webgpu-luid\Release\_deps\dawn-src\third_party\directx-shader-compiler\src\include\dxc\Support\WinIncludes.h(44,10):
+error C1083: Cannot open include file: 'atlbase.h': No such file or directory
+[...LLVMMSSupport.vcxproj]
+```
+
+`tools\ci_build\build.py` correctly propagated this as a fatal failure
+(`subprocess.CalledProcessError` from the `cmake --build` invocation, non-zero exit),
+and no `onnxruntime_providers_webgpu.dll` exists anywhere under
+`C:\stemwerk-w5-local\build` (confirmed by filesystem search of the whole build tree,
+not just the expected output path).
+
+This was independently root-caused, not just trusted from the compiler message:
+
+```
+Get-ChildItem "...\BuildTools\VC\Tools\MSVC\*\include\atlbase.h"   -> no results
+vswhere -requires Microsoft.VisualStudio.Component.VC.ATL          -> no results
+```
+
+The installed VS Build Tools 2022 instance does not have the **"C++ ATL for latest
+v143 build tools (x86 & x64)"** optional component. Dawn's bundled
+DirectXShaderCompiler (which Dawn needs for D3D12 HLSL/DXC shader compilation) links
+an `MSSupport` helper library that requires ATL headers on Windows; that component was
+not part of the originally installed Build Tools workload.
+
+### Why this stops here instead of being pushed through
+
+Fixing this requires modifying the machine's Visual Studio Build Tools installation
+(adding the ATL component via the Visual Studio Installer, which needs elevation) —
+the same class of machine-level, outside-the-build-tree action the brief explicitly
+reserves for user check-in, not something this session is authorized to do
+unilaterally. No such installation was attempted. No other git config, global config,
+or system-wide change was made in this session (the SMB `safe.directory` question
+above was investigated read-only, and resolved by not needing any such entries at all,
+since the local copy has no ownership problem to begin with).
+
+This was checked, not assumed: the current process's Windows token was independently
+inspected (`WindowsIdentity`/`WindowsPrincipal`, read-only) and confirmed **not
+elevated** (`IsInRole(Administrator)` = `False`), even though the account name is
+`FLARKTOP25\Administrator` — matching the same deny-only-until-UAC pattern recorded in
+the original W4/W5 preflight. So even setting policy aside, this session has no
+technical path to run the Visual Studio Installer's elevated modify operation itself.
+Re-confirmed the error count at this point too: exactly one distinct
+`error C`/`error LNK`/`error MSB` line exists anywhere in the 4,664-line build log —
+the single `C1083` on `atlbase.h` above. There is no second failure hiding behind it
+yet; whether one exists can only be known after the ATL component is added and the
+build is resumed.
+
+### Disk
+
+Free space check before the build (`C:`): 58.07 GiB (after the ~0.78 GiB source copy
+and build venv). After the failed build attempt: 45.28 GiB free — the partial
+vcpkg+Dawn+ORT build tree under `C:\stemwerk-w5-local\build` consumed about 19.6 GiB
+by itself. No exhaustion occurred and none was imminent; there is ample remaining
+headroom (~45 GiB) for a resumed build after the ATL component is added, especially
+since vcpkg's already-built packages and CMake's configured build tree should mostly
+be reusable (only the Dawn/DXC portion needs to re-run past its current failure
+point), so a resumed build is expected to need meaningfully less fresh work than this
+first attempt.
+
+### Updated layered status
+
+| Layer | Verdict | Evidence / boundary |
+|---|---|---|
+| NETWORK-SHARE ROOT CAUSE | **PASS** (diagnostic only) | SMB dubious-ownership reproduced directly against the W4 source checkout on `M:`; confirmed systemic, not build-tree-specific. |
+| LOCAL RELOCATION | **PASS** | Source copied via robocopy (10,971/10,971 files, 0 failed); local copy clean at exact required commit `ab4ae2d6888f1a7f383427ca0701944c3a0954f3`; no dubious-ownership error locally. |
+| SOURCE PATCHED | **PASS** | Same as W4: isolated local checkout clean at the reviewed patch commit. |
+| BUILT | **BLOCKED (new, different reason)** | Toolchain is present and the build ran for real this time; it fails deterministically on a missing VS Build Tools ATL component needed by Dawn's bundled DirectXShaderCompiler. No `onnxruntime_providers_webgpu.dll` was produced. |
+| LOADED | **NOT TESTED** | No W5 binary exists yet. |
+| DEVICE SELECTION VERIFIED | **NOT VERIFIED** | Unchanged — no patched runtime. |
+| MODEL EXECUTION VERIFIED | **NOT TESTED** | Unchanged. |
+| FULL AUDIO VERIFIED | **NOT TESTED** | Unchanged. |
+
+Demucs: **NOT TESTED**. Capability evidence: **UNCHANGED** — no new hardware/model
+execution fact was established this session, so `capability_matrix.py` and
+`capability_matrix.json` are intentionally left unmodified.
+
+### Next step
+
+Install the "C++ ATL for latest v143 build tools (x86 & x64)" component into the
+existing VS Build Tools 2022 instance (Visual Studio Installer, requires elevation —
+explicit user action, same as the original Build Tools installation). Then re-run
+`C:\stemwerk-w5-local\run_build.bat` unchanged (build_dir and vcpkg state are already
+local and warm); on success, proceed directly to the loaded-DLL hash proof, fresh
+default/RTX/AMD/invalid/cache A/B matrix, and MDX-Net correctness exactly as scoped in
+the W4/W5 runtime-verification contracts above. `C:\stemwerk-w5-local\` and
+`M:\stemwerk-w5\build\ort-webgpu-luid` (historical) are unaffected by each other and
+can coexist.
