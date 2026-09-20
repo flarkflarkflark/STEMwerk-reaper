@@ -1388,6 +1388,44 @@ kernel/OS-level independent-verification technique to a prior platform (Windows,
 `nvidia-smi`) to check whether that selection was genuine or coincidental, before any
 further hardware validation.
 
+## Phase L10: Radeon 780M GPU Isolation
+
+Status date: 2026-09-20. Starting HEAD `9faca2881` (L9); `git fetch origin` found no
+new commits, no reconciliation needed. Full report: **`RADEON_780M_DEVICE_ISOLATION.md`**.
+
+L9 found device *selection* silently unhonored by `onnxruntime-ep-webgpu` 0.3.0 on
+this multi-GPU Linux box — requesting the 780M still executed on the RX 9070. This
+phase asked whether a mechanism *outside* that broken API could force it anyway,
+without touching the RX 9070's availability or any system-wide config.
+
+**Result: yes, via `VK_LOADER_DEVICE_ID_FILTER`** — an official Vulkan-Loader env var
+that genuinely hides the non-target GPU from a subprocess's Vulkan device list
+(unlike `MESA_VK_DEVICE_SELECT`, confirmed to only *reorder* enumeration with zero
+effect on actual execution). Confirmed at three independent levels — raw
+`vulkaninfo`, real ONNX Runtime session creation, and kernel-level
+(`/sys/class/drm/card{N}/device/gpu_busy_percent`) monitoring outside
+onnxruntime/Dawn/Vulkan entirely — bidirectionally, in fresh processes.
+
+**MDX-Net: full PASS on the genuine, physical Radeon 780M** — graph placement (185
+nodes), numeric parity (bit-identical to every prior phase), stem routing, and output
+validation all passed, with the RX 9070 confirmed idle throughout via independent
+kernel monitoring. **Demucs: BLOCKED, root-caused rather than left unexplained** —
+the full-length (16.7s) clip crashed with `VK_ERROR_DEVICE_LOST` partway through
+genuine, correctly-isolated 780M execution; a 2s diagnostic clip completed
+successfully on the same mechanism but took 221.5s (~114× slower than CPU on the same
+clip), pointing to a Vulkan/kernel GPU-hang-detection timeout on an oversized
+dispatch — a real hardware/driver throughput limit of this 1594-node graph on this
+iGPU, not an isolation, compatibility, or memory failure. The RX 9070 was unaffected
+and remained fully operational after the crash, as required.
+
+**This is a Linux-specific, Vulkan-Loader-level workaround, not a portable fix** — no
+claim is made about Windows (D3D12/DXGI) or macOS (Metal, and no multi-GPU case has
+even arisen there — L8 was single-GPU). If ever adopted, it would need to be a
+Linux-only device-selection adapter around the existing shared inference code, with
+per-model capability gating (this phase's own evidence: fine for MDX-Net-class
+graphs, not currently viable for Demucs-class graphs on a modest iGPU), not
+implemented here per the brief's "no production integration" instruction.
+
 ## Reproducing this experiment
 
 ```bash
