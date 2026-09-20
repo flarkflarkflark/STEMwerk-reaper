@@ -25,19 +25,39 @@ independently recomputed and matched. The build then ran for real for the first 
 in this experiment's history — well past vcpkg dependency compilation and CMake
 configuration, into genuine MSVC/MSBuild compilation of ORT and Dawn targets — before
 failing on a single, clearly diagnosed compile error: Dawn's bundled
-DirectXShaderCompiler needs ATL headers (`atlbase.h`) that the current Build Tools
-installation does not include (the "C++ ATL for latest v143 build tools" optional
-component is missing). No `onnxruntime_providers_webgpu.dll` was produced. Adding that
-component is a machine-level Build Tools modification requiring elevation the current
-session does not have (confirmed via a read-only Windows-token check) and which the
-experiment's own rules reserve for explicit user check-in, so this session stopped
-there rather than proceeding.
+DirectXShaderCompiler needed ATL headers (`atlbase.h`) that the Build Tools
+installation did not yet include (the "C++ ATL for latest v143 build tools" optional
+component was missing).
 
-No patched DLL was loaded, and physical RTX/AMD switching remains **NOT VERIFIED**.
+After the user installed that component (independently re-verified before resuming:
+`vswhere`, the header on disk, no stray processes), the build was resumed unchanged
+and **completed successfully — `BUILD_EXIT_CODE=0`**, the first fully successful
+native build in this experiment's history. The new
+`onnxruntime_providers_webgpu.dll` (10,443,264 bytes, SHA-256 `d5ed4d5e...`, distinct
+from the unpatched `b05a6d51...`) was packaged into a coherent wheel and installed
+into a new isolated runtime venv. Its loaded-module identity was proven in a live
+process (not just import): `psutil`-resolved and re-hashed, matching exactly. Fresh
+per-GPU sessions were then created for both the RTX 3060 (LUID `64318`) and the AMD
+iGPU (LUID `59967`) — both succeeded, both correctly placed all nodes on
+`WebGpuExecutionProvider`, and the patch's native invalid-LUID and cross-GPU-context
+rejection paths were confirmed working exactly as designed, with the native error
+text matching the patch's own source strings.
+
+**The decisive physical-execution proof remains blocked by a new, different problem**:
+the very first real inference call after a successful, correctly placed WebGPU
+session crashes the process with `STATUS_STACK_BUFFER_OVERRUN` (`0xC0000409`),
+reproduced identically on both GPUs for even a single-node graph. This is a new,
+serious, unexplained crash surfaced for the first time by this session's build
+success — not something a prior session could have found without a working build —
+and is reported rather than worked around. MDX-Net execution was not attempted given
+the reliably reproducing simpler crash. Physical RTX/AMD switching therefore remains
+**NOT VERIFIED**, now for a materially different and better-understood reason than
+every prior phase's "no build exists" boundary.
+
 Safe regressions remain green (9/9 W4 selector tests, 27/27 non-skipped resolver
 tests, capability matrix/schema validation, Windows DXGI mapping, and Python
-compilation). Full detail, exact error text, independent root-cause confirmation, and
-the next-step build-resume plan are in
+compilation). Full detail, exact hashes, exact error text, and next-step
+root-causing options are in
 [`WINDOWS_NATIVE_BUILD_VALIDATION.md`](WINDOWS_NATIVE_BUILD_VALIDATION.md). The
 capability matrix and production STEMwerk remain unchanged.
 

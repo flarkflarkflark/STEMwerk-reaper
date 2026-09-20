@@ -529,7 +529,7 @@ Demucs: **NOT TESTED**. Capability evidence: **UNCHANGED** — no new hardware/m
 execution fact was established this session, so `capability_matrix.py` and
 `capability_matrix.json` are intentionally left unmodified.
 
-### Next step
+### Next step (superseded by the section below)
 
 Install the "C++ ATL for latest v143 build tools (x86 & x64)" component into the
 existing VS Build Tools 2022 instance (Visual Studio Installer, requires elevation —
@@ -540,3 +540,215 @@ default/RTX/AMD/invalid/cache A/B matrix, and MDX-Net correctness exactly as sco
 the W4/W5 runtime-verification contracts above. `C:\stemwerk-w5-local\` and
 `M:\stemwerk-w5\build\ort-webgpu-luid` (historical) are unaffected by each other and
 can coexist.
+
+## W5 continued — build succeeds, then a new blocking execution-time crash
+
+Status date: 2026-09-20, same day, later still. The user installed the "C++ ATL for
+latest v143 build tools (x86 & x64)" component and this session independently
+re-verified it before touching anything: `vswhere -requires
+Microsoft.VisualStudio.Component.VC.ATL` resolved to the installed Build Tools
+instance, `atlbase.h` was found on disk at the exact expected MSVC-toolset path with a
+fresh timestamp, and no installer/build process was left running.
+
+### Build resumed and completed successfully
+
+`C:\stemwerk-w5-local\run_build.bat` was re-run unchanged (same flags, same
+`--build_dir`, same `run_in_background: true` + VsDevCmd method). The prior failing
+target now compiles cleanly — `LLVMMSSupport.vcxproj -> ...\LLVMMSSupport.lib` appears
+in the log with no `atlbase` error anywhere in the new log. The build proceeded through
+linking `onnxruntime_providers_webgpu.dll` itself and building
+`onnxruntime_test_all.exe`, `onnxruntime_provider_test.exe`, and
+`onnxruntime_perf_test.exe`, and finished with **`BUILD_EXIT_CODE=0`** — the first
+fully successful native build in this experiment's entire history (W1 through W5).
+
+**New patched DLL, independently hashed:**
+
+| | Size | SHA-256 |
+|---|---|---|
+| Unpatched reference (unchanged) | 10,522,976 B | `b05a6d5187885be9133ac383d5271af20b76f281e72d8bfe933f35a23d05b94f` |
+| **New patched build** | **10,443,264 B** | **`d5ed4d5ed6d53a384594f626c7d2090fbc3ea8a53897507747226d6065bd422b`** |
+
+Different size, completely different hash, as expected for a real independent build
+(not merely a copy) of materially different (patched) source.
+
+### Packaging and loaded-module proof
+
+A coherent wheel was built with the plugin's own `build_wheel.py` (not an ad-hoc DLL
+swap into the old 0.3.0 wheel, per this experiment's own stated principle) from
+`C:\stemwerk-w5-local\build\ort-webgpu-luid\Release\Release`, which already contained
+matching `onnxruntime_providers_webgpu.dll`, `dxcompiler.dll`, and `dxil.dll` built
+together in the same compile (this build compiles DXC from Dawn's bundled
+`third_party/directx-shader-compiler` source rather than needing the separately
+downloaded pinned DXC release package): `onnxruntime_ep_webgpu-0.3.0+w5local-py3-none-win_amd64.whl`.
+
+A new isolated runtime venv, `C:\stemwerk-w5-local\venvs\runtime`, separate from both
+protected production venvs (neither of which was opened, imported into, or modified),
+was created with the matching base `onnxruntime==1.30.0` (confirmed via a read-only
+`pip show` against the existing `webgpu-ep` venv, not assumed) plus this new wheel.
+
+Loaded-module proof, in a real running process (not just "importable"): resolved via
+`psutil.Process().memory_maps()`, the actually-loaded
+`onnxruntime_providers_webgpu.dll` in that live process was re-read from disk and
+re-hashed:
+
+```
+LIVE LOADED PATH:   C:\stemwerk-w5-local\venvs\runtime\Lib\site-packages\onnxruntime_ep_webgpu\onnxruntime_providers_webgpu.dll
+LIVE LOADED SHA256: d5ed4d5ed6d53a384594f626c7d2090fbc3ea8a53897507747226d6065bd422b
+```
+
+This matches the newly built artifact exactly and differs from the unpatched
+reference. **LOADED: PASS.** The same process's live device enumeration re-confirmed
+the LUID map yet again: AMD iGPU `LUID=59967`, RTX 3060 `LUID=64318`.
+
+### Session creation, adapter matching, and placement: PASS on both physical GPUs
+
+Using `webgpu_adapter.select_device(adapter_luid=...)` and
+`create_verified_webgpu_session(...)` (the exact production wrapper used throughout
+this experiment) against a small ONNX Conv graph, in fresh Python processes:
+
+- **RTX 3060 (LUID 64318):** session created successfully; `report['all_nodes_placed_line']`
+  = `"All nodes placed on [WebGpuExecutionProvider]. Number of nodes: 3"`. The native
+  patch's internal adapter-match assertion (requested LUID == Dawn-observed LUID) did
+  not fire, meaning Dawn genuinely returned the RTX adapter when RTX was requested.
+- **AMD iGPU (LUID 59967):** same result — session created, same placement line, same
+  adapter-match success.
+
+This is real, new evidence beyond anything in W1-W5 to date: it is the first time the
+patch's actual compiled adapter-selection code has run against real hardware for
+either GPU.
+
+### The decisive execution test: BLOCKED by a new, reproducible crash — not a PASS
+
+Per this experiment's own explicit rule, session creation and graph placement are
+**not sufficient** to claim GPU-selection PASS; physical execution must be positively
+observed. Attempting that decisive step surfaced a new, serious, reproducible problem:
+
+The very first `session.run()` call after a successful, correctly-placed WebGPU
+session — for a trivial single-`Conv`-node graph, not MDX-Net's full graph — crashes
+the Python process. The crash was captured with the real Windows exit code (not
+bash's lossy translation, which reported a confusing `127`):
+
+```
+EXITCODE = -1073740791  =  0xC0000409  =  STATUS_STACK_BUFFER_OVERRUN
+```
+
+This was reproduced **identically on both physical adapters** (RTX 3060 LUID `64318`
+and AMD iGPU LUID `59967`), both times immediately on the first inference call, after
+session creation and correct WebGPU placement had already succeeded without error.
+Because the crash occurs strictly *after* `WebGpuContext::Initialize()`'s new
+LUID-matching code has already run to completion (session creation returns
+successfully with a correct placement report before any `session.run()` is called),
+this points at the general compute-kernel-dispatch path in this specific from-source
+build, not at the 202-line LUID patch's own code — but that is a hypothesis, not a
+proven root cause; it was not feasible in this session to build a non-patched control
+from the exact same from-source toolchain/dependency versions to confirm the patch is
+uninvolved.
+
+The W2 dense GPU-monitoring probe (`w2_device_selection_probe.py`, the tool that
+produced this whole experiment's decisive Linux/N1/W1/W2 physical-execution evidence)
+was the first thing that hit this crash; it was then reproduced with a minimal,
+hand-written single-inference repro to rule out the probe script or its concurrent
+PowerShell `Get-Counter` monitor subprocess as the cause (a version with no monitor
+and no loop, just one `session.run()` call, crashes identically). **Consequently: no
+GPU-Engine-counter/nvidia-smi physical-execution evidence could be collected for
+either GPU, because the process does not survive long enough to be sampled**, and
+**MDX-Net was not attempted at all** — a graph orders of magnitude more complex than
+the single-node probe that already crashes reliably would not be a meaningful
+additional data point.
+
+**Per this experiment's explicit rule, this is reported as-is: DEVICE SELECTION
+VERIFIED remains NOT VERIFIED. Build success, correct placement, and a differing DLL
+hash are real and reported as such, but are explicitly not treated as, or conflated
+with, a GPU-selection PASS.**
+
+### What *did* get proven safely (no kernel execution involved)
+
+Session creation/placement (above) and the following rejection-path tests all
+complete before reaching the crashing kernel-dispatch code, so they were run safely
+and are real, positive evidence about the patch's own logic, independent of the
+execution-crash question:
+
+| Test | Result |
+|---|---|
+| Mismatched explicit LUID vs. selected hardware device (via the production `create_verified_webgpu_session(..., extra_options={"d3d12AdapterLuid": "999999"})` path) | **PASS** — native EP creation fails with exactly the patch's own message, `"The requested D3D12 adapter LUID does not match the selected OrtHardwareDevice."`; ORT's generic provider-creation-failure behavior silently falls back to CPU (a stock ONNX Runtime behavior, not a patch defect), and the production wrapper's own `get_providers()` safety check correctly catches that silent fallback and raises `GpuExecutionNotProvenError` rather than reporting a false PASS. |
+| Cross-GPU active-context reuse: a second session targeting the AMD device in the same default WebGPU context (`context ID 0`) already initialized for RTX | **PASS** — native rejection with exactly the patch's own message, `"WebGPU context ID 0 is already initialized for a different D3D12 adapter LUID; refusing to reuse a physical GPU context for another request."`; correctly surfaced as a wrapper-level rejection. |
+| Same-GPU repeated context reuse (two RTX sessions, same context) | **PASS** — second session succeeds, matching cached identity, as designed. |
+| Malformed/out-of-range LUID selector strings (`"-1"`, `"notanumber"`, `1<<65`) at the Python selector layer | **PASS** — all three rejected with the expected messages (same behavior the 9/9 unit tests already covered; re-confirmed live). |
+
+These four results are genuine, first-time confirmations that the patch's native
+rejection logic — the parts of the 202-line patch that run at `CreateEpImpl`/
+`Initialize` time, before any GPU kernel executes — behaves exactly as the source
+review and W4's compile-only unit tests (never previously run, see below) predicted.
+
+### Native C++ unit tests: still not executable, for a different, now-understood reason
+
+`onnxruntime_test_all.exe --gtest_filter=WebGpuContextTest.D3D12AdapterLuid*` matched
+zero tests. This is not a build failure — the tests exist in
+`onnxruntime/test/providers/webgpu/webgpu_context_test.cc` in the source tree, and a
+full `--gtest_list_tests` scan of the two candidate binaries
+(`onnxruntime_test_all.exe`, `onnxruntime_provider_test.exe`) confirms neither
+contains any `WebGpuContextTest`-suite test at all. The reason is a real, independently
+confirmed detail in this ORT revision's `cmake/onnxruntime_unittests.cmake`: the
+`${TEST_SRC_DIR}/providers/webgpu/*` test-source glob (which is where
+`webgpu_context_test.cc` lives) is only added when
+`onnxruntime_USE_WEBGPU AND NOT onnxruntime_USE_EP_API_ADAPTERS` (lines ~722 and
+~794). The exact pinned CI/W4/W5 build command uses `--use_webgpu shared_lib`, which
+sets `onnxruntime_USE_EP_API_ADAPTERS` (the plugin-EP build mode) — the same mode the
+patch itself targets (`Factory::CreateEpImpl` in `ep/factory.cc` only exists in plugin
+builds). So under the exact build configuration this whole experiment is required to
+use, `webgpu_context_test.cc` — and therefore every native unit test the W4 patch
+added to it — is unconditionally excluded from compilation, regardless of toolchain.
+This was not knowable before a build actually succeeded; W4/W5 had always attributed
+"native tests not run" to "no compiler," which was true but incomplete — even with a
+working compiler, these specific tests are excluded by this project's own CMake
+source-partitioning logic under the mandated plugin-EP build mode. This is reported as
+a real limitation, not something this session altered (no test-source-inclusion
+CMake logic was changed to try to force them in, since that would deviate from the
+exact pinned/reviewed build configuration).
+
+### Updated layered status
+
+| Layer | Verdict | Evidence / boundary |
+|---|---|---|
+| BUILT | **PASS** | `BUILD_EXIT_CODE=0`. New DLL, 10,443,264 B, SHA-256 `d5ed4d5e...` — differs from unpatched `b05a6d51...`. |
+| PACKAGED | **PASS** | Coherent wheel built via `build_wheel.py`, includes matching `dxcompiler.dll`/`dxil.dll` from the same build. |
+| LOADED | **PASS** | Live-process `psutil` module resolution + re-hash matches the new build exactly, in a runtime venv separate from both protected production venvs. |
+| SESSION CREATION / ADAPTER MATCH / PLACEMENT | **PASS (both GPUs)** | RTX 3060 and AMD iGPU each: session created, Dawn-observed LUID matched requested LUID, all nodes placed on `WebGpuExecutionProvider`. |
+| INVALID-LUID REJECTION | **PASS** | Native `EP_FAIL`/`INVALID_ARGUMENT` with the patch's exact source message; correctly surfaced past ORT's own CPU-fallback behavior by the production wrapper. |
+| CROSS-GPU CONTEXT REJECTION | **PASS** | Native `ORT_ENFORCE` failure with the patch's exact source message; correctly surfaced by the wrapper. |
+| SAME-GPU CONTEXT REUSE | **PASS** | Second same-adapter session succeeds as designed. |
+| **DEVICE SELECTION VERIFIED (decisive physical-execution proof)** | **BLOCKED — NEW CRASH, NOT VERIFIED** | First `session.run()` call crashes the process with `STATUS_STACK_BUFFER_OVERRUN` (`0xC0000409`), identically on both RTX and AMD, for even a single-node graph. No GPU-Engine-counter or nvidia-smi evidence could be collected. |
+| MODEL EXECUTION VERIFIED (MDX-Net) | **NOT TESTED** | Not attempted — the simpler synthetic-graph crash already reproduces reliably; running MDX-Net would not add information and would only consume further time against the same blocking crash. |
+| FULL AUDIO VERIFIED | **NOT TESTED** | Unchanged. |
+| NATIVE C++ UNIT TESTS | **NOT RUNNABLE IN THIS BUILD MODE** | Real CMake source-partitioning behavior, independently confirmed; not a toolchain gap this time. |
+
+Demucs: **NOT TESTED**. Capability evidence: **UNCHANGED** — a crash blocking the
+decisive physical-execution proof is not new positive hardware/model evidence, so
+`capability_matrix.py`/`capability_matrix.json` are intentionally left unmodified.
+
+### Why this stops here instead of being pushed through
+
+`STATUS_STACK_BUFFER_OVERRUN` indicates real memory corruption (a `/GS` security-cookie
+failure or an explicit `__fastfail`), not a benign or recoverable error. Retrying
+blindly, disabling `/GS`, changing optimization/LTO flags, or otherwise altering the
+build configuration to "get past" a memory-safety crash are all more than a narrow,
+build-tree-local fix, and diagnosing a stack-corruption bug in a multi-hundred-MB
+freshly-compiled Dawn/DXC/ORT tree is a substantial new investigation in its own
+right — squarely the kind of new, non-obvious problem this experiment's own rules say
+to stop and report rather than push through. No build configuration was changed, no
+flags were altered, and no further build was attempted after this was found.
+
+### Next step
+
+Decide, with the user, how to pursue root-causing the execution-time crash: candidates
+worth investigating include building a non-LTO / non-`/GS`-affecting configuration for
+comparison, checking whether this is a known Dawn/DirectXShaderCompiler issue for the
+pinned Dawn tag `v20260714.215939` combined with locally-resolved (not CI-pinned-exact)
+vcpkg dependency versions, capturing a crash dump (`WerFault`/`procdump`) for a full
+stack trace rather than only the NTSTATUS code, or testing whether the crash is
+specific to `--enable_lto`/`--wgsl_template static` by building one variant without
+each flag. Until the crash is root-caused and fixed, the decisive physical-execution
+proof — the central question the whole W1-W5 arc has been building toward — remains
+open, despite this session's real progress (first successful build, first loaded
+patched DLL, first confirmed-correct adapter selection and placement on real hardware
+for both hardware paths, and first confirmed-correct native rejection-path behavior).
