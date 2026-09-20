@@ -13,15 +13,23 @@ replacing a proven-faster one.
 
 **Headline result**: a working resolver prototype (`backend_resolver.py`), backed by a
 machine-readable capability matrix (`capability_matrix.py`/`.json`) built entirely from
-L1–L10's own already-gathered evidence, plus a Linux-specific device-isolation adapter
+L1–L10 and N1's already-gathered evidence, plus a Linux-specific device-isolation adapter
 (`linux_vulkan_isolation.py`, formalizing L10's proven `VK_LOADER_DEVICE_ID_FILTER`
-mechanism). 16/16 automated policy tests pass. On real Linux/AMD hardware: **RX 9070 +
+mechanism). After controlled N1 integration, 22/22 automated policy tests pass. On real Linux/AMD hardware: **RX 9070 +
 MDX-Net** and **Radeon 780M + MDX-Net** were both resolver-selected, actually executed,
 and independently kernel-verified in this phase; **RX 9070 + Demucs** was
 resolver-selected (execution reuses L9's already-live-verified run, not re-run here);
 **Radeon 780M + Demucs** was exercised as a required *negative* policy test only — the
 resolver correctly refuses it (BLOCKED) without attempting execution, causing no new
 GPU hang.
+
+The later N1 integration adds two distinct Linux/NVIDIA/Vulkan rows for the RTX 3060
+Laptop GPU. They preserve N1's independent physical-execution proof while explicitly
+not treating per-process `nvidia-smi` evidence as proof that the requested PCI selector
+caused Dawn's device choice. L10 loader isolation remains the separate, proven Linux
+enforcement mechanism. Linux RTX Demucs is compatible and 2.02x faster than ONNX CPU,
+but Auto retains the established PyTorch/CUDA route because it was measured about 5.9x
+faster than WebGPU.
 
 ## Phase 0: L10 publication
 
@@ -34,7 +42,7 @@ before any L11 work began.
 
 ## Section 1: Evidence studied
 
-All of L1–L10, M1, L8, and W1's sections in `README.md`, plus
+All of L1–L10, M1, L8, W1, and N1's sections in `README.md`, plus
 `RADEON_780M_IGPU_VALIDATION.md` and `RADEON_780M_DEVICE_ISOLATION.md` in full, were
 re-read before writing the capability matrix — not just the brief's own summary table.
 This surfaced detail the brief's own table doesn't carry (needed for the matrix's
@@ -55,14 +63,17 @@ required fields), in particular:
   `device_selection_enforceable: "UNKNOWN / NOT PROVEN"` — a real, disclosed gap, not
   glossed over. Re-verifying this was explicitly excluded from this L11 slice.
 
-No assumptions were made about untested Intel, NVIDIA-Linux, or Windows-AMD
+N1's complete `DEMUCS_LINUX_NVIDIA.md` report was used for the Linux RTX rows,
+including its exact MDX and Demucs artifact hashes, runtime versions, placement,
+numerical, pipeline, performance, and selection-causality evidence. No assumptions
+were made about untested Intel or Windows-AMD
 configurations — they simply have no matrix entries, and the resolver treats "no
 entry" as `UNKNOWN`, never as an implicit pass (Section 3/5).
 
 ## Section 2: Capability matrix (`capability_matrix.py` / `capability_matrix.json`)
 
-Eight `CapabilityEntry` records (2 models × 4 platform/GPU combinations from the
-brief's own table), each independently loaded with:
+Ten `CapabilityEntry` records (2 models × 5 tested platform/GPU configurations), each
+independently loaded with:
 
 - Identity: `os_arch`, `gpu_vendor`/`gpu_model`/`gpu_device_id_hex`/`gpu_pci_bus_id`,
   `model_name`/`model_sha256`.
@@ -158,7 +169,7 @@ use in Section 6 below (the isolation env dict is only ever passed to
 
 ## Section 5: Automated policy tests (`test_backend_resolver.py`)
 
-16/16 pass. Covers every case the brief listed, each directly exercising one of the
+22/22 pass. Covers every original case plus focused N1 Linux RTX cases, each directly exercising one of the
 rules in Section 3:
 
 | # | Case | Result |
@@ -171,6 +182,11 @@ rules in Section 3:
 | 4b | Radeon 780M + Demucs, explicit | Also `BLOCKED`, no silent swap to RX 9070 |
 | 5 | Apple M1 + Demucs | Auto prefers `Vendor:PyTorch/MPS` (known advantage preserved) |
 | 6 | RTX 3060 + Demucs | Auto prefers `Vendor:PyTorch/CUDA` (known advantage preserved) |
+| 6b | Linux RTX 3060 + MDX-Net | Auto → the distinct Vulkan/WebGPU row |
+| 6c | Linux RTX 3060 + MDX-Net, Renoir also present, explicit | L10 isolation env targets `0x2520`; N1's selector causality is not assumed |
+| 6d | Linux RTX 3060 + Demucs, explicit | WebGPU remains available from N1 correctness evidence |
+| 6e | Linux RTX 3060 + Demucs, Auto | Preserves the proven ~5.9x-faster `Vendor:PyTorch/CUDA` route |
+| 6f/g | Linux/Windows RTX evidence and selector semantics | Vulkan and D3D12 remain distinct; physical execution and causal selection remain separate |
 | 7 | Unknown Intel GPU | `UNKNOWN`, not `PASS` |
 | 8 | Unknown ONNX model | `UNKNOWN`, not `PASS` |
 | 9 | Nonexistent GPU (explicit) | `FAIL`, no substitute picked |
@@ -179,10 +195,11 @@ rules in Section 3:
 | 12a/b | CPU fallback allowed / forbidden | Honored exactly, on the same unknown combination |
 | 13 | Contradictory/outdated evidence | Swapping in a modified matrix changes the resolver's own decision (proves it reads its evidence input rather than hardcoding conclusions) |
 
-Cases built on Apple M1/RTX 3060 data (#5, #6, #10) verify the resolver's **reasoning**
+Cases built on Apple M1/Windows RTX 3060 data (#5, #6, #10) verify the resolver's **reasoning**
 against evidence M1/L8/W1 already gathered — they are explicitly **not** new hardware
 validation, per the brief's own instruction, and are labeled as such in the test file's
-own docstring.
+own docstring. Cases #6b–#6g are focused assertions over N1's genuine Linux RTX 3060
+evidence; they do not rerun its already-preserved GPU benchmark.
 
 ## Section 6: Real Linux/AMD hardware validation (`l11_hardware_validation.py`)
 
@@ -306,7 +323,7 @@ explicitly distinct, per the brief's own instruction:**
 2. The underlying `onnxruntime-ep-webgpu` plugin's own device-selection bug (L9) is
    real and unresolved upstream — this project's isolation adapter works around it on
    Linux specifically; there is no equivalent workaround demonstrated for Windows/macOS.
-3. The capability matrix currently covers exactly 2 models × 4 platform/GPU
+3. The capability matrix currently covers exactly 2 models × 5 platform/GPU
    combinations — a small fraction of STEMwerk's actual supported model set. Models
    that are PyTorch `.ckpt` files (MDXC/Roformer, per `README.md` Section 2) are
    outside this ONNX/WebGPU route's scope entirely and would need their own
@@ -325,7 +342,7 @@ explicitly distinct, per the brief's own instruction:**
 - `linux_vulkan_isolation.py` — the Linux device-isolation adapter.
 - `kernel_gpu_monitor.py` — the independent kernel-level verification tool, promoted
   from L9/L10's own scratch tooling to a reusable, committed module in this phase.
-- `test_backend_resolver.py` — 16 automated policy tests (all passing).
+- `test_backend_resolver.py` — 22 automated policy tests (all passing).
 - `l11_hardware_validation.py` — real Linux/AMD hardware validation script (all 4
   required scenarios; reproducible via `python l11_hardware_validation.py` with the
   webgpu venv active from `experiments/webgpu-ep/`).
@@ -333,7 +350,7 @@ explicitly distinct, per the brief's own instruction:**
 
 ## Known limitations (not glossed over)
 
-- `capability_matrix.py`'s data is a manually-curated snapshot of L1–L10's findings,
+- `capability_matrix.py`'s data is a manually-curated snapshot of L1–L11 plus N1's findings,
   not automatically derived from raw test output — a transcription error is possible
   in principle, though every figure was checked against its cited source section while
   writing this report.
@@ -345,11 +362,11 @@ explicitly distinct, per the brief's own instruction:**
 - `vendor_alternative_available`'s "proven better" detection
   (`backend_resolver._vendor_alternative_is_proven_better`) is a simple substring
   check (`"proven" in ...`) on a human-written matrix field, not a structured
-  comparison of benchmark numbers — adequate for this phase's 8 entries, would need a
+  comparison of benchmark numbers — adequate for this phase's 10 entries, would need a
   more structured representation before scaling further.
 - No attempt was made to test what happens if `available_gpus` reports a GPU whose
   `device_id_hex` doesn't match any known hex format, or other malformed-input cases
-  beyond what the 16 policy tests already cover.
+  beyond what the 22 policy tests already cover.
 
 ## Git
 

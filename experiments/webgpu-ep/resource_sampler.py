@@ -131,12 +131,12 @@ def _read_gpu_util_pct(card_key):
 
 def _nvidia_smi_query(gpu_index, timeout=2):
     """
-    Windows/NVIDIA counterpart to _rocm_smi_json(), added for the Windows W1 phase.
+    NVIDIA counterpart to _rocm_smi_json(), added for Windows W1 and reused unchanged
+    on Linux/NVIDIA in N1.
     Same honesty class as rocm-smi above: nvidia-smi's memory.used/utilization.gpu are
     also WHOLE-GPU (every process + the desktop compositor), not per-process -- callers
     must still present any delta as best-effort attributable, never a clean per-process
-    peak. Explicit --id=<gpu_index> because this experiment's actual laptop has two
-    GPUs (NVIDIA discrete + an AMD iGPU); nothing here guesses which one to query.
+    peak. Explicit --id=<gpu_index>; nothing here guesses which NVIDIA GPU to query.
     """
     try:
         out = subprocess.run(

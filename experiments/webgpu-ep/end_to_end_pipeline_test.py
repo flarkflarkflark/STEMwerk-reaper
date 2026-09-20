@@ -51,7 +51,7 @@ class ValidationError(RuntimeError):
 
 
 def run_provider(label, providers, input_wav, model_cache, out_dir, pci_bus_id, model_filename=MODEL_FILENAME,
-                  mdx_segment_size=None):
+                  mdx_segment_size=None, torch_device=None):
     from audio_separator.separator import Separator
     import audio_separator.separator.common_separator as common_separator_module
 
@@ -90,6 +90,10 @@ def run_provider(label, providers, input_wav, model_cache, out_dir, pci_bus_id, 
         sep_kwargs["mdx_params"] = {"hop_length": 1024, "segment_size": mdx_segment_size,
                                      "overlap": 0.25, "batch_size": 1, "enable_denoise": False}
     sep = Separator(**sep_kwargs)
+    if torch_device is not None:
+        import torch
+        sep.torch_device = torch.device(torch_device)
+        sep.torch_device_cpu = torch.device("cpu")
     sep.onnx_execution_provider = providers
 
     t_load0 = time.time()
@@ -111,6 +115,7 @@ def run_provider(label, providers, input_wav, model_cache, out_dir, pci_bus_id, 
         "run_time_s": t_run1 - t_run0,
         "raw_by_stem": captured,
         "uses_pytorch_inference": bool(getattr(sep.model_instance, "uses_pytorch_inference", False)),
+        "torch_device": str(sep.model_instance.torch_device),
     }
 
 
@@ -188,6 +193,9 @@ if __name__ == "__main__":
     ap.add_argument("--device-id", type=int, default=None,
                      help="Windows/multi-GPU only (no pci_bus_id metadata under Dawn/D3D12); "
                           "omit on macOS/single-GPU systems")
+    ap.add_argument("--torch-device", default=None,
+                    help="Optional explicit PyTorch device for MDX STFT/iSTFT (for example 'cpu'); "
+                         "the ONNX inference provider is selected independently")
     args = ap.parse_args()
 
     input_info = sf.info(args.input_wav)
@@ -206,8 +214,12 @@ if __name__ == "__main__":
     try:
         for label, providers in [("cpu", ["CPUExecutionProvider"]), ("webgpu", ["WebGpuExecutionProvider"])]:
             print(f"=== Running {label} ===")
-            results[label] = run_provider(label, providers, args.input_wav, args.model_cache, args.out_dir, args.pci_bus_id)
+            results[label] = run_provider(
+                label, providers, args.input_wav, args.model_cache, args.out_dir, args.pci_bus_id,
+                torch_device=args.torch_device,
+            )
             print(f"  load={results[label]['load_time_s']:.2f}s run={results[label]['run_time_s']:.2f}s "
+                  f"torch_device={results[label]['torch_device']} "
                   f"files={[os.path.basename(f) for f in results[label]['output_files']]}")
 
             print(f"  Validating {label} output files...")
@@ -271,7 +283,11 @@ if __name__ == "__main__":
     finally:
         ort.InferenceSession = original_cls
 
-    report["timing"] = {k: {"load_time_s": v["load_time_s"], "run_time_s": v["run_time_s"]} for k, v in results.items()}
+    report["timing"] = {
+        k: {"load_time_s": v["load_time_s"], "run_time_s": v["run_time_s"],
+            "torch_device": v["torch_device"]}
+        for k, v in results.items()
+    }
     report["file_validation"] = {
         label: [{k: v[k] for k in v if k != "path"} for v in vs] for label, vs in validations.items()
     }

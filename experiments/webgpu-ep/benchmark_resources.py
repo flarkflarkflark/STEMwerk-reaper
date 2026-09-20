@@ -29,23 +29,20 @@ import onnxruntime as ort  # noqa: E402
 
 MODEL_FILENAME = "UVR_MDXNET_KARA_2.onnx"
 
-# resource_sampler.py's GPU reader is Linux/rocm-smi by default, unchanged from L2;
-# Windows (this experiment's W1 phase) has no rocm-smi at all, but does have
-# nvidia-smi for an NVIDIA discrete GPU -- same whole-GPU-only honesty caveat applies,
-# just a different vendor tool. Non-Windows platforms get the exact original kwargs.
-_SAMPLER_KWARGS = {"gpu_backend": "nvidia", "nvidia_gpu_index": 0} if sys.platform == "win32" else {"card_key": "card0"}
-
-
-def bench_provider(label, providers, input_wav, model_cache, out_dir, runs):
+def bench_provider(label, providers, input_wav, model_cache, out_dir, runs, sampler_kwargs, torch_device=None):
     from audio_separator.separator import Separator
 
     provider_out_dir = os.path.join(out_dir, label)
     os.makedirs(provider_out_dir, exist_ok=True)
     sep = Separator(log_level=100, model_file_dir=model_cache, output_dir=provider_out_dir,
                      sample_rate=44100, use_soundfile=True)
+    if torch_device is not None:
+        import torch
+        sep.torch_device = torch.device(torch_device)
+        sep.torch_device_cpu = torch.device("cpu")
     sep.onnx_execution_provider = providers
 
-    with ResourceSampler(**_SAMPLER_KWARGS) as load_sampler:
+    with ResourceSampler(**sampler_kwargs) as load_sampler:
         t0 = time.time()
         sep.load_model(MODEL_FILENAME)
         t1 = time.time()
@@ -54,7 +51,7 @@ def bench_provider(label, providers, input_wav, model_cache, out_dir, runs):
     run_times = []
     run_samplers = []
     for i in range(runs):
-        with ResourceSampler(**_SAMPLER_KWARGS) as sampler:
+        with ResourceSampler(**sampler_kwargs) as sampler:
             t0 = time.time()
             sep.separate(input_wav)
             t1 = time.time()
@@ -64,6 +61,7 @@ def bench_provider(label, providers, input_wav, model_cache, out_dir, runs):
     warm_times = run_times[1:] if len(run_times) > 1 else run_times
     return {
         "label": label,
+        "torch_device": str(sep.model_instance.torch_device),
         "load_time_s": load_time_s,
         "load_resources": load_sampler.summary(),
         "run_times_s": run_times,
@@ -95,7 +93,28 @@ if __name__ == "__main__":
     ap.add_argument("--device-id", type=int, default=None,
                      help="Windows/multi-GPU only (no pci_bus_id metadata under Dawn/D3D12); "
                           "omit on macOS/single-GPU systems")
+    ap.add_argument(
+        "--gpu-monitor-backend", choices=("auto", "rocm", "nvidia"), default="auto",
+        help="Whole-GPU resource monitor. 'auto' preserves the historical behavior: "
+             "nvidia-smi on Windows, rocm-smi elsewhere. Use 'nvidia' explicitly on Linux/NVIDIA.",
+    )
+    ap.add_argument("--nvidia-gpu-index", type=int, default=0,
+                    help="nvidia-smi GPU index when --gpu-monitor-backend=nvidia (default: 0)")
+    ap.add_argument("--rocm-card-key", default="card0",
+                    help="rocm-smi JSON card key when --gpu-monitor-backend=rocm (default: card0)")
+    ap.add_argument("--torch-device", default=None,
+                    help="Optional explicit PyTorch device for MDX STFT/iSTFT (for example 'cpu'); "
+                         "the ONNX inference provider is selected independently")
     args = ap.parse_args()
+
+    monitor_backend = args.gpu_monitor_backend
+    if monitor_backend == "auto":
+        monitor_backend = "nvidia" if sys.platform == "win32" else "rocm"
+    sampler_kwargs = (
+        {"gpu_backend": "nvidia", "nvidia_gpu_index": args.nvidia_gpu_index}
+        if monitor_backend == "nvidia"
+        else {"gpu_backend": "rocm", "card_key": args.rocm_card_key}
+    )
 
     original_cls, gpu_reports = patch_inference_session_for_provider_swap(
         lambda: select_device(pci_bus_id=args.pci_bus_id, device_id=args.device_id)
@@ -105,11 +124,14 @@ if __name__ == "__main__":
     try:
         for label, providers in [("cpu", ["CPUExecutionProvider"]), ("webgpu", ["WebGpuExecutionProvider"])]:
             print(f"=== Benchmarking {label} ({args.runs} runs) ===")
-            results[label] = bench_provider(label, providers, args.input_wav, args.model_cache, args.out_dir, args.runs)
+            results[label] = bench_provider(
+                label, providers, args.input_wav, args.model_cache, args.out_dir, args.runs,
+                sampler_kwargs, args.torch_device,
+            )
             r = results[label]
             print(f"  load={r['load_time_s']:.2f}s first_run={r['first_run_s']:.2f}s "
                   f"warm_median={r['warm_median_s']:.2f}s (min={r['warm_min_s']:.2f} max={r['warm_max_s']:.2f} "
-                  f"stdev={r['warm_stdev_s']:.3f})")
+                  f"stdev={r['warm_stdev_s']:.3f}) torch_device={r['torch_device']}")
             print(f"  peak_rss={r['peak_rss_mb']:.1f}MB peak_vram_delta={r['peak_vram_attributable_delta_mb']}"
                   f"{'MB' if r['peak_vram_attributable_delta_mb'] is not None else ''} "
                   f"avg_gpu_util={r['avg_gpu_util_pct']}%")

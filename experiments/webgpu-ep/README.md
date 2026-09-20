@@ -1,4 +1,4 @@
-# WebGPU EP experiment — native ONNX Runtime WebGPU Execution Provider (Linux/AMD, macOS/Apple Silicon, Windows/NVIDIA)
+# WebGPU EP experiment — native ONNX Runtime WebGPU Execution Provider (Linux/AMD+NVIDIA, macOS/Apple Silicon, Windows/NVIDIA)
 
 Status date: 2026-09-20. Experimental, opt-in, isolated. Not integrated into STEMwerk.
 
@@ -1436,10 +1436,11 @@ Moves from isolated hardware tests to a working, model-aware **backend resolver*
 prototype: given a model, platform, and the physical GPUs actually present, decides
 whether STEMwerk's shared WebGPU route should be offered at all — not just whether it
 technically runs. Not a CUDA/ROCm/MPS/DirectML replacement; WebGPU is offered only
-where L1–L10's own evidence proves it correct, stable, and at least as fast as CPU.
+where L1–L11 and N1's own evidence proves it correct, stable, and at least as fast as CPU.
 
-**Built**: a machine-readable capability matrix (`capability_matrix.py`/`.json`, 8
-entries drawn entirely from L1–L10's own findings, distinguishing theoretical support,
+**Built**: a machine-readable capability matrix (`capability_matrix.py`/`.json`,
+originally 8 entries from L1–L10 and now 10 after adding N1's two Linux RTX rows,
+distinguishing theoretical support,
 actually-tested, found-correct, and suitable-for-Auto as four separate facts, never
 collapsed); an experimental resolver (`backend_resolver.py`) that never silently
 substitutes a different physical GPU than requested, never claims a GPU selection
@@ -1450,7 +1451,8 @@ otherwise qualify; a Linux-specific device-isolation adapter
 mechanism; and `kernel_gpu_monitor.py`, L9/L10's own independent kernel-level
 verification tooling promoted from scratch script to a reusable, committed module.
 
-**16/16 automated policy tests pass**, covering every case the brief required —
+**22/22 automated policy tests pass** after focused N1 additions, covering every case
+the brief required —
 including the load-bearing one: Radeon 780M + Demucs under `Auto` resolves to
 `BLOCKED`, not `PASS`, and an explicit request for that same combination is also
 refused rather than silently rerouted to the RX 9070.
@@ -1477,6 +1479,44 @@ readiness**: Windows/macOS device-selection enforceability remains unverified, t
 matrix covers only 2 of STEMwerk's many supported models, and the resolver itself is
 experimental Python with no production wiring — see `BACKEND_CAPABILITY_RESOLVER.md`
 for the full, undiluted limitations list.
+
+## Phase N1: Linux NVIDIA/Vulkan Validation
+
+Status date: 2026-09-20. Starting HEAD
+`2d1ed69d76428bc04c47cdf16b273b2485a36aef` (W1 exactly), on the isolated local
+branch `slice/webgpu-n1-linux-nvidia` while AMD Radeon 780M work proceeded concurrently.
+Full report: **`DEMUCS_LINUX_NVIDIA.md`**. This controlled integration preserves the
+subsequent L9-L11 history and adds N1 as separate Linux/NVIDIA/Vulkan evidence.
+
+**Headline result: the exact shared native WebGPU implementation works on the NVIDIA
+RTX 3060 Laptop GPU under Linux/Vulkan, with no NVIDIA/Linux-specific inference code.**
+Explicit PCI selection requested `0000:01:00.0` rather than the AMD Renoir iGPU;
+runtime process maps showed the Vulkan loader, NVIDIA ICD libraries, and NVIDIA device
+nodes, and live `nvidia-smi` attributed the Demucs process to the RTX 3060. That proves
+physical RTX execution, but not that the request causally selected it rather than
+Dawn's default. L10 separately proved that `VK_LOADER_DEVICE_ID_FILTER` can enforce a
+non-default Linux/Vulkan device. Negative tests for ambiguous and nonexistent devices
+both failed loudly as designed.
+
+- MDX-Net: 185/185 WebGPU nodes, zero fallback, full two-stem pipeline and routing
+  PASS, raw CPU/WebGPU max error `4.77e-07`; warm WebGPU 2.083 s vs CPU EP 12.045 s
+  on a 20 s fixture (5.78x, RTF 9.6x).
+- Demucs: exact established artifact SHA-256 `68d0bf16...fcc5e74`, 1594/1594 WebGPU
+  nodes, zero fallback, four-stem export/routing PASS, CPU/WebGPU correlation at least
+  0.999999996. The cross-backend `ConvActivationFusion` failure reproduces under
+  NVIDIA/Vulkan with `ORT_ENABLE_ALL`; the existing `ORT_ENABLE_BASIC` workaround
+  remains required and sufficient.
+- Demucs performance: warm `shifts=2` WebGPU 14.144 s vs ONNX CPU 28.578 s (2.02x,
+  RTF 1.41x), but about 5.9x slower than the installed warm PyTorch/CUDA production
+  route (~2.40 s). This matches W1/L8's practical conclusion: keep mature vendor
+  routes where they exist; WebGPU's demonstrated value is one maintainable optional
+  cross-platform implementation, not maximum vendor-specific performance.
+
+N1 added an explicit optional MDX `--torch-device` control because current Linux
+`torch==2.14.0` auto-selected CUDA for STFT/iSTFT, an explicit Linux NVIDIA resource
+monitor choice in `benchmark_resources.py`, and a reusable SHA-gated
+`demucs_validation.py`. Defaults remain backward-compatible. No model, production
+runtime, installer, driver, or shared adapter/shift algorithm was changed.
 
 ## Reproducing this experiment
 
