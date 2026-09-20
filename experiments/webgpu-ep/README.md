@@ -1426,6 +1426,58 @@ per-model capability gating (this phase's own evidence: fine for MDX-Net-class
 graphs, not currently viable for Demucs-class graphs on a modest iGPU), not
 implemented here per the brief's "no production integration" instruction.
 
+## Phase L11: Capability Matrix & Experimental Backend Resolver
+
+Status date: 2026-09-20. Starting HEAD `df1f4fe26` (L10, published in the prior turn);
+`git fetch origin` found no new commits, both before starting and before committing.
+Full report: **`BACKEND_CAPABILITY_RESOLVER.md`**.
+
+Moves from isolated hardware tests to a working, model-aware **backend resolver**
+prototype: given a model, platform, and the physical GPUs actually present, decides
+whether STEMwerk's shared WebGPU route should be offered at all — not just whether it
+technically runs. Not a CUDA/ROCm/MPS/DirectML replacement; WebGPU is offered only
+where L1–L10's own evidence proves it correct, stable, and at least as fast as CPU.
+
+**Built**: a machine-readable capability matrix (`capability_matrix.py`/`.json`, 8
+entries drawn entirely from L1–L10's own findings, distinguishing theoretical support,
+actually-tested, found-correct, and suitable-for-Auto as four separate facts, never
+collapsed); an experimental resolver (`backend_resolver.py`) that never silently
+substitutes a different physical GPU than requested, never claims a GPU selection
+succeeded without evidence, and lets Auto prefer an already-proven-superior vendor
+backend (MPS on Apple M1, CUDA on RTX 3060) over WebGPU even where WebGPU itself would
+otherwise qualify; a Linux-specific device-isolation adapter
+(`linux_vulkan_isolation.py`) formalizing L10's proven `VK_LOADER_DEVICE_ID_FILTER`
+mechanism; and `kernel_gpu_monitor.py`, L9/L10's own independent kernel-level
+verification tooling promoted from scratch script to a reusable, committed module.
+
+**16/16 automated policy tests pass**, covering every case the brief required —
+including the load-bearing one: Radeon 780M + Demucs under `Auto` resolves to
+`BLOCKED`, not `PASS`, and an explicit request for that same combination is also
+refused rather than silently rerouted to the RX 9070.
+
+**Real Linux/AMD hardware validation**: RX 9070 + MDX-Net and Radeon 780M + MDX-Net
+were both resolver-selected, actually executed, and independently kernel-verified in
+this phase (a genuine mid-phase methodological fix was needed and disclosed: this
+session's desktop background load was noisier than L9/L10's, so a fixed detection
+threshold gave a false positive — fixed by measuring a fresh idle baseline immediately
+before every test, exactly the discipline L9/L10 already used elsewhere). RX 9070 +
+Demucs was resolver-selected; execution reuses L9's already-live-verified run rather
+than repeating it. Radeon 780M + Demucs was, per the brief's explicit instruction, a
+**negative policy test only** — confirmed BLOCKED without attempting execution, since
+L10 already proved the crash and re-triggering it would add no new information.
+
+**Architecture question answered**: technically feasible for a future STEMwerk runtime
+to use one shared inference implementation with only limited platform-specific code
+for device selection/packaging/monitoring — this is not speculative, L1–L11
+collectively demonstrate it (the audio pipeline itself never changed across three
+OSes; every genuine platform difference was small and isolated). Vendor backends can
+stay available at STEMwerk's existing execution-provider injection point without
+duplicating the pipeline. **Explicitly not the same as proven production
+readiness**: Windows/macOS device-selection enforceability remains unverified, the
+matrix covers only 2 of STEMwerk's many supported models, and the resolver itself is
+experimental Python with no production wiring — see `BACKEND_CAPABILITY_RESOLVER.md`
+for the full, undiluted limitations list.
+
 ## Reproducing this experiment
 
 ```bash
