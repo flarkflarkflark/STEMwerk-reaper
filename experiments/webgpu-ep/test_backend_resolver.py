@@ -42,6 +42,43 @@ def check(label, condition, detail=""):
         _failures.append(label)
 
 
+# Genuine, previously-undetected finding from running this suite on Windows for the
+# first time (W2): a FEW specific cases below simulate a Linux scenario purely via
+# `os_arch="linux"` (the string backend_resolver.py's own docstring says drives its
+# policy logic, deliberately host-independent per this file's own module docstring
+# -- "verify the resolver's REASONING ... NOT new hardware validation"). But those
+# specific cases also exercise linux_vulkan_isolation.build_isolation_plan(), which
+# has its OWN, stricter, real `sys.platform` check (by design -- it must never
+# fabricate a real VK_LOADER_DEVICE_ID_FILTER env-var plan on a host where that
+# mechanism cannot possibly apply). The two checks disagree when the actual test
+# runner isn't Linux: `_isolation_for()`'s "is this a Linux scenario" branch fires
+# (os_arch says so), but `build_isolation_plan()` then correctly refuses (sys.platform
+# says otherwise) and raises. This is not a Windows-specific resolver bug -- it is a
+# real fact about this test file that no prior phase (all run on the Linux dev
+# machine) had occasion to notice. Skipped (not silently passed, not miscounted as a
+# failure) on any non-Linux host, with this reasoning printed; unaffected everywhere
+# else in this file, and unaffected on Linux.
+ON_LINUX = sys.platform.startswith("linux")
+
+
+_skipped = []
+
+
+def check_linux_isolation_plan(label, fn):
+    """Runs `fn()` (which calls resolve() with a >1-GPU Linux isolation scenario) only
+    on a real Linux host; otherwise records an explicit SKIP (tracked separately from
+    both pass and fail counts) so the final summary stays honest rather than silently
+    dropping the case or miscounting it as a pass."""
+    if not ON_LINUX:
+        _skipped.append(label)
+        print(f"[SKIP] {label} -- requires a real Linux host to build a genuine "
+              f"VK_LOADER_DEVICE_ID_FILTER plan (linux_vulkan_isolation.py's own "
+              f"sys.platform check, by design); this run's host is {sys.platform!r}. "
+              f"See the module-level comment above ON_LINUX.")
+        return
+    check(label, fn())
+
+
 # 1. RX 9070 + MDX-Net -- known-good, single GPU
 r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="linux",
                             available_gpus=(RX9070,), desired_backend="Auto"))
@@ -61,10 +98,11 @@ check("780M + MDX-Net (alone): Auto selects WebGPU on the 780M",
       r.status == "PASS" and r.selected_backend == "WebGPU" and r.selected_gpu == R780M)
 
 # 3b. Radeon 780M + MDX-Net, with RX 9070 ALSO present -- isolation plan must be built
-r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="linux",
-                            available_gpus=(RX9070, R780M), desired_backend="WebGPU", explicit_gpu=R780M))
-check("780M + MDX-Net (explicit, RX 9070 also present): isolation env is built and targets the 780M",
-      r.status == "PASS" and r.required_process_isolation == {"VK_LOADER_DEVICE_ID_FILTER": "0x15bf"})
+def _t3b():
+    r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="linux",
+                                available_gpus=(RX9070, R780M), desired_backend="WebGPU", explicit_gpu=R780M))
+    return r.status == "PASS" and r.required_process_isolation == {"VK_LOADER_DEVICE_ID_FILTER": "0x15bf"}
+check_linux_isolation_plan("780M + MDX-Net (explicit, RX 9070 also present): isolation env is built and targets the 780M", _t3b)
 
 # 4. Radeon 780M + Demucs -- WebGPU Auto MUST be refused (the required test, verbatim from the brief)
 r = resolve(ResolveRequest(model_name="htdemucs.onnx", os_arch="linux",
@@ -98,12 +136,12 @@ check("Linux RTX 3060 + MDX-Net: Auto selects the separately tested Vulkan/WebGP
 # 6c. N1 did not prove that its ordinary PCI selector caused the RTX choice. When a
 # second GPU is present, the resolver therefore relies on L10's separate, proven
 # Vulkan-Loader isolation mechanism rather than treating nvidia-smi as causal proof.
-r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="linux",
-                            available_gpus=(RTX3060_LINUX, RENOIR), desired_backend="WebGPU",
-                            explicit_gpu=RTX3060_LINUX))
-check("Linux RTX 3060 + MDX-Net (dual GPU): explicit selection uses L10 loader isolation",
-      r.status == "PASS" and
-      r.required_process_isolation == {"VK_LOADER_DEVICE_ID_FILTER": "0x2520"})
+def _t6c():
+    r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="linux",
+                                available_gpus=(RTX3060_LINUX, RENOIR), desired_backend="WebGPU",
+                                explicit_gpu=RTX3060_LINUX))
+    return r.status == "PASS" and r.required_process_isolation == {"VK_LOADER_DEVICE_ID_FILTER": "0x2520"}
+check_linux_isolation_plan("Linux RTX 3060 + MDX-Net (dual GPU): explicit selection uses L10 loader isolation", _t6c)
 
 # 6d/e. N1 Linux/Vulkan RTX 3060 + Demucs is correct and faster than ONNX CPU, so an
 # explicit single-GPU WebGPU request can succeed; Auto must still keep the established
@@ -195,7 +233,98 @@ r_stale = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="l
 check("Resolver decision changes when the evidence it's given changes (not hardcoded)",
       r_live.status == "PASS" and r_stale.status == "BLOCKED")
 
-print(f"\n{_count - len(_failures)}/{_count} policy tests passed.")
+# --- W2: Windows multi-GPU physical-selection-enforcement tests -----------------
+# Phase W2 (WINDOWS_MULTI_GPU_SELECTION.md) ran the decisive reversed-selection test
+# this project's own L9/L10 recommended: on a real Windows/D3D12 laptop with an
+# NVIDIA RTX 3060 (discrete) + an AMD Radeon iGPU, an explicit request for the AMD
+# iGPU still executed on the RTX 3060 -- independently confirmed via OS-level GPU
+# Engine performance counters (keyed to DXGI adapter LUID) and nvidia-smi whole-GPU
+# utilization, in two separate fresh processes. This directly disproves W1's
+# unverified assumption that the RTX 3060 selection in W1 was caused by the request
+# rather than coinciding with Dawn's own high-performance-adapter default. These
+# tests assert the resolver's policy correctly reflects that finding: never PASS an
+# explicit Windows multi-GPU selection, and never silently substitute a different
+# physical GPU than what was asked for.
+
+RTX3060_WIN = GpuInfo("NVIDIA", "RTX 3060 Laptop GPU")
+AMD_IGPU_WIN = GpuInfo("AMD", "AMD Radeon(TM) Graphics", "0x1638", None)
+INTEL_IGPU_WIN = GpuInfo("Intel", "Intel Iris Xe Graphics")
+
+# W2a. Windows multi-GPU selection: with two real GPUs present and no Linux-style
+# isolation mechanism available (W2's Section 7 finding), Auto must NOT claim a
+# WebGPU PASS on this model even though the RTX 3060 alone is otherwise a proven,
+# suitable_for_auto candidate -- selection cannot be safely enforced with a second
+# GPU in the picture, so the resolver falls back rather than guessing (mirrors the
+# pre-existing test #10, restated here with the real W2-derived GpuInfo objects and
+# explicit reference to the finding that produced this policy).
+r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
+                            available_gpus=(RTX3060_WIN, AMD_IGPU_WIN), desired_backend="Auto"))
+check("W2a Windows RTX3060+iGPU present, MDX-Net, Auto: BLOCKED, no enforced-selection PASS claimed",
+      r.status == "BLOCKED" and r.selected_gpu is None and r.device_selection_enforceable is False)
+
+# W2b. Physical-GPU-proof vs. claimed-selection distinction: the capability matrix
+# itself must record W1's Windows RTX 3060 rows as DISPROVEN/not-enforced (not a
+# bare "PASS"), now that W2 has actual reversed-selection evidence -- guards against
+# ever re-collapsing "GPU executed" and "selector caused it" back into one claim.
+win_rtx_mdx = cm.lookup("windows", "RTX 3060", "MDXNET")
+check("W2b Windows RTX3060 MDX-Net matrix row: device_selection_enforceable is DISPROVEN, not PASS/UNKNOWN",
+      win_rtx_mdx is not None and "DISPROVEN" in win_rtx_mdx.device_selection_enforceable)
+
+# W2c. Requested GPU differing from observed GPU: the new Windows AMD iGPU matrix
+# row itself must record found_correct=False and a FAIL selector verdict -- this is
+# the "requested != observed" case the brief asked for, backed by the real W2 result
+# (RTX 3060 executed despite the iGPU being requested), not a hypothetical.
+win_igpu_mdx = cm.lookup("windows", "AMD Radeon(TM) Graphics", "MDXNET")
+check("W2c Windows AMD iGPU MDX-Net matrix row: found_correct is False and selector verdict is FAIL",
+      win_igpu_mdx is not None and win_igpu_mdx.found_correct is False and
+      "FAIL" in win_igpu_mdx.device_selection_enforceable and
+      "RTX 3060" in win_igpu_mdx.physical_gpu_verification)
+
+# W2d. Explicit GPU request failing closed: an explicit request for the Windows AMD
+# iGPU (the disproven combination) must be refused outright (BLOCKED), and with
+# fallback disabled must select nothing -- never silently rerouted to the RTX 3060
+# that W2 showed actually executes instead.
+r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
+                            available_gpus=(RTX3060_WIN, AMD_IGPU_WIN), desired_backend="WebGPU",
+                            explicit_gpu=AMD_IGPU_WIN, allow_fallback=False))
+check("W2d Windows explicit iGPU request fails closed: BLOCKED, no fallback, no silent RTX 3060 substitution",
+      r.status == "BLOCKED" and r.selected_backend is None and r.selected_gpu is None)
+
+# W2e. No-safe-isolation-mechanism case, explicit RTX 3060 request this time (the
+# GPU that DID physically execute in W1/W2): even the "right" GPU on a multi-GPU
+# Windows system cannot be marked as an ENFORCED selection, because W2 proved this
+# platform has no mechanism to guarantee the opposite outcome either -- the matrix's
+# own DISPROVEN verdict (W2b) means backend_resolver.py must still refuse to promise
+# enforcement even for a request that happens to match what actually ran.
+r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
+                            available_gpus=(RTX3060_WIN, AMD_IGPU_WIN), desired_backend="WebGPU",
+                            explicit_gpu=RTX3060_WIN))
+check("W2e Windows explicit RTX3060 request (2 GPUs present): still BLOCKED, no enforcement promised",
+      r.status == "BLOCKED" and r.selected_gpu is None)
+
+# W2f. Unknown iGPU capability: a different, never-tested Windows iGPU vendor
+# (Intel) must resolve UNKNOWN, not PASS -- no evidence exists for it at all.
+r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
+                            available_gpus=(INTEL_IGPU_WIN,), desired_backend="Auto"))
+check("W2f Unknown Windows Intel iGPU: status is UNKNOWN, not PASS", r.status == "UNKNOWN")
+
+# W2g. Correct handling of DISPROVEN iGPU evidence (the "if obtained" case from the
+# brief -- W2 obtained real evidence, but it disproves rather than validates iGPU
+# execution): Auto with ONLY the AMD iGPU present (no RTX 3060 to fall back to
+# in the available_gpus list) must still refuse WebGPU as BLOCKED, distinguishing
+# "known bad" from "no evidence" (UNKNOWN) -- this is a genuinely different failure
+# reason than the Radeon 780M/Linux BLOCKED case (device-loss crash) or the Windows
+# multi-GPU-present case (W2a/e, unenforceable selection): here it is disproven
+# physical correctness for this GPU specifically.
+r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
+                            available_gpus=(AMD_IGPU_WIN,), desired_backend="Auto"))
+check("W2g Windows AMD iGPU alone, Auto: BLOCKED (disproven-correct), not silently PASS",
+      r.status == "BLOCKED" and r.selected_backend != "WebGPU")
+
+print(f"\n{_count - len(_failures)}/{_count} policy tests passed"
+      f"{f' ({len(_skipped)} skipped, non-Linux host -- see ON_LINUX above)' if _skipped else ''}.")
+if _skipped:
+    print("SKIPPED:", _skipped)
 if _failures:
     print("FAILED:", _failures)
     sys.exit(1)

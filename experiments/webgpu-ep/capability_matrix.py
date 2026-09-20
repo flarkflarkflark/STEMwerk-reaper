@@ -338,11 +338,18 @@ MATRIX: list[CapabilityEntry] = [
                                       "(README Section 2) as the existing Windows onnx GPU path, but NOT "
                                       "directly benchmarked against WebGPU in W1 (only vs CPU) -- an open "
                                       "evidence gap, not assumed either way",
-        device_selection_enforceable="UNKNOWN / NOT PROVEN -- no Windows-equivalent of the Linux "
-                                      "VK_LOADER_DEVICE_ID_FILTER mechanism has been investigated in this "
-                                      "project; W1 only tested a scenario where the requested device already "
-                                      "matched the plausible default (discrete GPU on a discrete+iGPU laptop)",
-        evidence="README.md Phase W1 section; DEMUCS_WINDOWS_NVIDIA.md",
+        device_selection_enforceable="DISPROVEN as a general mechanism (W2) -- W1's RTX 3060 selection is "
+                                      "still real and reproducible (re-confirmed by W2, independently via OS "
+                                      "GPU Engine performance counters keyed to the RTX 3060's DXGI LUID, plus "
+                                      "nvidia-smi whole-GPU utilization), but W2 proved this was Dawn's own "
+                                      "high-performance/discrete default coinciding with the request, not the "
+                                      "request causing it: an explicit request for the OTHER GPU on this same "
+                                      "machine (the AMD iGPU, see the new Windows AMD iGPU MDX-Net row below) "
+                                      "still executed on this RTX 3060 despite being asked not to. No Windows "
+                                      "process-local mechanism to force the opposite result was found (W2) -- "
+                                      "see WINDOWS_MULTI_GPU_SELECTION.md Section 7",
+        evidence="README.md Phase W1 section; DEMUCS_WINDOWS_NVIDIA.md; WINDOWS_MULTI_GPU_SELECTION.md "
+                 "(W2 selector-causation re-test)",
     ),
     CapabilityEntry(
         os_arch="Windows 11, x86_64",
@@ -369,8 +376,73 @@ MATRIX: list[CapabilityEntry] = [
                                "the already-shipping vendor backend",
         vendor_alternative_available="PyTorch/CUDA -- STEMwerk's actual current production route on this "
                                       "platform, proven decisively faster (~4.8x) (W1)",
-        device_selection_enforceable="UNKNOWN / NOT PROVEN -- same caveat as the MDX-Net row above",
-        evidence="README.md Phase W1 section; DEMUCS_WINDOWS_NVIDIA.md",
+        device_selection_enforceable="DISPROVEN as a general mechanism (W2) -- see the MDX-Net row above; "
+                                      "same plugin-level finding applies (not independently re-verified for "
+                                      "this specific model this phase)",
+        evidence="README.md Phase W1 section; DEMUCS_WINDOWS_NVIDIA.md; WINDOWS_MULTI_GPU_SELECTION.md",
+    ),
+    CapabilityEntry(
+        os_arch="Windows 11 Pro, 10.0.26200, x86_64",
+        gpu_vendor="AMD",
+        gpu_model="AMD Radeon(TM) Graphics (integrated, PCI VEN_1002&DEV_1638)",
+        gpu_device_id_hex="0x1638", gpu_pci_bus_id=None,
+        model_name="UVR_MDXNET_KARA_2.onnx",
+        model_sha256="bf32e15105a09c0f7dddd2b67346146334d6f3ecb399ed7638eba2ab07cbf5f4",
+        inference_backend="onnxruntime-ep-webgpu 0.3.0 (WebGpuExecutionProvider) -- explicitly requested via "
+                           "select_device(device_id=5688), the plugin's own documented Windows device_id "
+                           "selector (same call pattern W1 used for the RTX 3060)",
+        underlying_graphics_backend="D3D12 (requested); RTX 3060's D3D12 backend actually executed instead, "
+                                     "see physical_gpu_verification",
+        runtime_version="CPython 3.11.8; onnxruntime 1.30.0 + onnxruntime-ep-webgpu 0.3.0",
+        theoretically_supported=True, actually_tested=True, found_correct=False, suitable_for_auto=False,
+        actual_gpu_execution="onnxruntime's OWN log claims success ('All nodes placed on "
+                              "[WebGpuExecutionProvider]. Number of nodes: 185') for both a synthetic Conv "
+                              "probe and the full MDX-Net pipeline -- this claim is NOT evidence of iGPU "
+                              "execution (W2): see physical_gpu_verification",
+        physical_gpu_verification="FAIL -- explicit iGPU request executed on the RTX 3060 instead, "
+                                   "independently confirmed via OS-level, per-process GPU Engine(*) "
+                                   "performance counters keyed to the RTX 3060's DXGI LUID (cross-checked "
+                                   "against HKLM\\SOFTWARE\\Microsoft\\DirectX, independent of onnxruntime), "
+                                   "reproduced in 2 separate fresh processes with 0 iGPU-attributed samples "
+                                   "and 3D-engine utilization up to ~46 pct on the RTX 3060 every time; "
+                                   "corroborated by nvidia-smi whole-GPU utilization (0 -> 52.3 pct during the "
+                                   "iGPU-requested WebGPU phase, ~1081MB VRAM delta, both statistically "
+                                   "indistinguishable from the RTX-3060-requested run's 53.2 pct / 1082MB) and "
+                                   "by near-bit-identical raw numeric output and near-identical timing "
+                                   "(2.61-2.72s) between the RTX-3060-requested and iGPU-requested full "
+                                   "pipeline runs -- inconsistent with two different physical GPUs having "
+                                   "actually executed the model. See WINDOWS_MULTI_GPU_SELECTION.md Section 5",
+        graph_placement="onnxruntime reports 185/185 nodes on WebGPU for the iGPU-requested session -- NOT "
+                         "trusted as evidence of which physical GPU those nodes ran on (same caveat L9 "
+                         "established for the Radeon 780M on Linux)",
+        numerical_correctness="NOT APPLICABLE to a genuine iGPU-execution claim -- the raw numeric output is "
+                               "bit-for-bit identical to the RTX-3060-requested run's own output, which is "
+                               "corroborating evidence AGAINST iGPU execution, not for it",
+        end_to_end_audio_correctness="NOT TESTED as an iGPU result -- the full pipeline completed without "
+                                      "error and produced valid audio, but per physical_gpu_verification this "
+                                      "is RTX 3060 output mislabeled by the request, not a genuine iGPU result",
+        stability="N/A -- no crash occurred, but per physical_gpu_verification this reflects the RTX 3060's "
+                  "stability, not the iGPU's",
+        practical_performance="NOT MEASURED for the iGPU -- the iGPU-requested run's timing (2.61s warm "
+                               "median) is statistically indistinguishable from the RTX-3060-requested run's "
+                               "own timing (2.67-2.70s across W1/W2), consistent with the same GPU having "
+                               "executed both, not with genuine (and, per the AMD-780M-on-Linux precedent, "
+                               "typically slower) integrated-GPU throughput",
+        vendor_alternative_available=None,
+        device_selection_enforceable="FAIL -- explicit onnxruntime-ep-webgpu device_id selection is not "
+                                      "honored on this multi-GPU Windows/D3D12 configuration; execution "
+                                      "silently lands on the RTX 3060 (Dawn's own DXGI-high-performance "
+                                      "default -- DxgiHighPerformanceIndex=0 for the RTX 3060 vs 1 for this "
+                                      "iGPU, per IDXGIFactory6::EnumAdapterByGpuPreference) regardless of the "
+                                      "caller's request. This is the Windows counterpart to L9's Linux finding "
+                                      "for the same onnxruntime-ep-webgpu 0.3.0 package (whose own packaged "
+                                      "README states, platform-generically, 'The WebGPU EP currently accepts "
+                                      "one EP device and selects the physical GPU independently'). No Windows "
+                                      "process-local isolation mechanism analogous to Linux's "
+                                      "VK_LOADER_DEVICE_ID_FILTER was found to exist (W2, verified by binary "
+                                      "string inspection of onnxruntime_providers_webgpu.dll -- no adapter/GPU-"
+                                      "selection environment variable is referenced anywhere in the binary)",
+        evidence="WINDOWS_MULTI_GPU_SELECTION.md Section 5 (decisive test) and Section 7 (mechanism search)",
     ),
 ]
 

@@ -1518,6 +1518,78 @@ monitor choice in `benchmark_resources.py`, and a reusable SHA-gated
 `demucs_validation.py`. Defaults remain backward-compatible. No model, production
 runtime, installer, driver, or shared adapter/shift algorithm was changed.
 
+## Phase W2: Windows Multi-GPU Physical Device Selection
+
+Status date: 2026-09-20. Starting HEAD `f8588f7b4` (N1 integration), verified against
+`origin/experiment/webgpu-ep` before this phase began. Full report:
+**`WINDOWS_MULTI_GPU_SELECTION.md`**. Directly resolves the question W1 explicitly left
+open (§4 of `DEMUCS_WINDOWS_NVIDIA.md`: "did NOT prove that the explicit GPU selector
+caused the RTX 3060 to be selected rather than Dawn's default choice") and that L9
+explicitly recommended as its most actionable next step: re-verify a prior "successful"
+device selection with independent, kernel/OS-level tooling, now that its value had been
+demonstrated on Linux.
+
+**Headline result: Dawn's own default, not the request.** This laptop has two real,
+distinct GPUs — NVIDIA GeForce RTX 3060 Laptop GPU (discrete) and AMD Radeon(TM)
+Graphics (integrated, PCI `VEN_1002&DEV_1638`) — confirmed via WMI, the DXGI adapter
+registry, `nvidia-smi`, and `webgpu_adapter.list_webgpu_devices()`, all agreeing. An
+explicit, correctly-resolved request for the AMD iGPU (`select_device(device_id=5688)`)
+still executed on the RTX 3060 — independently confirmed by OS-level per-process GPU
+Engine performance counters keyed to DXGI adapter LUID (0 samples on the iGPU's LUID,
+sustained RTX 3060 activity, reproduced in 2 fresh processes), by `nvidia-smi` whole-GPU
+utilization jumping 0%→52.3% specifically during the iGPU-requested WebGPU phase (nearly
+identical to the RTX-3060-requested run's 53.2%), and by bit-identical raw numeric output
+and statistically indistinguishable timing between the two requests. This is the
+Windows/D3D12 counterpart to L9's Linux/Vulkan finding, for the same `onnxruntime-ep-webgpu`
+0.3.0 package, whose own packaged README states, platform-generically: *"The WebGPU EP
+currently accepts one EP device and selects the physical GPU independently."*
+**Device-selection enforcement is FAIL on Windows/D3D12 for this plugin version.**
+
+A dedicated Windows monitoring methodology was built for this (`windows_gpu_monitor.py`,
+`w2_monitored_run.py`, `w2_device_selection_probe.py`) — the closest Windows analogue to
+L9/L10's Linux kernel-sysfs monitoring, reading the same `\GPU Engine(*)` performance-
+counter object Task Manager's own GPU column uses, cross-checked against
+`HKLM\SOFTWARE\Microsoft\DirectX`'s independent adapter-LUID registry. A real, disclosed
+tool limitation was found along the way: this per-process counter reliably caught a dense,
+repeated-inference workload, but did not reliably catch the real MDX-Net pipeline's
+shorter, burstier WebGPU calls — the decisive finding rests on the dense-probe method
+(same real device-selection code) plus `nvidia-smi` whole-GPU correlation and the
+numeric/timing identity check for the full pipeline, not on a single all-purpose tool.
+
+W1's own RTX 3060 baseline was re-confirmed first (185/185 nodes, numerics bit-identical
+to W1's own recorded figures, 5.10× warm speedup) — no regression. A binary-level search
+of the installed `onnxruntime_providers_webgpu.dll` confirmed no Windows analogue of
+Linux's `VK_LOADER_DEVICE_ID_FILTER` environment variable exists (explicitly refuted, not
+assumed) — but did find that Dawn's own D3D12 backend natively supports LUID-based adapter
+targeting (`RequestAdapterOptionsLUID`, `EnumAdapterByLuid`) which `onnxruntime-ep-webgpu`
+0.3.0's Python-facing device-selection API simply does not thread through to. The Windows
+per-app Graphics Settings preference registry key was identified as a real but
+out-of-scope mechanism (persistent, per-executable-path, not process-local) and was
+investigated but not applied. Because iGPU execution was never positively established —
+it was affirmatively disproven — full iGPU MDX-Net validation and conditional Demucs
+validation are both **BLOCKED / NOT TESTED**, per the mission's own instruction not to
+substitute RTX 3060 results and report them as an iGPU pass.
+
+The capability matrix's two existing Windows RTX 3060 rows were updated from "UNKNOWN /
+NOT PROVEN" to a `DISPROVEN` device-selection-enforcement verdict (their correctness/
+performance facts are unchanged — the RTX 3060 genuinely does execute both models
+correctly); a new row records the Windows AMD iGPU MDX-Net result as `found_correct=False`
+with a `FAIL` selector verdict. `backend_resolver.py` needed no code change — its existing
+platform-based isolation check already treated Windows multi-GPU selection as
+unenforceable by default, now backed by a confirmed rather than absent-evidence reason;
+7 new W2 policy tests assert this against the real hardware's `GpuInfo` objects. Running
+the full test suite on Windows for the first time also surfaced a genuine, previously-
+latent test/module coupling (two pre-existing Linux-isolation-plan tests assume a real
+Linux host to build their env-var plan) — fixed by skipping those two specific cases on a
+non-Linux host with the reasoning printed, not by changing `backend_resolver.py` or
+`linux_vulkan_isolation.py`'s own logic. 27/27 non-skipped policy tests pass.
+
+See `WINDOWS_MULTI_GPU_SELECTION.md` for the full hardware/driver/version inventory, the
+monitoring methodology and its disclosed limits, the decisive test's complete evidence
+(§5, with per-claim PASS/FAIL verdicts kept separate rather than one ambiguous "GPU
+selection PASS"), the negative controls, the full device-isolation mechanism search
+(§7), and the capability-matrix/resolver implications (§10).
+
 ## Reproducing this experiment
 
 ```bash
