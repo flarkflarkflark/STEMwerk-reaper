@@ -72,6 +72,22 @@ def _vendor_alternative_is_proven_better(entry: cm.CapabilityEntry) -> bool:
     return bool(v) and "proven" in v.lower()
 
 
+def _audio_correctness_note(entry: cm.CapabilityEntry) -> str:
+    """Empty string when the entry's end-to-end audio correctness is an unqualified
+    PASS; otherwise the full field, prefixed for appending to a suitability string.
+
+    suitable_for_auto must never be read as unconditional end-to-end audio
+    correctness: a row can be the fastest correct backend (Windows RX 9070 Demucs,
+    1.91x vs CPU) while its exported-WAV output still carries a disclosed clipping
+    caveat (raw float drums peak 1.363, PCM16 clamps to 1.0, harness peak>0.999 gate
+    fails symmetrically on CPU and WebGPU). Downstream consumers of a resolver PASS
+    must see that limitation in the decision itself, not only in the matrix row."""
+    v = entry.end_to_end_audio_correctness.strip()
+    if v == "PASS" or v.startswith("PASS --"):
+        return ""
+    return f" -- audio-output: {v}"
+
+
 def _isolation_for(req: ResolveRequest, gpu: GpuInfo, entry: Optional[cm.CapabilityEntry]):
     """
     Returns (enforceable: bool, plan_env: Optional[dict], note: str).
@@ -175,7 +191,7 @@ def resolve(req: ResolveRequest) -> ResolveResult:
                 reason=f"Multiple GPUs present and device selection is not provably enforceable here: {iso_note}",
                 evidence=[entry.evidence], status="BLOCKED",
             )
-        suitability = "Suitable for Auto" if entry.suitable_for_auto else \
+        suitability = ("Suitable for Auto" + _audio_correctness_note(entry)) if entry.suitable_for_auto else \
             f"Correct and stable, but NOT suitable as an automatic default: {entry.practical_performance}"
         return ResolveResult(
             selected_backend="WebGPU", selected_gpu=gpu, device_selection_enforceable=True,
@@ -262,7 +278,8 @@ def resolve(req: ResolveRequest) -> ResolveResult:
     return ResolveResult(
         selected_backend="WebGPU", selected_gpu=gpu, device_selection_enforceable=True,
         required_process_isolation=iso_env,
-        model_gpu_suitability=("Suitable for Auto" if entry.suitable_for_auto else
+        model_gpu_suitability=(("Suitable for Auto" + _audio_correctness_note(entry))
+                                if entry.suitable_for_auto else
                                 f"Correct/stable but not Auto-suitable: {entry.practical_performance}"),
         fallback_decision="N/A -- WebGPU selected directly",
         reason=f"{gpu.model} proven correct and stable for {req.model_name} on this platform ({iso_note})",

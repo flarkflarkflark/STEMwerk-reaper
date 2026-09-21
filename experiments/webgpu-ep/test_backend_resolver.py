@@ -413,6 +413,34 @@ r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows
 check("AWh stale stock-plugin RX 9070 evidence remains fail-closed",
       r.status == "BLOCKED" and r.selected_backend is None and r.selected_gpu is None)
 
+# AWi. Clipping-visibility invariant: suitable_for_auto=True must NOT read as
+# unconditional end-to-end audio correctness. The RX 9070 Demucs row's WAV clipping
+# caveat (float drums peak 1.363, symmetric CPU/WebGPU) must be visible in the
+# resolver decision output itself, on both the explicit and Auto/direct paths.
+r = resolve(ResolveRequest(model_name="htdemucs.onnx", os_arch="windows",
+                            available_gpus=(RX9070_WIN,), desired_backend="WebGPU",
+                            explicit_gpu=RX9070_WIN, allow_fallback=False,
+                            windows_native_luid_selection_available=True))
+check("AWi explicit RX 9070 Demucs: PASS and clipping caveat visible in suitability",
+      r.status == "PASS" and r.selected_backend == "WebGPU" and
+      "Suitable for Auto" in r.model_gpu_suitability and
+      "audio-output:" in r.model_gpu_suitability and "1.363" in r.model_gpu_suitability)
+
+r = resolve(ResolveRequest(model_name="htdemucs.onnx", os_arch="windows",
+                            available_gpus=(RX9070_WIN,), desired_backend="Auto",
+                            windows_native_luid_selection_available=True))
+check("AWj Auto RX 9070 Demucs: PASS and clipping caveat visible in suitability",
+      r.status == "PASS" and r.selected_backend == "WebGPU" and
+      "audio-output:" in r.model_gpu_suitability and "1.363" in r.model_gpu_suitability)
+
+# AWk. No-noise control: a row with an unqualified PASS must NOT gain an audio note.
+r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
+                            available_gpus=(RX9070_WIN,), desired_backend="WebGPU",
+                            explicit_gpu=RX9070_WIN, allow_fallback=False,
+                            windows_native_luid_selection_available=True))
+check("AWk explicit RX 9070 MDX-Net (clean PASS row): no audio caveat suffix",
+      r.status == "PASS" and "audio-output:" not in r.model_gpu_suitability)
+
 print(f"\n{_count - len(_failures)}/{_count} policy tests passed"
       f"{f' ({len(_skipped)} skipped, non-Linux host -- see ON_LINUX above)' if _skipped else ''}.")
 if _skipped:
