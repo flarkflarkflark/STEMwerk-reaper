@@ -1,0 +1,115 @@
+{
+  "manifest": "STEMwerk experiment/webgpu-ep W6 experimental Windows WebGPU runtime",
+  "generated": "2026-09-21",
+  "generator_host": "Windows 11 x64, NVIDIA RTX 3060 Laptop + AMD Radeon iGPU (STEMwerk W5/W6 build host)",
+  "experimental": true,
+  "official_upstream_release": false,
+  "package": {
+    "name": "onnxruntime-ep-webgpu",
+    "version": "0.3.0+w6consolidated",
+    "wheel": "onnxruntime_ep_webgpu-0.3.0+w6consolidated-py3-none-win_amd64.whl",
+    "wheel_sha256": "be602b7153e0a563e2e9e315f975423a9eab900f86769dd2828d8515c88ade16",
+    "wheel_size_bytes": 12724222,
+    "requires_python": ">=3.11",
+    "platform": "win_amd64",
+    "license": "MIT (LICENSE and ThirdPartyNotices.txt shipped inside the wheel)",
+    "contents_sha256": {
+      "onnxruntime_ep_webgpu/onnxruntime_providers_webgpu.dll": "ee58f6d3312d076b02fb8962fdc7bff4f05e1d27d68a345d9fc382a4a21eb1aa",
+      "onnxruntime_ep_webgpu/dxcompiler.dll": "16ed38884fe62999877b14678178ebacb2909c412652d6f05efad3c501a1d912",
+      "onnxruntime_ep_webgpu/dxil.dll": "77e039c905030a641e53658a008b74e90635a5ea9b6b79eabd0f2003bdfca59a"
+    }
+  },
+  "runtime_dependencies": {
+    "onnxruntime": "==1.30.0 (base package, from PyPI; the wheel is a plugin EP and does not replace it)",
+    "os": "Windows 10/11 x64 with a D3D12-capable GPU driver",
+    "python": "3.11 (validated with CPython 3.11.8)",
+    "notes": "No manual DLL copying. pip installs all three native DLLs into site-packages/onnxruntime_ep_webgpu/."
+  },
+  "source_provenance": {
+    "ort_upstream_base": "caf2ed32972b8848277b2b9bcc8917e07bcfdb5c (tag plugin-ep-webgpu/v0.3.0)",
+    "ort_repo_url": "https://github.com/microsoft/onnxruntime",
+    "dawn_pin": "a192e3019a9a20db23329e631328b39b9867049a (v20260714.215939)",
+    "w4_patch_commit": "ab4ae2d6888f1a7f383427ca0701944c3a0954f3",
+    "w5_fix_commit": "1070be0cf9b10ea9e45d42d30d307ba459e673e5",
+    "w6_consolidated_commit": "4b10ceeb416c5323a6901ed9618f1074a32a748b (branch w6/consolidated-luid-selection in the isolated ORT clone)",
+    "tree_identity": "git diff 1070be0 4b10cee is empty; the consolidated single commit is byte-identical in tree to the W5 two-commit stack"
+  },
+  "patches": {
+    "consolidated": {
+      "file": "patches/W6-consolidated-WebGPU-Windows-D3D12-adapter-LUID-selection.patch",
+      "sha256": "16f6b9af1551451d302fb9ab0782be1db8b99751baa0bb8b892a45a5bf68e08d",
+      "applies_to": "caf2ed32972b8848277b2b9bcc8917e07bcfdb5c",
+      "apply_check": "git apply --check passed against the pristine control checkout"
+    },
+    "originals_preserved_as_evidence": {
+      "patches/0001-WebGPU-enforce-selected-Windows-adapter-LUID.patch": "ebf88909a5023182005dccf46aea0d2d42e5073a20e777fb719e0978416c00ca",
+      "patches/0002-WebGPU-retain-selected-default-context.patch": "fa3f51aaaf858fc68834481049b85fd01932ad0af7cb908a6df32d349c7f7f8a"
+    }
+  },
+  "toolchain": {
+    "visual_studio": "VS Build Tools 2022 17.14.41 (Workload.VCTools --includeRecommended, + VC.ATL)",
+    "msvc": "14.44.35207",
+    "windows_sdk": "10.0.26100.0",
+    "cmake": "3.31.6-msvc6 (VS-bundled)",
+    "generator": "Visual Studio 17 2022",
+    "python_build": "3.11.8",
+    "parallel_jobs": 4
+  },
+  "build": {
+    "configure_command": "python tools/ci_build/build.py --config Release --build_dir C:\\stemwerk-w5-local\\build\\ort-webgpu-luid --skip_submodule_sync --cmake_generator \"Visual Studio 17 2022\" --parallel 4 --use_vcpkg --update --build --enable_onnx_tests --use_webgpu shared_lib --wgsl_template static --disable_rtti --enable_lto --cmake_extra_defines onnxruntime_BUILD_UNIT_TESTS=ON onnxruntime_ENABLE_DAWN_BACKEND_D3D12=1 onnxruntime_ENABLE_DAWN_BACKEND_VULKAN=1 onnxruntime_PLUGIN_EP_VERSION=0.3.0",
+    "w6_rebuild_command": "cmake --build C:\\stemwerk-w5-local\\build\\ort-webgpu-luid\\Release --config Release --target onnxruntime_providers_webgpu -- /maxcpucount:4 /p:CL_MPCount=4 /nodeReuse:False",
+    "w6_build_result": "INCREMENTAL_BUILD_EXIT_CODE=0, 0 warnings in the incremental log; 5 of 183410 functions recompiled under LTO (only the patched files)",
+    "wheel_command": "python plugin-ep-webgpu/python/build_wheel.py --binary_dir C:\\stemwerk-w5-local\\build\\ort-webgpu-luid\\Release\\Release --version 0.3.0+w6consolidated --output_dir C:\\stemwerk-w5-local\\packages\\w6",
+    "build_log": "M:\\stemwerk-w6\\evidence\\build_log_w6_consolidated.txt"
+  },
+  "reproducibility": {
+    "bit_for_bit": false,
+    "detail": "Same source tree (verified identical to the W5 fix commit) rebuilt with the same toolchain produced a functionally equivalent but NOT byte-identical DLL (W6 ee58f6d3... vs W5 b7a1c62...). dxcompiler.dll and dxil.dll are byte-identical to the W5 wheel. Do not claim bit-for-bit reproducibility; functional equivalence is established by the validation matrix below.",
+    "w5_reference": {
+      "wheel": "onnxruntime_ep_webgpu-0.3.0+w5fix1-py3-none-win_amd64.whl",
+      "wheel_sha256": "e1469a3623609c10382839a07103b37a37600055673ca26642e42104e68dd74d",
+      "dll_sha256": "b7a1c62395a5ae953cd362528d9856184fe231e9337289265d84397c963d3248"
+    }
+  },
+  "validation": {
+    "clean_install": "fresh venv C:\\stemwerk-w5-local\\venvs\\runtime-w6; pip install onnxruntime==1.30.0 + this wheel; no DLL swapping",
+    "loaded_dll_proof": "in-process psutil memory_maps enumeration proved the loaded module is site-packages/onnxruntime_ep_webgpu/onnxruntime_providers_webgpu.dll with SHA-256 ee58f6d3... in both GPU directions",
+    "rtx3060_luid_64318": {
+      "physical_execution": "same-process GPU Engine counters: 6 nonzero 3D samples ONLY on LUID 64318, peak 36.92%, 963 Conv calls (w6_rtx_dense_direct.log)",
+      "mdx_net": "185/185 nodes on WebGpuExecutionProvider, 0 CPU fallback; corr 1.00000000, max_abs 1.10e-06 vocals / 1.03e-06 instrumental; PCM16 file diff 3.05e-05 = 1 LSB; routing PASS; CPU 37.54 s vs WebGPU 4.03 s"
+    },
+    "amd_igpu_luid_59967": {
+      "physical_execution": "same-process GPU Engine counters: 6 nonzero 3D samples ONLY on LUID 59967, peak 55.94%, 775 Conv calls (w6_amd_dense_direct.log)",
+      "mdx_net": "185/185 nodes on WebGpuExecutionProvider, 0 CPU fallback; corr 1.00000000, max_abs 1.07e-06 vocals / 1.01e-06 instrumental; PCM16 file diff 3.05e-05 = 1 LSB; routing PASS; CPU 21.39 s vs WebGPU 12.10 s"
+    },
+    "regressions": {
+      "first_inference_crash": "diag_single_run.py (RTX) and diag_single_run_amd.py (AMD) both PASS on the W6 DLL",
+      "invalid_luid": "mismatched LUID rejected natively (INVALID_ARGUMENT); wrapper raises GpuExecutionNotProvenError instead of silently using CPU",
+      "cross_gpu_context_reuse": "rejected with EP_FAIL at webgpu_context.cc:289",
+      "same_gpu_context_reuse": "accepted, session works",
+      "malformed_selectors": "'-1', 'notanumber', 2^65 all rejected at the Python adapter",
+      "resolver_policy": "40/40 PASS, 2 expected non-Linux skips",
+      "adapter_selection_unit_tests": "9 passed + 5 subtests (pytest test_webgpu_adapter_selection.py)",
+      "capability_matrix": "14 entries, schema validation clean, byte-identical regeneration",
+      "py_compile": "compileall clean"
+    },
+    "evidence_dir": "M:\\stemwerk-w6\\evidence"
+  },
+  "install_procedure": [
+    "py -3.11 -m venv C:\\path\\to\\venv   (any CPython >= 3.11, x64)",
+    "C:\\path\\to\\venv\\Scripts\\python.exe -m pip install onnxruntime==1.30.0",
+    "C:\\path\\to\\venv\\Scripts\\python.exe -m pip install onnxruntime_ep_webgpu-0.3.0+w6consolidated-py3-none-win_amd64.whl",
+    "optional pipeline deps: pip install audio-separator==0.47.0 psutil",
+    "verify: python -c \"import onnxruntime_ep_webgpu, hashlib, pathlib; print(hashlib.sha256(pathlib.Path(onnxruntime_ep_webgpu.__file__).with_name('onnxruntime_providers_webgpu.dll').read_bytes()).hexdigest())\" must print ee58f6d3312d076b02fb8962fdc7bff4f05e1d27d68a345d9fc382a4a21eb1aa"
+  ],
+  "rollback": "pip uninstall onnxruntime-ep-webgpu removes the plugin cleanly; base onnxruntime is untouched; the stock upstream wheel can be reinstalled at any time",
+  "limitations": [
+    "Not bit-for-bit reproducible across rebuilds (see reproducibility.detail)",
+    "Native webgpu_context_test.cc unit tests are not runnable in the plugin (shared_lib) build mode; equivalent coverage is via the Python-level rejection/reuse/crash tests",
+    "Per-PID GPU Engine counters only attribute dense workloads; bursty MDX inference is proven by placement + numerics + audio, physical selection by the dense probe",
+    "Native DLL logs contain CI build paths from upstream (N:\\_work\\1\\s\\...) in stock code paths",
+    "Windows-only LUID option; Linux/macOS behavior unchanged",
+    "ffmpeg must be resolvable on PATH for audio-separator's startup check (any static build works; inference itself uses soundfile)",
+    "Experimental: not an official Microsoft/ONNX Runtime release; no production STEMwerk integration"
+  ]
+}

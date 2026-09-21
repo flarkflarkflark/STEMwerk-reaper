@@ -2,6 +2,38 @@
 
 Status date: 2026-09-21. Experimental, opt-in, isolated. Not integrated into STEMwerk.
 
+## Phase W6 — native patch hardening and experimental Windows distribution
+
+W6 turned the W5 proof of concept into a coherent, independently installable
+experimental Windows wheel, changing no runtime behavior. The W4 and W5 patches
+are preserved as evidence and consolidated into one reviewable patch,
+[`patches/W6-consolidated-WebGPU-Windows-D3D12-adapter-LUID-selection.patch`](patches/W6-consolidated-WebGPU-Windows-D3D12-adapter-LUID-selection.patch),
+whose tree is byte-identical to the proven W5 fixed source (`git diff` empty)
+and which applies cleanly to the pinned upstream base.
+
+The wheel `onnxruntime_ep_webgpu-0.3.0+w6consolidated-py3-none-win_amd64.whl`
+(SHA-256 `be602b7153e0a563e2e9e315f975423a9eab900f86769dd2828d8515c88ade16`)
+was packaged with the plugin's own build script and installed into a fresh venv
+as a normal package — no DLL swapping. In-process module enumeration proved the
+loaded provider DLL is the wheel's own file (SHA-256 `ee58f6d3...`; not
+bit-identical to the W5 DLL — same source, same toolchain, non-deterministic
+LTO link — so no bit-for-bit reproducibility is claimed).
+
+On the W6 wheel, both physical-selection directions re-passed with
+same-process OS counters (RTX LUID `64318`: 963 inferences, only RTX active,
+peak 36.92%; AMD LUID `59967`: 775 inferences, only AMD active, peak 55.94%),
+and full MDX-Net validation passed on both GPUs: 185/185 nodes on WebGPU, zero
+CPU fallback, correlation 1.00000000, max abs ≈ `1.1e-6`, file diff ≤ 1 PCM16
+LSB, routing PASS. Regressions are green: first-inference crash repro (both
+GPUs), invalid/cross-GPU/malformed LUID rejection, same-GPU context reuse,
+resolver 40/40 with 2 expected Linux-only skips, adapter selection 9+5,
+capability matrix 14 entries byte-identical, compileall clean.
+
+Full provenance, the machine-readable build manifest
+([`w6_build_manifest.json`](w6_build_manifest.json)), distribution and licensing
+findings, and the independent AMD-workstation handoff procedure are in
+[`WINDOWS_NATIVE_DISTRIBUTION.md`](WINDOWS_NATIVE_DISTRIBUTION.md).
+
 ## Phase W5 — native build, crash correction, and physical RTX/AMD validation
 
 W5 built the W4 native DXGI-LUID patch from the pinned ORT/Dawn source in an isolated

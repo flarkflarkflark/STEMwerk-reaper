@@ -1,0 +1,398 @@
+From 4b10ceeb416c5323a6901ed9618f1074a32a748b Mon Sep 17 00:00:00 2001
+From: flarkflarkflark <flarkflarkflark@gmail.com>
+Date: Mon, 21 Sep 2026 13:25:32 +0200
+Subject: [PATCH] WebGPU: enforce selected Windows D3D12 adapter LUID
+
+Consolidated W6 patch combining the W4 physical-adapter selection fix
+(ab4ae2d6888f1a7f383427ca0701944c3a0954f3) and the W5 DefaultContext
+lifetime fix (1070be0cf9b10ea9e45d42d30d307ba459e673e5), squashed
+without modification against the pinned plugin-ep-webgpu/v0.3.0 base
+(caf2ed32972b8848277b2b9bcc8917e07bcfdb5c).
+---
+ .../core/providers/webgpu/ep/factory.cc       | 37 ++++++++
+ .../core/providers/webgpu/webgpu_context.cc   | 70 +++++++++++++++
+ .../core/providers/webgpu/webgpu_context.h    | 13 +++
+ .../webgpu/webgpu_provider_factory.cc         | 27 ++++++
+ .../webgpu/webgpu_provider_options.h          |  4 +
+ .../providers/webgpu/webgpu_context_test.cc   | 85 +++++++++++++++++++
+ 6 files changed, 236 insertions(+)
+
+diff --git a/onnxruntime/core/providers/webgpu/ep/factory.cc b/onnxruntime/core/providers/webgpu/ep/factory.cc
+index f1f7475..2ce2cff 100644
+--- a/onnxruntime/core/providers/webgpu/ep/factory.cc
++++ b/onnxruntime/core/providers/webgpu/ep/factory.cc
+@@ -14,6 +14,7 @@
+ #include "core/providers/webgpu/webgpu_provider_factory_creator.h"
+ #include "core/providers/webgpu/webgpu_execution_provider.h"
+ #include "core/providers/webgpu/webgpu_context.h"
++#include "core/providers/webgpu/webgpu_provider_options.h"
+ #include "core/providers/webgpu/allocator.h"
+ #include "core/session/onnxruntime_env_config_keys.h"
+ #include "core/session/onnxruntime_ep_device_ep_metadata_keys.h"
+@@ -192,6 +193,42 @@ OrtStatus* ORT_API_CALL Factory::CreateEpImpl(
+         "a compile-only session (session.compile_only=1). Select a real GPU device to run inference.");
+   }
+ 
++#ifdef _WIN32
++  // Windows device discovery records the unique physical DXGI adapter identity as
++  // decimal uint64 metadata. vendor_id + device_id identify a hardware type, not an
++  // individual adapter, and the WebGPU kDeviceId option is only a context-cache slot.
++  std::string configured_luid;
++  const bool caller_supplied_luid =
++      config_options.TryGetConfigEntry(options::kD3D12AdapterLuid, configured_luid);
++  if (selected_virtual_device) {
++    if (caller_supplied_luid) {
++      return Api().ort.CreateStatus(
++          ORT_INVALID_ARGUMENT,
++          "A D3D12 adapter LUID cannot be used with a virtual WebGPU hardware device.");
++    }
++  } else {
++    const char* hardware_luid =
++        device_metadata == nullptr ? nullptr : Api().ort.GetKeyValue(device_metadata, "LUID");
++    if (hardware_luid == nullptr || hardware_luid[0] == '\0') {
++      return Api().ort.CreateStatus(
++          ORT_EP_FAIL,
++          "The selected Windows GPU has no DXGI LUID in its OrtHardwareDevice metadata; "
++          "WebGPU refuses to substitute a different physical adapter.");
++    }
++    if (caller_supplied_luid && configured_luid != hardware_luid) {
++      return Api().ort.CreateStatus(
++          ORT_INVALID_ARGUMENT,
++          "The requested D3D12 adapter LUID does not match the selected OrtHardwareDevice.");
++    }
++    if (!caller_supplied_luid) {
++      const auto status = config_options.AddConfigEntry(options::kD3D12AdapterLuid, hardware_luid);
++      if (!status.IsOK()) {
++        return Api().ort.CreateStatus((OrtErrorCode)status.Code(), status.ErrorMessage().c_str());
++      }
++    }
++  }
++#endif
++
+   auto webgpu_ep_factory = WebGpuProviderFactoryCreator::Create(config_options);
+   auto webgpu_ep = webgpu_ep_factory->CreateProvider(*session_options, *logger);
+   static_cast<WebGpuExecutionProvider*>(webgpu_ep.get())->SetEpLogger(logger);
+diff --git a/onnxruntime/core/providers/webgpu/webgpu_context.cc b/onnxruntime/core/providers/webgpu/webgpu_context.cc
+index 8e87fe8..96b53df 100644
+--- a/onnxruntime/core/providers/webgpu/webgpu_context.cc
++++ b/onnxruntime/core/providers/webgpu/webgpu_context.cc
+@@ -16,6 +16,9 @@
+ #endif
+ #if !defined(USE_EXTERNAL_DAWN)
+ #include "dawn/native/DawnNative.h"
++#if defined(_WIN32)
++#include "dawn/native/D3DBackend.h"
++#endif
+ #endif
+ #endif
+ #if defined(__GNUC__)
+@@ -39,10 +42,29 @@
+ namespace onnxruntime {
+ namespace webgpu {
+ 
++#if defined(_WIN32) && !defined(USE_EXTERNAL_DAWN)
++namespace {
++
++LUID Uint64ToLuid(uint64_t value) {
++  LUID luid{};
++  luid.LowPart = static_cast<DWORD>(value & 0xffffffffULL);
++  luid.HighPart = static_cast<LONG>(value >> 32);
++  return luid;
++}
++
++uint64_t LuidToUint64(const LUID& luid) {
++  return (static_cast<uint64_t>(static_cast<uint32_t>(luid.HighPart)) << 32) |
++         static_cast<uint64_t>(luid.LowPart);
++}
++
++}  // namespace
++#endif
++
+ void WebGpuContext::Initialize(const WebGpuContextConfig& config) {
+   std::call_once(init_flag_, [this, &config]() {
+     max_num_pending_dispatches_ = config.max_num_pending_dispatches;
+     enable_robustness_ = config.enable_robustness;
++    requested_d3d12_adapter_luid_ = config.d3d12_adapter_luid;
+ 
+     // Three easily-conflated concepts, at three layers (a pipeline, not the same flag):
+     //   * allow_virtual_devices (env)     -- selectability: surface a virtual GPU OrtEpDevice so WebGPU is
+@@ -74,6 +96,15 @@ void WebGpuContext::Initialize(const WebGpuContextConfig& config) {
+       req_adapter_options.nextInChain = &adapter_toggles_desc;
+ #endif
+ 
++#if defined(_WIN32) && !defined(USE_EXTERNAL_DAWN)
++      dawn::native::d3d::RequestAdapterOptionsLUID adapter_luid_options;
++      if (config.d3d12_adapter_luid.has_value()) {
++        adapter_luid_options.adapterLUID = Uint64ToLuid(*config.d3d12_adapter_luid);
++        adapter_luid_options.nextInChain = req_adapter_options.nextInChain;
++        req_adapter_options.nextInChain = &adapter_luid_options;
++      }
++#endif
++
+       // Capture adapter request result without throwing inside the Dawn callback.
+       // Throwing C++ exceptions inside Dawn callbacks leaves Dawn's internal mutexes locked,
+       // which causes a self-deadlock when the WGPUInstance is later released (e.g., during
+@@ -103,6 +134,24 @@ void WebGpuContext::Initialize(const WebGpuContextConfig& config) {
+       wgpu::Adapter adapter = std::move(adapter_result.adapter);
+       ORT_ENFORCE(adapter != nullptr, "Failed to get a WebGPU adapter.");
+ 
++#if defined(_WIN32) && !defined(USE_EXTERNAL_DAWN)
++      if (config.d3d12_adapter_luid.has_value()) {
++        auto dxgi_adapter = dawn::native::d3d::GetDXGIAdapter(adapter.Get());
++        ORT_ENFORCE(dxgi_adapter != nullptr,
++                    "Dawn returned an adapter without an inspectable DXGI identity.");
++        DXGI_ADAPTER_DESC adapter_desc{};
++        ORT_ENFORCE(SUCCEEDED(dxgi_adapter->GetDesc(&adapter_desc)),
++                    "Failed to query the selected Dawn adapter's DXGI identity.");
++        observed_d3d12_adapter_luid_ = LuidToUint64(adapter_desc.AdapterLuid);
++        ORT_ENFORCE(*observed_d3d12_adapter_luid_ == *config.d3d12_adapter_luid,
++                    "Dawn selected D3D12 adapter LUID ", *observed_d3d12_adapter_luid_,
++                    " but LUID ", *config.d3d12_adapter_luid,
++                    " was requested. Refusing physical-GPU substitution.");
++        LOGS_DEFAULT(INFO) << "WebGPU EP selected requested D3D12 adapter LUID: "
++                           << *observed_d3d12_adapter_luid_;
++      }
++#endif
++
+       // Create wgpu::Device
+       wgpu::DeviceDescriptor device_desc = {};
+ 
+@@ -234,6 +283,11 @@ void WebGpuContext::Initialize(const WebGpuContextConfig& config) {
+     }
+   });
+ 
++  ORT_ENFORCE(requested_d3d12_adapter_luid_ == config.d3d12_adapter_luid,
++              "WebGPU context ID ", config.context_id,
++              " is already initialized for a different D3D12 adapter LUID; "
++              "refusing to reuse a physical GPU context for another request.");
++
+   if (max_num_pending_dispatches_ != config.max_num_pending_dispatches) {
+     LOGS_DEFAULT(WARNING)
+         << "WebGPU context is already initialized with "
+@@ -1283,6 +1337,22 @@ void WebGpuContextFactory::Cleanup() {
+ }
+ 
+ WebGpuContext& WebGpuContextFactory::DefaultContext() {
++  // Internal allocator/data-transfer paths acquire the already-created default
++  // context without supplying the provider's original configuration. Re-running
++  // Initialize with a value-initialized config would make a physically constrained
++  // context look like an unconstrained caller request. Retain the existing context
++  // directly so its adapter identity and initialization state remain authoritative.
++  {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (contexts_ != nullptr) {
++      auto it = contexts_->find(0);
++      if (it != contexts_->end()) {
++        it->second.ref_count++;
++        return *it->second.context;
++      }
++    }
++  }
++
+   WebGpuContextConfig config{};
+   return WebGpuContextFactory::CreateContext(config);
+ }
+diff --git a/onnxruntime/core/providers/webgpu/webgpu_context.h b/onnxruntime/core/providers/webgpu/webgpu_context.h
+index ed0fa99..b5c73e5 100644
+--- a/onnxruntime/core/providers/webgpu/webgpu_context.h
++++ b/onnxruntime/core/providers/webgpu/webgpu_context.h
+@@ -151,6 +151,9 @@ struct WebGpuContextConfig {
+   uint64_t max_storage_buffer_binding_size{0};
+   WebGpuBufferCacheConfig buffer_cache_config{};
+   int power_preference{static_cast<int>(WGPUPowerPreference_HighPerformance)};
++  // Unique physical-adapter identity for Windows/D3D12. This must not be
++  // conflated with context_id, which is a logical cache key.
++  std::optional<uint64_t> d3d12_adapter_luid{};
+   int backend_type{
+ #ifdef _WIN32
+   // Setup Windows default backend type based on the build configuration
+@@ -288,6 +291,14 @@ class WebGpuContext final {
+   // transformation. Used to hand out a no-op allocator instead of a real GpuBufferAllocator.
+   inline bool HasDevice() const { return device_ != nullptr; }
+ 
++  const std::optional<uint64_t>& RequestedD3D12AdapterLuid() const {
++    return requested_d3d12_adapter_luid_;
++  }
++
++  const std::optional<uint64_t>& ObservedD3D12AdapterLuid() const {
++    return observed_d3d12_adapter_luid_;
++  }
++
+   //
+   // Get Split-K configuration.
+   //
+@@ -399,6 +410,8 @@ class WebGpuContext final {
+   webgpu::ValidationMode validation_mode_;
+   bool validation_mode_explicitly_set_;
+   bool enable_robustness_ = false;
++  std::optional<uint64_t> requested_d3d12_adapter_luid_{};
++  std::optional<uint64_t> observed_d3d12_adapter_luid_{};
+ 
+   wgpu::Queue device_queue_;
+   wgpu::AdapterInfo adapter_info_;
+diff --git a/onnxruntime/core/providers/webgpu/webgpu_provider_factory.cc b/onnxruntime/core/providers/webgpu/webgpu_provider_factory.cc
+index 801307f..f5753ee 100644
+--- a/onnxruntime/core/providers/webgpu/webgpu_provider_factory.cc
++++ b/onnxruntime/core/providers/webgpu/webgpu_provider_factory.cc
+@@ -326,6 +326,30 @@ WebGpuContextConfig ParseWebGpuContextConfig(const ConfigOptions& config_options
+     }
+   }
+ 
++  if (std::string adapter_luid_str;
++      config_options.TryGetConfigEntry(kD3D12AdapterLuid, adapter_luid_str)) {
++#ifdef _WIN32
++#ifdef USE_EXTERNAL_DAWN
++    ORT_THROW("d3d12AdapterLuid requires the bundled Dawn native implementation.");
++#else
++    uint64_t adapter_luid = 0;
++    const auto parse_result = std::from_chars(
++        adapter_luid_str.data(), adapter_luid_str.data() + adapter_luid_str.size(), adapter_luid);
++    ORT_ENFORCE(parse_result.ec == std::errc{} &&
++                    parse_result.ptr == adapter_luid_str.data() + adapter_luid_str.size(),
++                "Invalid d3d12AdapterLuid value: ", adapter_luid_str,
++                ". Expected an unsigned decimal 64-bit DXGI LUID.");
++    ORT_ENFORCE(config.backend_type == static_cast<int>(WGPUBackendType_D3D12),
++                "d3d12AdapterLuid is only valid with the D3D12 backend.");
++    ORT_ENFORCE(config.device == nullptr,
++                "d3d12AdapterLuid cannot select an externally supplied WebGPU device.");
++    config.d3d12_adapter_luid = adapter_luid;
++#endif
++#else
++    ORT_THROW("d3d12AdapterLuid is only supported on Windows with the D3D12 backend.");
++#endif
++  }
++
+   LOGS_DEFAULT(VERBOSE) << "WebGPU EP storage buffer cache mode: " << config.buffer_cache_config.storage.mode;
+   LOGS_DEFAULT(VERBOSE) << "WebGPU EP uniform buffer cache mode: " << config.buffer_cache_config.uniform.mode;
+   LOGS_DEFAULT(VERBOSE) << "WebGPU EP query resolve buffer cache mode: " << config.buffer_cache_config.query_resolve.mode;
+@@ -333,6 +357,9 @@ WebGpuContextConfig ParseWebGpuContextConfig(const ConfigOptions& config_options
+ 
+   LOGS_DEFAULT(VERBOSE) << "WebGPU EP power preference: " << config.power_preference;
+   LOGS_DEFAULT(VERBOSE) << "WebGPU EP Dawn backend type: " << config.backend_type;
++  if (config.d3d12_adapter_luid.has_value()) {
++    LOGS_DEFAULT(INFO) << "WebGPU EP requested D3D12 adapter LUID: " << *config.d3d12_adapter_luid;
++  }
+ 
+   return config;
+ }
+diff --git a/onnxruntime/core/providers/webgpu/webgpu_provider_options.h b/onnxruntime/core/providers/webgpu/webgpu_provider_options.h
+index 589a53e..5c9a9d3 100644
+--- a/onnxruntime/core/providers/webgpu/webgpu_provider_options.h
++++ b/onnxruntime/core/providers/webgpu/webgpu_provider_options.h
+@@ -23,6 +23,10 @@ constexpr const char* kDawnProcTable = "ep.webgpuexecutionprovider.dawnProcTable
+ 
+ constexpr const char* kDawnBackendType = "ep.webgpuexecutionprovider.dawnBackendType";
+ constexpr const char* kPowerPreference = "ep.webgpuexecutionprovider.powerPreference";
++// Decimal uint64 representation of the DXGI adapter LUID. The plugin EP derives
++// this from the selected OrtHardwareDevice's Windows metadata. It is deliberately
++// separate from kDeviceId, which is only a logical WebGpuContext cache slot.
++constexpr const char* kD3D12AdapterLuid = "ep.webgpuexecutionprovider.d3d12AdapterLuid";
+ 
+ constexpr const char* kDeviceId = "ep.webgpuexecutionprovider.deviceId";
+ constexpr const char* kWebGpuInstance = "ep.webgpuexecutionprovider.webgpuInstance";
+diff --git a/onnxruntime/test/providers/webgpu/webgpu_context_test.cc b/onnxruntime/test/providers/webgpu/webgpu_context_test.cc
+index 70d2af3..44a8e3d 100644
+--- a/onnxruntime/test/providers/webgpu/webgpu_context_test.cc
++++ b/onnxruntime/test/providers/webgpu/webgpu_context_test.cc
+@@ -38,6 +38,18 @@ ConfigOptions RobustnessOptions(const char* value) {
+   return options;
+ }
+ 
++ConfigOptions CompileOnlyOptions() {
++  ConfigOptions options;
++  ORT_THROW_IF_ERROR(options.AddConfigEntry(kOrtSessionOptionCompileOnly, "1"));
++  return options;
++}
++
++ConfigOptions CompileOnlyLuidOptions(const char* value) {
++  auto options = CompileOnlyOptions();
++  ORT_THROW_IF_ERROR(options.AddConfigEntry(kD3D12AdapterLuid, value));
++  return options;
++}
++
+ bool DeviceToggleIsEnabled(const webgpu::WebGpuContext& context, std::string_view toggle_name) {
+ #if !defined(__wasm__) && !defined(USE_EXTERNAL_DAWN)
+   const auto toggles = dawn::native::GetTogglesUsed(context.Device().Get());
+@@ -279,6 +291,79 @@ TEST(WebGpuContextTest, CompileOnlyContextDoesNotCreateDevice) {
+   EXPECT_EQ(webgpu::WebGpuContextFactory::GetContext(0).Device().Get(), nullptr);
+ }
+ 
++TEST(WebGpuContextTest, D3D12AdapterLuidDefaultIsUnconstrained) {
++  auto ep = WebGpuProviderFactoryCreator::Create(CompileOnlyOptions())->CreateProvider();
++  ASSERT_NE(ep, nullptr);
++  EXPECT_FALSE(webgpu::WebGpuContextFactory::GetContext(0).RequestedD3D12AdapterLuid().has_value());
++}
++
++TEST(WebGpuContextTest, D3D12AdapterLuidPropagationAndMatchingCacheReuse) {
++#ifdef _WIN32
++#ifdef USE_EXTERNAL_DAWN
++  GTEST_SKIP() << "Dawn native D3D12 LUID selection is unavailable with external Dawn.";
++#else
++  auto first_ep = WebGpuProviderFactoryCreator::Create(CompileOnlyLuidOptions("64318"))->CreateProvider();
++  auto second_ep = WebGpuProviderFactoryCreator::Create(CompileOnlyLuidOptions("64318"))->CreateProvider();
++  ASSERT_NE(first_ep, nullptr);
++  ASSERT_NE(second_ep, nullptr);
++  const auto& requested = webgpu::WebGpuContextFactory::GetContext(0).RequestedD3D12AdapterLuid();
++  ASSERT_TRUE(requested.has_value());
++  EXPECT_EQ(*requested, 64318u);
++#endif
++#else
++  EXPECT_THROW(WebGpuProviderFactoryCreator::Create(CompileOnlyLuidOptions("64318")), OnnxRuntimeException);
++#endif
++}
++
++TEST(WebGpuContextTest, D3D12AdapterLuidInternalDefaultContextRetainsSelectedIdentity) {
++#if defined(_WIN32) && !defined(USE_EXTERNAL_DAWN)
++  auto ep = WebGpuProviderFactoryCreator::Create(CompileOnlyLuidOptions("64318"))->CreateProvider();
++  ASSERT_NE(ep, nullptr);
++
++  auto* selected_context = &webgpu::WebGpuContextFactory::GetContext(0);
++  auto* retained_context = &webgpu::WebGpuContextFactory::DefaultContext();
++  const auto retained_luid = retained_context->RequestedD3D12AdapterLuid();
++  webgpu::WebGpuContextFactory::ReleaseContext(0);
++
++  EXPECT_EQ(retained_context, selected_context);
++  ASSERT_TRUE(retained_luid.has_value());
++  EXPECT_EQ(*retained_luid, 64318u);
++#else
++  GTEST_SKIP() << "D3D12 LUID context identity is Windows-specific.";
++#endif
++}
++
++TEST(WebGpuContextTest, D3D12AdapterLuidRejectsMalformedValue) {
++#if defined(_WIN32) && !defined(USE_EXTERNAL_DAWN)
++  EXPECT_THROW(WebGpuProviderFactoryCreator::Create(CompileOnlyLuidOptions("64318junk")), OnnxRuntimeException);
++  EXPECT_THROW(WebGpuProviderFactoryCreator::Create(CompileOnlyLuidOptions("-1")), OnnxRuntimeException);
++  EXPECT_THROW(WebGpuProviderFactoryCreator::Create(CompileOnlyLuidOptions("")), OnnxRuntimeException);
++#else
++  GTEST_SKIP() << "Dawn native D3D12 LUID parsing is Windows-specific.";
++#endif
++}
++
++TEST(WebGpuContextTest, D3D12AdapterLuidRejectsNonD3D12Backend) {
++#if defined(_WIN32) && !defined(USE_EXTERNAL_DAWN)
++  auto options = CompileOnlyLuidOptions("64318");
++  ORT_THROW_IF_ERROR(options.AddConfigEntry(kDawnBackendType, kDawnBackendType_Vulkan));
++  EXPECT_THROW(WebGpuProviderFactoryCreator::Create(options), OnnxRuntimeException);
++#else
++  GTEST_SKIP() << "Dawn native D3D12 LUID handling is Windows-specific.";
++#endif
++}
++
++TEST(WebGpuContextTest, D3D12AdapterLuidSeparatesCachedPhysicalDeviceIdentity) {
++#if defined(_WIN32) && !defined(USE_EXTERNAL_DAWN)
++  auto first_ep = WebGpuProviderFactoryCreator::Create(CompileOnlyLuidOptions("64318"))->CreateProvider();
++  ASSERT_NE(first_ep, nullptr);
++  EXPECT_THROW(WebGpuProviderFactoryCreator::Create(CompileOnlyLuidOptions("59967")), OnnxRuntimeException);
++  EXPECT_THROW(WebGpuProviderFactoryCreator::Create(CompileOnlyOptions()), OnnxRuntimeException);
++#else
++  GTEST_SKIP() << "Dawn native D3D12 LUID cache separation is Windows-specific.";
++#endif
++}
++
+ TEST(WebGpuContextTest, EnableRobustnessIsIndependentFromValidationMode) {
+ #if defined(__wasm__) || defined(USE_EXTERNAL_DAWN)
+   GTEST_SKIP() << "Dawn native toggle inspection is unavailable.";
+-- 
+2.52.0.windows.1
+
