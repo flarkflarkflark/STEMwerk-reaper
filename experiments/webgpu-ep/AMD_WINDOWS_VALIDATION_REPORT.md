@@ -1,11 +1,18 @@
 # AMD Windows validation report — WebGPU EP, RX 9070 + Radeon 780M
 
-Status date: 2026-09-21. Supersedes the stop-gate status in
+Status date: 2026-09-21 (audit pass 2: timing classification, memory units, Demucs
+clipping qualification; see §10). Supersedes the stop-gate status in
 `AMD_WINDOWS_VALIDATION_STATUS.md` (which remains as the historical record of the
 Phase 0–2 preflight). Validation branch `validate/webgpu-amd-windows`, worktree
 `P:\GIT\STEMwerk-worktrees\webgpu-amd-windows`, base `11c616125e227be325ec5978fef3a1d2f9a18ac5`
 (= `origin/experiment/webgpu-ep` HEAD at the time of validation; the branch has not
 been pushed to or modified by this slice).
+
+**Machine identity:** all results in this report were produced on the AMD Windows
+workstation (Ryzen 7 7840HS + RX 9070 eGPU + Radeon 780M iGPU) — **not** on the
+NVIDIA RTX 3060 laptop that performed W5/W6. The laptop appears only as
+cross-machine reference evidence (same OS, same patched DLL hash, same model/fixture
+hashes), never as the measurement source for this slice.
 
 ## 1. Hardware, OS, drivers
 
@@ -54,19 +61,42 @@ Harness `end_to_end_pipeline_test.py`; each leg ran CPU + WebGPU in one process.
 Audio: torch_device=cpu (STFT path identical across providers); 185/185 nodes on
 WebGPU in both legs; stem routing PASS; output WAVs 44.1 kHz stereo 25.00 s valid.
 
-| Leg | CPU run | WebGPU run | Raw vs CPU (vocals / instrumental) | File diff | Exit |
-|---|---|---|---|---|---|
-| WebGPU RX 9070 (LUID 87436) | 20.61 s | **2.51 s** (8.2×) | corr 1.00000000; max abs 1.13e-06 / 1.07e-06 | ≤ 1.00× PCM16 LSB | 0 |
-| WebGPU 780M (LUID 96109) | 10.27 s (warm) | **6.11 s** (1.7× vs warm CPU) | corr 1.00000000; max abs 1.13e-06 / 1.07e-06 | ≤ 1.00× PCM16 LSB | 0 |
+**Measurement boundaries (verified in harness source):**
+- `load` = `Separator.load_model()` only — ORT session creation + graph
+  optimization (+ Dawn context/device setup for WebGPU). Excludes inference and
+  shader/kernel compilation.
+- `run` = `Separator.separate()` — the **full audio-separator pipeline** (WAV
+  decode, torch STFT on CPU, chunked ONNX inference, overlap-add, iSTFT, WAV
+  export). NOT inference-only. The first WebGPU `run` in a process also includes
+  one-time WGSL kernel compilation (ORT WebGPU compiles kernels at first
+  execution; the verbose log's `Starting program` lines appear during the run).
+- Every `run` figure below is one full `separate()` call on the 25 s fixture;
+  no figure is inference-only.
 
-- The first CPU leg (20.61 s) vs second (10.27 s) shows the large warm-cache effect
-  on this 7840HS; the WebGPU figures are first-pass-in-process times.
-- Repeated warm performance: RX 9070 WebGPU runs measured 2.51 s (first leg) and
-  3.03–3.24 s across three later fresh-process probe runs; 780M 6.11 s (leg) vs
-  6.79 s (probe). WebGPU numerics were bit-identical across every repeat.
-- Cross-machine corroboration: W5 laptop RTX 3060 raw max abs 1.095e-06/1.028e-06,
-  laptop AMD iGPU 1.073e-06/1.013e-06 — this machine's 780M instrumental matches
-  the laptop's AMD iGPU to the last bit (1.0728836059570312e-06).
+**Timing records (actual evidence, `evidence/mdx_*.log`, `memprobe_mdx_*.json`):**
+
+| Sample | Value | Classification | n |
+|---|---|---|---|
+| CPU run, first leg | 20.61 s | **cold** (first CPU separation in this environment: cold torch/threadpool, cold OS/disk cache) | 1 |
+| CPU run, second leg | 10.27 s | warm-cache (fresh process; OS/disk caches + JIT warm) | 2 incl. next |
+| CPU run, memory probe | 10.67 s | warm-cache |  |
+| RX 9070 WebGPU run, leg 1 | 2.51 s | warm-cache, same process after the CPU leg | 6 total |
+| RX 9070 WebGPU runs, 5 probes | 3.03 / 3.06 / 3.11 / 3.21 / 3.24 s | warm-cache, fresh processes (Dawn on-disk shader cache warm) |  |
+| 780M WebGPU run, leg 2 | 6.11 s | warm-cache, same process after the CPU leg | 3 total |
+| 780M WebGPU run, probe | 6.79 s | warm-cache, fresh process |  |
+| 780M WebGPU run, probe | 10.52 s | **excluded** — measured while Demucs was running concurrently (CPU contention); retained in evidence, not in ranges |  |
+
+**Speedups, warm-versus-warm only** (CPU warm median 10.47 s):
+- RX 9070 vs CPU: 10.47 / 3.09 (sample median) ≈ **3.4×** (pairwise range 3.2–3.5×).
+- 780M vs CPU: 10.47 / 6.45 (sample median) ≈ **1.6×** (pairwise range 1.5–1.7×).
+- The cold CPU 20.61 s is reported separately as a cold-start datum and is **not**
+  ratioed against warm GPU numbers (mixed boundaries); cold/warm CPU ratio ≈ 2.0×.
+
+Numerics (identical in both legs and bit-identical across every repeat):
+corr 1.00000000, raw max abs 1.13e-06 (vocals) / 1.07e-06 (instrumental), exported
+WAV diff ≤ 1.00× PCM16 LSB. Cross-machine corroboration: W5 laptop RTX 3060 raw
+max abs 1.095e-06/1.028e-06, laptop AMD iGPU 1.073e-06/1.013e-06 — this machine's
+780M instrumental matches the laptop's AMD iGPU to the last bit (1.0728836059570312e-06).
 
 ## 5. Demucs (htdemucs ONNX, ORT_ENABLE_BASIC retained)
 
@@ -83,32 +113,52 @@ this slice). Providers: CPU / WebGPU(+CPU fallback listed). Input = same 25 s fi
 | Stem routing | — | PASS (diagonal dominant) |
 | Session init | 3.86 s | 7.90 s |
 
-Reported as-is: the harness's exported-WAV **clipping gate trips on the drums stem
-(peak exactly 1.0) for BOTH providers identically**. Root cause is a property of the
-model+fixture, not of the backend: the raw float32 drums stem peaks at **1.363**
-(CPU and WebGPU agree to 2e-5); PCM16 export clamps the overshoot to full scale.
-Production pipelines apply normalization/limiting; this validation exports raw
-stems. All backend-comparison, routing, and array-validation gates PASS; only the
-`peak > 0.999` WAV check fails, symmetrically, so the overall harness exit was 1.
-Full data: `C:\stemwerk-amd-win\evidence\demucs_rx9070\demucs_validation.json`.
+Reported as-is, with the clipping result explicitly decomposed into four separate
+claims (do not merge them):
+
+- **A. Backend execution: PASS** — session ran, 1594/1594 nodes placed on
+  `WebGpuExecutionProvider`, zero CPU fallback, all eight separation passes
+  completed (2 shifts=0 + 3 seeds × 2 providers).
+- **B. CPU/WebGPU numerical agreement: PASS** — all comparisons within tolerance
+  (see table; shifts=0 corr ≥ 0.99999948, worst seeded max abs 1.80e-04).
+- **C. Stem routing: PASS** — routing-matrix diagonal dominant for all four stems.
+- **D. Exported-WAV clipping criterion: FAIL (on BOTH providers, identically).**
+  The harness gate `peak > 0.999` trips on the drums stem (exported peak exactly
+  1.0) for CPU **and** WebGPU alike. Root cause is a property of the
+  model+fixture, not of the backend: the raw float32 drums stem peaks at **1.363**
+  (CPU and WebGPU agree to 2e-5); PCM16 export clamps the overshoot to full scale.
+  It is therefore **not a WebGPU-specific defect**; it is the chosen output
+  clipping criterion failing on this content for every backend. No normalization
+  was applied and no audio outputs were altered in this slice; production export
+  paths should confirm their own normalization/limiting handles the overshoot.
+
+Because gate D failed (by design, symmetrically), the harness's overall exit code
+was 1 despite A–C passing. This is not an unqualified audio-quality PASS, and not
+a backend failure either. Full data:
+`C:\stemwerk-amd-win\evidence\demucs_rx9070\demucs_validation.json`.
 
 ## 6. Memory findings
 
-| Probe (MDX, one 25 s separation) | Warm run | Peak RSS |
-|---|---|---|
-| CPU EP | 10.67 s | 2209 MiB |
-| WebGPU RX 9070 | 3.03–3.24 s across repeated runs | 715 MiB |
-| WebGPU 780M | 6.79 s (780M runs: 6.11 s in the dedicated leg) | 1566 MiB |
-| Demucs (either provider, in-harness sampler) | — | ≈ 5.2 GB (316 MB model + numpy/ORT working set) |
+Units verified against the measurement code (`memprobe` scripts record
+`peak_rss_mib = bytes / 2**20`). All RSS values below are **MiB** (mebibytes).
+The RX 9070 MDX peak RSS is therefore **714.6 MiB** (sample median; raw range
+710.7–716.9 MiB ≈ 745–752 MB) — not bytes, and not any smaller unit.
 
-- WebGPU cuts MDX peak RSS by ~2/3 vs CPU (activations live in GPU-accessible
-  memory, not process RAM).
+| Probe (MDX, one 25 s full-pipeline separation) | n | Peak RSS (MiB) |
+|---|---|---|
+| CPU EP | 1 | 2209.2 |
+| WebGPU RX 9070 | 5 | 710.7–716.9 (median 714.6) |
+| WebGPU 780M | 2 | 1555.4 / 1565.9 (one sample taken during Demucs concurrency) |
+| Demucs, either provider (in-harness sampler) | 6 runs | ≈ 5.2 GB (incl. 316 MB model + numpy/ORT working set) |
+
+- WebGPU cuts MDX peak RSS by roughly two-thirds vs CPU (RX 9070) — activations
+  live in GPU-accessible memory, not process RAM.
 - Per-process GPU memory: Windows' `\GPU Process Memory(pid_…luid…)` counter
   creates **no instance at all** for these WebGPU/Dawn processes (verified
   dedicated-only and all-counter wildcard queries against the live PID during
   MDX and Conv-probe runs) — per-process VRAM attribution is unavailable for
   this Dawn allocation path on this system; reported as a measurement gap, not
-  estimated. Adapter-level VRAM metadata: RX 9070 16,253 MB, 780M 421 MB
+  estimated. Adapter-level VRAM metadata only: RX 9070 16,253 MB, 780M 421 MB
   (shared, from EP device enumeration).
 - The Demucs harness's own VRAM sampler is nvidia-smi-based and correctly
   self-reports unreliable/None on AMD; nothing claimed from it.
@@ -141,6 +191,34 @@ desktop-class RX 9070) and are reported per-machine, not pooled.
 
 ## 9. What was committed
 
-Locally on `validate/webgpu-amd-windows` (not pushed, shared branch untouched):
+Locally on `validate/webgpu-amd-windows` (shared branch untouched):
 `demucs_validation.py` gains `--adapter-luid` (mirrors the MDX harness; the only
-code change), plus this report.
+code change), plus this report. Branch state after publication: see header and §11.
+
+## 10. Final results summary (audited)
+
+Machine: AMD Windows workstation (Ryzen 7 7840HS, RX 9070 eGPU, Radeon 780M iGPU,
+driver 32.0.31041.1004, Win 11 Pro 26200) — not the NVIDIA laptop.
+
+| Item | Result |
+|---|---|
+| MDX CPU cold / warm | 20.61 s (n=1) / 10.27–10.67 s (n=2, median 10.47 s) |
+| MDX RX 9070 WebGPU | 2.51–3.24 s (n=6, median 3.09 s) → **warm 3.4× vs CPU** |
+| MDX 780M WebGPU | 6.11 / 6.79 s (n=2, one contended 10.52 s excluded) → **warm 1.6× vs CPU** |
+| Boundaries | `run` = full separate() pipeline incl. first-run WGSL compile; `load` = session init only; never inference-only |
+| MDX placement / numerics | 185/185 WebGPU; corr 1.00000000; raw max abs ≤ 1.13e-06; WAV ≤ 1 PCM16 LSB; routing PASS; exits 0 |
+| Physical selection | per-PID per-LUID GPU Engine counters: RX 9070 LUID 87436 and 780M LUID 96109 each exclusively active when requested (3-node probe); MDX 185-node tests use the same patched selection path |
+| Demucs CPU / RX 9070 | warm medians 18.59 s / 9.72 s (1.91×); 1594/1594 WebGPU; parity + routing PASS; clipping gate FAIL symmetric (see §5 A–D) |
+| Memory | MDX RSS: CPU 2209 MiB; RX 9070 714.6 MiB median (n=5); 780M ~1566 MiB (n=2); Demucs ≈ 5.2 GB; per-process VRAM counter unavailable (gap, not estimated) |
+| Runtime provenance | loaded DLL `b7a1c623…963d3248` = W5 fixed build; wheel `e1469a36…dd74d`; onnxruntime 1.30.0; py 3.11.0 |
+| Model / fixture | MDX `bf32e151…cbf5f4`; htdemucs `68d0bf16…fcc5e74`; fixture `658380a5…91385b32` (all re-hashed from actual files in the audit pass) |
+| Remaining unknowns | per-process VRAM for Dawn allocations; Demucs drums overshoot handling in production export; Demucs-on-780M untested (out of scope); no local MSVC (wheel transfer was the path); onnx-weekly transitively installed (onnx 1.23.0 verified active) |
+
+## 11. Publication record
+
+Published by normal (non-force) push, fast-forward only, to
+`origin validate/webgpu-amd-windows` — and to no other branch. The shared
+`experiment/webgpu-ep`, `main`, `integration/2.4.0.0` and
+`ci/repair-stale-release-checks` branches were not pushed, merged, or modified.
+Remote SHA verified after push (see the mission report; recorded here on
+publication).
