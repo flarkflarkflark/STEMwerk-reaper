@@ -413,6 +413,117 @@ MATRIX: list[CapabilityEntry] = [
         evidence="WINDOWS_NATIVE_BUILD_VALIDATION.md (W5); WINDOWS_MULTI_GPU_SELECTION.md (W2 stock-plugin "
                  "failure retained as the historical control)",
     ),
+    # --- AMD Windows workstation validation (validate/webgpu-amd-windows @ 4ca1fcf68;
+    #     full report: AMD_WINDOWS_VALIDATION_REPORT.md). Distinct physical devices from
+    #     the W5 laptop rows above: RX 9070 device 0x744c (LUID 87436), Phoenix 780M
+    #     device 0x15bf (LUID 96109), Windows 11 Pro 26200, driver 32.0.31041.1004. ---
+    CapabilityEntry(
+        os_arch="Windows 11 Pro, 10.0.26200, x86_64",
+        gpu_vendor="AMD", gpu_model="Radeon RX 9070", gpu_device_id_hex="0x744c", gpu_pci_bus_id=None,
+        model_name="UVR_MDXNET_KARA_2.onnx",
+        model_sha256="bf32e15105a09c0f7dddd2b67346146334d6f3ecb399ed7638eba2ab07cbf5f4",
+        inference_backend="locally built onnxruntime-ep-webgpu 0.3.0+w5fix1 "
+                          "(WebGpuExecutionProvider) -- explicitly requested by DXGI LUID 87436",
+        underlying_graphics_backend="D3D12",
+        runtime_version="CPython 3.11.0; onnxruntime 1.30.0 + W5-fixed onnxruntime-ep-webgpu "
+                        "0.3.0+w5fix1 (live-loaded provider DLL SHA-256 "
+                        "b7a1c62395a5ae953cd362528d9856184fe231e9337289265d84397c963d3248; "
+                        "wheel SHA-256 e1469a3623609c10382839a07103b37a37600055673ca26642e42104e68dd74d)",
+        theoretically_supported=True, actually_tested=True, found_correct=True, suitable_for_auto=True,
+        actual_gpu_execution="PASS -- 185/185 MDX-Net nodes completed on WebGPU; a separate dense Conv "
+                             "workload completed 371 calls while OS counters attributed the process only "
+                             "to the requested RX 9070 LUID 87436 (AMD Windows workstation validation)",
+        physical_gpu_verification="PASS -- fresh-process Windows GPU Engine counters keyed through "
+                                  "HKLM\\SOFTWARE\\Microsoft\\DirectX observed PID 9704 only on LUID 87436: "
+                                  "6 nonzero 3D-engine samples, 37.0 pct peak, and no 780M-LUID sample. "
+                                  "Both GPUs are AMD (vendor 0x1002), so LUID-keyed per-process evidence "
+                                  "is the discriminating proof, not vendor monitoring",
+        graph_placement="185/185 MDX-Net nodes on WebGPU, 0 CPU fallback",
+        numerical_correctness="PASS -- raw CPU/WebGPU corr=1.00000000; max_abs_diff=1.13e-06 vocals / "
+                              "1.07e-06 instrumental; exported WAV max diff one PCM16 LSB",
+        end_to_end_audio_correctness="PASS -- full 25s stereo two-stem pipeline, export validation, routing",
+        stability="PASS -- dense Conv probe plus full MDX-Net pipeline completed in fresh processes; six "
+                  "WebGPU timing runs (2.51-3.24s) with bit-identical numerics every repeat",
+        practical_performance="warm-cache full-pipeline median 3.09s WebGPU (n=6) vs 10.47s CPU (n=2 "
+                              "median, same fixture/boundaries) -- 3.4x faster than CPU. run = complete "
+                              "separate() pipeline incl. one-time WGSL compile, never inference-only",
+        vendor_alternative_available=None,
+        device_selection_enforceable="PASS -- W5 fixed build: selected OrtHardwareDevice DXGI LUID passed "
+                                     "to Dawn's RequestAdapterOptionsLUID, returned adapter LUID verified, "
+                                     "and independent counters observed only requested LUID 87436 during "
+                                     "the dense workload",
+        evidence="AMD_WINDOWS_VALIDATION_REPORT.md (validate/webgpu-amd-windows @ 4ca1fcf68)",
+    ),
+    CapabilityEntry(
+        os_arch="Windows 11 Pro, 10.0.26200, x86_64",
+        gpu_vendor="AMD", gpu_model="Radeon 780M (iGPU, Phoenix)", gpu_device_id_hex="0x15bf",
+        gpu_pci_bus_id=None,
+        model_name="UVR_MDXNET_KARA_2.onnx",
+        model_sha256="bf32e15105a09c0f7dddd2b67346146334d6f3ecb399ed7638eba2ab07cbf5f4",
+        inference_backend="locally built onnxruntime-ep-webgpu 0.3.0+w5fix1 "
+                          "(WebGpuExecutionProvider) -- explicitly requested by DXGI LUID 96109",
+        underlying_graphics_backend="D3D12",
+        runtime_version="CPython 3.11.0; onnxruntime 1.30.0 + W5-fixed onnxruntime-ep-webgpu "
+                        "0.3.0+w5fix1 (same live-loaded DLL hash as the RX 9070 row)",
+        theoretically_supported=True, actually_tested=True, found_correct=True, suitable_for_auto=False,
+        actual_gpu_execution="PASS -- 185/185 MDX-Net nodes completed on WebGPU; a separate dense Conv "
+                             "workload completed 994 calls while OS counters attributed the process only "
+                             "to the requested 780M LUID 96109 (AMD Windows workstation validation)",
+        physical_gpu_verification="PASS -- fresh-process Windows GPU Engine counters keyed through "
+                                  "HKLM\\SOFTWARE\\Microsoft\\DirectX observed PID 7600 only on LUID 96109: "
+                                  "6 nonzero 3D-engine samples, 54.2 pct peak, and no RX-9070-LUID sample",
+        graph_placement="185/185 MDX-Net nodes on WebGPU, 0 CPU fallback",
+        numerical_correctness="PASS -- raw CPU/WebGPU corr=1.00000000; max_abs_diff=1.13e-06 vocals / "
+                              "1.07e-06 instrumental (bit-identical to the RX 9070 run); exported WAV max "
+                              "diff one PCM16 LSB",
+        end_to_end_audio_correctness="PASS -- full 25s stereo two-stem pipeline, export validation, routing",
+        stability="PASS for the controlled dense Conv and full MDX-Net validation runs; no extended soak run",
+        practical_performance="warm-cache full-pipeline 6.11s/6.79s WebGPU (n=2 uncontended, median 6.45s; "
+                              "one further 10.52s sample excluded as it ran concurrently with Demucs) vs "
+                              "10.47s CPU -- 1.6x faster than CPU, but only two uncontended samples on one "
+                              "machine, so the iGPU stays excluded from Auto pending repeated "
+                              "characterization (same conservative policy as the W5 laptop-iGPU row)",
+        vendor_alternative_available=None,
+        device_selection_enforceable="PASS -- W5 fixed build: requested LUID 96109 enforced through Dawn, "
+                                     "returned adapter LUID verified, and independent counters observed "
+                                     "only requested LUID 96109",
+        evidence="AMD_WINDOWS_VALIDATION_REPORT.md (validate/webgpu-amd-windows @ 4ca1fcf68)",
+    ),
+    CapabilityEntry(
+        os_arch="Windows 11 Pro, 10.0.26200, x86_64",
+        gpu_vendor="AMD", gpu_model="Radeon RX 9070", gpu_device_id_hex="0x744c", gpu_pci_bus_id=None,
+        model_name="htdemucs.onnx (demucs-onnx)",
+        model_sha256="68d0bf16428ef66e692cdff8a9ccf28f1ef3f69440d57e58605a4cc55fcc5e74",
+        inference_backend="onnxruntime-ep-webgpu 0.3.0+w5fix1 (WebGpuExecutionProvider), ORT_ENABLE_BASIC "
+                          "retained (explicit DXGI LUID 87436)",
+        underlying_graphics_backend="D3D12",
+        runtime_version="CPython 3.11.0; onnxruntime 1.30.0 + W5-fixed onnxruntime-ep-webgpu 0.3.0+w5fix1",
+        theoretically_supported=True, actually_tested=True, found_correct=True, suitable_for_auto=True,
+        actual_gpu_execution="PASS -- 1594/1594 nodes placed on WebGPU, zero CPU fallback; all eight "
+                             "separation passes completed (2 shifts=0 + 3 seeds x 2 providers)",
+        physical_gpu_verification="PASS (via the same patched LUID selection path proven by the per-PID "
+                                  "GPU-engine A/B on this machine; this Demucs leg targeted the sole RX "
+                                  "9070 via explicit LUID 87436)",
+        graph_placement="1594/1594 nodes on WebGPU, 0 CPU fallback",
+        numerical_correctness="PASS -- shifts=0 corr >= 0.99999948 all four stems (max abs <= 5.5e-04); "
+                              "seeded shifts=2 worst max abs 1.80e-04, corr 0.999999996",
+        end_to_end_audio_correctness="PASS WITH DISCLOSED CAVEAT -- stems finite, non-silent, correctly "
+                                     "shaped/routed, and exported; but the raw float32 drums stem peaks at "
+                                     "1.363 (identical on CPU and WebGPU to 2e-5), so the PCM16 export "
+                                     "clips at 1.0 and the harness's peak>0.999 WAV gate fails "
+                                     "symmetrically on BOTH providers. This is an output-criterion failure "
+                                     "(criterion D), not a WebGPU defect and not an unqualified audio PASS; "
+                                     "no normalization was applied in this slice",
+        stability="PASS -- no crash or fallback across all passes",
+        practical_performance="warm medians over 3 seeds (shifts=2): 18.59s CPU vs 9.72s WebGPU -- 1.91x "
+                              "faster than ONNX CPU on the same graph and fixture",
+        vendor_alternative_available=None,
+        device_selection_enforceable="PASS -- W5 fixed build, same LUID mechanism as the MDX-Net RX 9070 row",
+        evidence="AMD_WINDOWS_VALIDATION_REPORT.md Section 5 (validate/webgpu-amd-windows @ 4ca1fcf68)",
+    ),
+    # NOTE: Windows Radeon 780M / Demucs has NO matrix row -- it was NOT TESTED in this
+    # slice. lookup() returning None (UNKNOWN) for that combination is the intended
+    # behavior and is asserted in test_backend_resolver.py.
 ]
 
 

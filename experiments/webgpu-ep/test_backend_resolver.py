@@ -325,6 +325,94 @@ r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows
 check("W5i Windows LUID capability absent at runtime remains fail-closed",
       r.status == "BLOCKED" and r.selected_backend is None and r.selected_gpu is None)
 
+# --- AW: AMD Windows workstation validation integration -----------------------------
+# Policy assertions for the matrix rows added from validate/webgpu-amd-windows
+# @ 4ca1fcf68 (full report: AMD_WINDOWS_VALIDATION_REPORT.md; distinct physical
+# devices from the W5 laptop rows: RX 9070 0x744c/LUID 87436, Phoenix 780M
+# 0x15bf/LUID 96109, Windows 11 Pro 26200). POLICY tests against recorded
+# evidence -- not new hardware validation.
+
+RX9070_WIN = GpuInfo("AMD", "Radeon RX 9070", "0x744c", None)
+R780M_WIN = GpuInfo("AMD", "Radeon 780M (iGPU, Phoenix)", "0x15bf", None)
+
+# AWa. RX 9070 MDX-Net: actually tested, correct, LUID-enforced, physically verified,
+# and now Auto-suitable (repeated warm benchmarks, 3.4x vs CPU).
+win_rx_mdx = cm.lookup("windows", "Radeon RX 9070", "MDXNET")
+check("AWa Windows RX 9070 MDX-Net row: tested + correct + LUID-enforced + suitable_for_auto",
+      win_rx_mdx is not None and win_rx_mdx.actually_tested is True and
+      win_rx_mdx.found_correct is True and win_rx_mdx.suitable_for_auto is True and
+      win_rx_mdx.device_selection_enforceable.startswith("PASS") and
+      "LUID 87436" in win_rx_mdx.physical_gpu_verification and
+      "185/185" in win_rx_mdx.graph_placement)
+
+# AWb. Auto with both workstation GPUs prefers the Auto-suitable RX 9070 and enforces it.
+r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
+                            available_gpus=(RX9070_WIN, R780M_WIN), desired_backend="Auto",
+                            windows_native_luid_selection_available=True))
+check("AWb RX 9070 + 780M present, MDX-Net, Auto: enforced RX 9070 WebGPU PASS",
+      r.status == "PASS" and r.selected_backend == "WebGPU" and r.selected_gpu == RX9070_WIN and
+      r.device_selection_enforceable is True)
+
+# AWc. 780M MDX-Net: correct and LUID-enforced, but deliberately NOT Auto-suitable
+# (only n=2 uncontended warm samples; same conservative iGPU policy as W5's laptop row).
+win_780m_mdx = cm.lookup("windows", "Radeon 780M", "MDXNET")
+check("AWc Windows 780M MDX-Net row: correct + LUID-enforced, NOT suitable_for_auto",
+      win_780m_mdx is not None and win_780m_mdx.found_correct is True and
+      win_780m_mdx.suitable_for_auto is False and
+      "LUID 96109" in win_780m_mdx.physical_gpu_verification)
+
+# AWd. Bare Auto with only the 780M must not promote it to WebGPU.
+r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
+                            available_gpus=(R780M_WIN,), desired_backend="Auto"))
+check("AWd Windows 780M alone, MDX-Net, Auto: UNKNOWN/not WebGPU (not Auto-qualified)",
+      r.status == "UNKNOWN" and r.selected_backend != "WebGPU")
+
+# AWe. RX 9070 Demucs: correct, ORT_ENABLE_BASIC retained, faster than CPU,
+# Auto-suitable -- with the WAV clipping caveat explicitly recorded (not an
+# unqualified audio PASS, and symmetric across providers by the recorded evidence).
+win_rx_demucs = cm.lookup("windows", "Radeon RX 9070", "htdemucs")
+check("AWe Windows RX 9070 Demucs row: 1594/1594 + ORT_ENABLE_BASIC + suitable_for_auto + clipping caveat disclosed",
+      win_rx_demucs is not None and win_rx_demucs.found_correct is True and
+      win_rx_demucs.suitable_for_auto is True and
+      "1594/1594" in win_rx_demucs.graph_placement and
+      "ORT_ENABLE_BASIC" in win_rx_demucs.inference_backend and
+      "CAVEAT" in win_rx_demucs.end_to_end_audio_correctness.upper() and
+      "1.363" in win_rx_demucs.end_to_end_audio_correctness)
+
+# AWf. Windows 780M Demucs was NOT TESTED: no matrix row, explicit request is UNKNOWN,
+# never a silent PASS, and compatibility must not be inferred from the RX 9070 row.
+r = resolve(ResolveRequest(model_name="htdemucs.onnx", os_arch="windows",
+                            available_gpus=(R780M_WIN,), desired_backend="WebGPU",
+                            explicit_gpu=R780M_WIN, allow_fallback=False,
+                            windows_native_luid_selection_available=True))
+check("AWf Windows 780M Demucs explicit WebGPU: UNKNOWN (not tested), no silent PASS",
+      r.status == "UNKNOWN" and r.selected_backend is None and r.selected_gpu is None)
+
+# AWg. Regression guard: Linux 780M Demucs (VK_ERROR_DEVICE_LOST crash row) must
+# remain blocked from Auto.
+linux_780m_demucs = cm.lookup("linux", "Radeon 780M", "htdemucs")
+check("AWg Linux 780M Demucs remains blocked from Auto (regression guard)",
+      linux_780m_demucs is not None and linux_780m_demucs.suitable_for_auto is False and
+      linux_780m_demucs.found_correct is False)
+
+# AWh. Stale-evidence negative control for the new row: regress the RX 9070 MDX row to
+# a W2-style stock-plugin verdict and demand fail-closed, exactly as W5h does for the
+# laptop rows.
+stale_amd_matrix = tuple(
+    dataclasses.replace(e, found_correct=False, suitable_for_auto=False,
+                        device_selection_enforceable="DISPROVEN (W2 stock plugin)")
+    if "windows" in e.os_arch.lower() and "Radeon RX 9070" in e.gpu_model and "MDXNET" in e.model_name
+    else e
+    for e in cm.MATRIX
+)
+r = resolve(ResolveRequest(model_name="UVR_MDXNET_KARA_2.onnx", os_arch="windows",
+                            available_gpus=(RX9070_WIN,), desired_backend="WebGPU",
+                            explicit_gpu=RX9070_WIN, allow_fallback=False,
+                            windows_native_luid_selection_available=True,
+                            capability_matrix=stale_amd_matrix))
+check("AWh stale stock-plugin RX 9070 evidence remains fail-closed",
+      r.status == "BLOCKED" and r.selected_backend is None and r.selected_gpu is None)
+
 print(f"\n{_count - len(_failures)}/{_count} policy tests passed"
       f"{f' ({len(_skipped)} skipped, non-Linux host -- see ON_LINUX above)' if _skipped else ''}.")
 if _skipped:

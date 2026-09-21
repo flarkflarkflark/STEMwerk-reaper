@@ -145,6 +145,8 @@ def main():
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--pci-bus-id", default=None)
     parser.add_argument("--device-id", type=int, default=None)
+    parser.add_argument("--adapter-luid", default=None,
+                        help="Windows DXGI adapter LUID in unsigned decimal form; preferred over device-id")
     parser.add_argument("--seeds", type=int, nargs="+", default=[111, 222, 333])
     parser.add_argument("--shifts", type=int, default=2)
     parser.add_argument("--nvidia-gpu-index", type=int, default=0)
@@ -170,7 +172,8 @@ def main():
     cpu_init_s = time.perf_counter() - cpu_init_start
 
     original_class, placement_reports = patch_inference_session_for_provider_swap(
-        lambda: select_device(pci_bus_id=args.pci_bus_id, device_id=args.device_id),
+        lambda: select_device(pci_bus_id=args.pci_bus_id, device_id=args.device_id,
+                              adapter_luid=args.adapter_luid),
         graph_optimization_level=ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
     )
     try:
