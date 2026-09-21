@@ -230,9 +230,16 @@ error messages.
 ## 7. Independent AMD workstation handoff
 
 Target machine: Windows 11, AMD RX 9070 + Radeon 780M, repo at `P:\GIT\STEMwerk`.
-This phase did not access or modify that machine. A pass on the NVIDIA laptop
-does **not** by itself prove distribution readiness; the point of the handoff is
-independent verification.
+A pass on the NVIDIA laptop does **not** by itself prove distribution readiness;
+the point of the handoff is independent verification.
+
+**Independent validation: COMPLETED (2026-09-21).** The AMD workstation
+validated the wheel end-to-end on both of its GPUs: clean fresh-venv install,
+loaded-DLL proof, per-PID/per-LUID physical execution on RX 9070 (LUID 87436)
+and 780M (LUID 96109), MDX-Net 185/185 with CPU-reference-identical numerics,
+8/8 rejection/regression checks. Full report: `W6_AMD_WINDOWS_VALIDATION.md`
+(original commit `504ddfada` on `validate/w6-amd-windows`). Radeon 780M Demucs
+remains untested.
 
 Transfer: `onnxruntime_ep_webgpu-0.3.0+w6consolidated-py3-none-win_amd64.whl`
 (SHA-256 `be602b7153e0a563e2e9e315f975423a9eab900f86769dd2828d8515c88ade16`),
