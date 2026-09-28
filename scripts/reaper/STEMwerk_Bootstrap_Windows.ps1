@@ -286,6 +286,53 @@ function LogExecutionPolicyStatus {
     }
 }
 
+function LogVisualCppRuntimeStatus {
+    # Issue #126: real user evidence showed Torch/ONNX Runtime native DLL
+    # init failures ("c10.dll", ONNX Runtime init errors, silent CPU
+    # fallback) that were actually caused by a stale Microsoft Visual C++
+    # x64 Redistributable, not by anything STEMwerk installs itself.
+    # Installing the current VC++ x64 redistributable resolved it. This is
+    # a warn-only preflight so a future user gets a diagnosable log line
+    # instead of an obscure DLL error -- it never auto-installs/downloads
+    # anything and never makes an absent/stale runtime a hard setup failure
+    # on its own, since a still-working install should not be blocked here.
+    $minVersion = [version]"14.40.0.0"
+    $installed = $false
+    $versionString = "unknown"
+    foreach ($path in @(
+        "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\X64"
+    )) {
+        try {
+            $props = Get-ItemProperty -Path $path -ErrorAction Stop
+            if ($props.Installed -eq 1) {
+                $installed = $true
+                $versionString = [string]$props.Version
+                break
+            }
+        } catch {
+        }
+    }
+
+    if (-not $installed) {
+        LogProgress "VCPP_RUNTIME_STATUS=missing"
+        LogStatusDetail "Microsoft Visual C++ x64 Redistributable was not detected. If Torch/ONNX Runtime fail to initialize (DLL errors, silent CPU fallback), install the latest VC++ x64 redistributable and retry."
+        return
+    }
+
+    try {
+        $parsed = [version]($versionString -replace '^v', '')
+        if ($parsed -lt $minVersion) {
+            LogProgress ("VCPP_RUNTIME_STATUS=stale version=" + $versionString)
+            LogStatusDetail ("Installed Visual C++ x64 Redistributable (" + $versionString + ") appears outdated. If Torch/ONNX Runtime fail to initialize (DLL errors, silent CPU fallback), install the latest VC++ x64 redistributable and retry.")
+        } else {
+            LogProgress ("VCPP_RUNTIME_STATUS=ok version=" + $versionString)
+        }
+    } catch {
+        LogProgress ("VCPP_RUNTIME_STATUS=ok version=" + $versionString)
+    }
+}
+
 function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$BackendValue, [string]$BackendReasonValue, [string]$PythonPathValue, [string]$FfmpegPathValue, [string]$FfprobePathValue, [string]$RuntimeBaseValue, [string]$BootstrapStatusValue, [string]$BootstrapReasonValue, [string]$VerificationValue, [string]$AudioSeparatorValue, [string]$StemwerkCoreValue, [string]$SamplerateValue, [string]$JuliusValue) {
     $lines = @()
     $lines += "CAP_VERSION=1"
@@ -3161,6 +3208,7 @@ if (-not (TestRuntimeWritable (Join-Path $RuntimeBase "logs"))) {
 }
 LogProgress ("Runtime write test passed: " + $RuntimeBase)
 LogExecutionPolicyStatus
+LogVisualCppRuntimeStatus
 
 Step "step_2_python" "python + venv"
 LogProgress "Looking for existing Python installations"
