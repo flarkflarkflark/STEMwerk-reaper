@@ -32,12 +32,21 @@
 #define DrumsepWheelPayloadSubdir GetEnv('STEMWERK_DRUMSEP_WHEEL_PAYLOAD_SUBDIR')
 #define DrumsepModelPayloadSubdir GetEnv('STEMWERK_DRUMSEP_MODEL_PAYLOAD_SUBDIR')
 
+; Both build flavors run the same post-copy bootstrap (venv creation, pip
+; installs, DrumSep runtime setup) after file copy; ExtraDiskSpaceRequired
+; is Inno's *additional* headroom for that on top of whatever it already
+; counts from the copied files, so the bundled flavor (whose copied files
+; already include the model/wheel payloads) must not need less of it than
+; the non-bundled flavor needs for the same shared bootstrap work.
+; Issue #120: a non-bundled/online install reported the actual runtime
+; footprint reaching 4GB+ against the previously advertised 3GB, and later
+; hit "No space left on device" mid-bootstrap.
 #if BundleRuntime == "1"
   #define MinimumFreeSpaceMB "12288"
-  #define ExtraDiskSpaceRequiredBytes "2147483648"
+  #define ExtraDiskSpaceRequiredBytes "5368709120"
 #else
-  #define MinimumFreeSpaceMB "3072"
-  #define ExtraDiskSpaceRequiredBytes "3221225472"
+  #define MinimumFreeSpaceMB "5120"
+  #define ExtraDiskSpaceRequiredBytes "5368709120"
 #endif
 
 [Setup]
