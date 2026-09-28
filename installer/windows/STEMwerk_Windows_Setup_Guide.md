@@ -2,15 +2,17 @@
 
 This guide is for the Windows installer build of STEMwerk 2.3.1.2.
 
-## What the installer just did
+## What the installer attempts to do
 
-The Windows installer:
+If setup completed without errors, the Windows installer:
 
 - installed the STEMwerk REAPER scripts
 - prepared the STEMwerk runtime under `%LOCALAPPDATA%\STEMwerk`
 - created or updated the Python environment used by STEMwerk
 - checked FFmpeg and the core runtime packages
 - installed bundled Drum Kit runtime and offline model payloads when included in the installer
+
+If you saw an error during setup, or REAPER's STEMwerk Setup -> Check reports a problem, one or more of these steps may not have actually completed. Check `%LOCALAPPDATA%\STEMwerk\logs\bootstrap.log` before assuming any of the above finished successfully.
 
 The Windows installer remains the recommended fresh-install and repair route on Windows.
 

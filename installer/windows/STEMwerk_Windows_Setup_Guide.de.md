@@ -2,15 +2,17 @@
 
 Diese Anleitung gilt fuer den Windows-Installer von STEMwerk 2.3.1.2.
 
-## Was der Installer gerade gemacht hat
+## Was der Installer versucht zu tun
 
-Der Windows-Installer hat:
+Wenn das Setup ohne Fehler abgeschlossen wurde, hat der Windows-Installer:
 
 - die STEMwerk REAPER-Skripte installiert
 - die STEMwerk-Runtime unter `%LOCALAPPDATA%\STEMwerk` vorbereitet
 - die von STEMwerk verwendete Python-Umgebung erstellt oder aktualisiert
 - FFmpeg und die zentralen Runtime-Pakete geprueft
 - gebuendelte Drum-Kit-Runtime- und Offline-Modell-Payloads installiert, wenn sie in diesem Installer enthalten sind
+
+Wenn beim Setup ein Fehler aufgetreten ist, oder STEMwerk Setup -> Check in REAPER ein Problem meldet, ist moeglicherweise nicht jeder dieser Schritte tatsaechlich abgeschlossen worden. Pruefe `%LOCALAPPDATA%\STEMwerk\logs\bootstrap.log`, bevor du davon ausgehst, dass alles oben Genannte erfolgreich war.
 
 Der Windows-Installer bleibt der empfohlene Weg fuer Erstinstallation und Reparatur unter Windows.
 

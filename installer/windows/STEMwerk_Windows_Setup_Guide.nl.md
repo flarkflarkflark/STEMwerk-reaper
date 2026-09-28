@@ -2,15 +2,17 @@
 
 Deze handleiding hoort bij de Windows-installer van STEMwerk 2.3.1.2.
 
-## Wat de installer zojuist heeft gedaan
+## Wat de installer probeert te doen
 
-De Windows-installer heeft:
+Als de setup zonder fouten is voltooid, heeft de Windows-installer:
 
 - de STEMwerk REAPER-scripts geinstalleerd
 - de STEMwerk-runtime voorbereid onder `%LOCALAPPDATA%\STEMwerk`
 - de Python-omgeving van STEMwerk aangemaakt of bijgewerkt
 - FFmpeg en de kernpakketten van de runtime gecontroleerd
 - meegeleverde Drum Kit-runtime en offline modelpayloads geinstalleerd wanneer die in deze installer zitten
+
+Als er tijdens de setup een fout is opgetreden, of als STEMwerk Setup -> Check in REAPER een probleem meldt, is het mogelijk dat niet elk van deze stappen daadwerkelijk is voltooid. Controleer `%LOCALAPPDATA%\STEMwerk\logs\bootstrap.log` voordat je ervan uitgaat dat het bovenstaande gelukt is.
 
 De Windows-installer blijft de aanbevolen route voor een eerste installatie en voor herstel op Windows.
 
