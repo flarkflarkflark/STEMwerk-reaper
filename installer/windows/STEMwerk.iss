@@ -164,7 +164,7 @@ Name: "{userprograms}\STEMwerk\{cm:RunOpenGuide}"; Filename: "{code:GetLocalized
 Name: "{userprograms}\STEMwerk\License agreement"; Filename: "{app}\STEMwerk_License_Agreement.txt"
 
 [Run]
-Filename: "{code:GetLocalizedGuidePath}"; Description: "{cm:RunOpenGuide}"; Flags: postinstall shellexec skipifsilent
+Filename: "{code:GetLocalizedGuidePath}"; Description: "{cm:RunOpenGuide}"; Flags: postinstall shellexec skipifsilent; Check: BootstrapSucceeded
 Filename: "{sys}\notepad.exe"; Parameters: """{localappdata}\STEMwerk\logs\bootstrap.log"""; Description: "{cm:RunOpenLog}"; Flags: postinstall skipifsilent unchecked
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\STEMwerk_Installer_Windows.ps1""{code:GetInstallerScriptArgs}"; StatusMsg: "Preparing STEMwerk runtime..."; Flags: runhidden waituntilterminated
 
@@ -214,6 +214,7 @@ var
   LastStep: Integer;
   UninstallCleanupRuntime: Boolean;
   UninstallCleanupModels: Boolean;
+  BootstrapSucceeded: Boolean;
 
 const
   WM_VSCROLL = $0115;
@@ -286,6 +287,42 @@ begin
   Result := ExpandConstant('{localappdata}\STEMwerk');
 end;
 
+function GetBootstrapStatePath: string;
+begin
+  Result := GetRuntimeBasePath + '\state\bootstrap.env';
+end;
+
+function ReadBootstrapStatus: string;
+var
+  RawContent: AnsiString;
+  Text: string;
+  Marker: string;
+  P: Integer;
+  Tail: string;
+  EolPos: Integer;
+begin
+  Result := '';
+  if not LoadStringFromFile(GetBootstrapStatePath, RawContent) then
+    Exit;
+  Text := String(RawContent);
+  Marker := 'STATUS=';
+  P := Pos(Marker, Text);
+  if P = 0 then
+    Exit;
+  Tail := Copy(Text, P + Length(Marker), Length(Text));
+  EolPos := Pos(#13, Tail);
+  if EolPos = 0 then
+    EolPos := Pos(#10, Tail);
+  if EolPos > 0 then
+    Tail := Copy(Tail, 1, EolPos - 1);
+  Result := Trim(Tail);
+end;
+
+function ResolveBootstrapSucceeded: Boolean;
+begin
+  Result := ReadBootstrapStatus = 'ok';
+end;
+
 procedure CleanupRuntimeArtifacts(RemoveModels: Boolean);
 var
   RuntimeBase: string;
@@ -356,7 +393,7 @@ begin
   end;
 end;
 
-function BuildFinishedSummaryText: string;
+function BuildFinishedSuccessSummaryText: string;
 var
   CleanupLines: string;
 begin
@@ -394,6 +431,27 @@ begin
     LText('- Use STEMwerk: Setup to check the runtime (Check only). If it reports a problem, re-run this STEMwerk installer to repair it.', '- Gebruik STEMwerk: Setup om de runtime te controleren (Check only). Meldt dat een probleem, voer deze STEMwerk-installer opnieuw uit om te herstellen.', '- Nutze STEMwerk: Setup, um die Runtime zu pruefen (Check only). Meldet das ein Problem, fuehre diesen STEMwerk-Installer erneut aus, um sie zu reparieren.') + #13#10 + #13#10 +
     LText('Setup log:', 'Setup-log:', 'Setup-Log:') + #13#10 +
     '  ' + GetLogPath;
+end;
+
+function BuildFinishedFailureSummaryText: string;
+begin
+  Result :=
+    LText('STEMwerk setup did not complete successfully.', 'STEMwerk setup is niet succesvol voltooid.', 'STEMwerk Setup wurde nicht erfolgreich abgeschlossen.') +
+    ' (' + VersionTag + ')' + #13#10 + #13#10 +
+    LText('The STEMwerk runtime, required audio tools, and any offline model/runtime payload were not confirmed installed. Do not assume any of them are ready to use.', 'De STEMwerk-runtime, vereiste audiotools en eventuele offline model-/runtime-payload zijn niet bevestigd geinstalleerd. Ga er niet van uit dat een van deze klaar is voor gebruik.', 'Die STEMwerk-Runtime, erforderliche Audiotools und eine eventuelle Offline-Modell-/Runtime-Payload wurden nicht als installiert bestaetigt. Gehe nicht davon aus, dass eines davon einsatzbereit ist.') + #13#10 + #13#10 +
+    LText('What you can do:', 'Wat je kunt doen:', 'Was du tun kannst:') + #13#10 +
+    LText('- Check the setup log for the specific failure reason.', '- Controleer het setup-log voor de exacte foutreden.', '- Pruefe das Setup-Log auf den genauen Fehlergrund.') + #13#10 +
+    LText('- Re-run this STEMwerk installer to try again.', '- Voer deze STEMwerk-installer opnieuw uit om het nogmaals te proberen.', '- Fuehre diesen STEMwerk-Installer erneut aus, um es erneut zu versuchen.') + #13#10 + #13#10 +
+    LText('Setup log:', 'Setup-log:', 'Setup-Log:') + #13#10 +
+    '  ' + GetLogPath;
+end;
+
+function BuildFinishedSummaryText: string;
+begin
+  if BootstrapSucceeded then
+    Result := BuildFinishedSuccessSummaryText
+  else
+    Result := BuildFinishedFailureSummaryText;
 end;
 
 function FindLastPos(const SubStr, S: string): Integer;
@@ -1457,6 +1515,12 @@ begin
     FinishedBrandLabel.Left := x;
     FinishedBrandLabel.Top := y;
   end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    BootstrapSucceeded := ResolveBootstrapSucceeded;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
