@@ -36,7 +36,7 @@ Deze installers zijn bedoeld om volledig offline te kunnen afronden met alleen d
 2. Als de `STEMwerk`-acties al zichtbaar zijn, voer dan `STEMwerk: Setup` uit als je de runtime wilt controleren.
 3. Gebruik `Check only` om de runtime te verifieren.
 4. Start `Stemwerk: Main` vanuit het Actions-menu voor normaal gebruik.
-5. Als `STEMwerk`-acties ontbreken, open dan `Actions -> Show action list -> ReaScript: Load...`.
+5. Als `STEMwerk`-acties ontbreken, open dan `Actions -> Show action list -> ReaScript: Add...`.
 6. Voorkeurshelper voor eenmalige registratie:
    `C:\Users\<Username>\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\STEMwerk_Setup_Toolbar.lua`
 7. Die helper registreert de normale STEMwerk-acties in REAPER. Als je alleen de acties nodig hebt, kun je de latere toolbar-prompt annuleren.
@@ -59,7 +59,7 @@ De-installeren verwijdert STEMwerk-runtime-data en geinstalleerde STEMwerk REAPE
 1. Controleer eerst of deze scriptmap bestaat:
    `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`
 2. Als die map bestaat maar er geen `STEMwerk`-acties zichtbaar zijn, heeft REAPER de scripts nog niet geregistreerd.
-3. Open in REAPER `Actions -> Show action list -> ReaScript: Load...`.
+3. Open in REAPER `Actions -> Show action list -> ReaScript: Add...`.
 4. Voorkeurshelper voor eenmalige registratie:
    `STEMwerk_Setup_Toolbar.lua`
 5. Als je de helper niet wilt gebruiken, laad dan alleen:

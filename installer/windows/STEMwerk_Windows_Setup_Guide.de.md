@@ -36,7 +36,7 @@ Diese Installer sollen die Einrichtung fuer ihre Ziel-Runtime vollstaendig offli
 2. Wenn die `STEMwerk`-Aktionen bereits sichtbar sind, fuehre `STEMwerk: Setup` aus, wenn du die Runtime pruefen willst.
 3. Nutze `Check only`, um den Runtime-Zustand zu verifizieren.
 4. Starte `Stemwerk: Main` aus dem Actions-Menue fuer die normale Nutzung.
-5. Wenn `STEMwerk`-Aktionen fehlen, oeffne `Actions -> Show action list -> ReaScript: Load...`.
+5. Wenn `STEMwerk`-Aktionen fehlen, oeffne `Actions -> Show action list -> ReaScript: Add...`.
 6. Bevorzugter Helfer fuer die einmalige Registrierung:
    `C:\Users\<Username>\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\STEMwerk_Setup_Toolbar.lua`
 7. Dieser Helfer registriert die normalen STEMwerk-Aktionen in REAPER. Wenn du nur die Aktionen brauchst, kannst du den spaeteren Toolbar-Dialog abbrechen.
@@ -59,7 +59,7 @@ Die Deinstallation entfernt STEMwerk-Runtime-Daten und installierte STEMwerk-REA
 1. Pruefe zuerst, ob dieser Skript-Ordner existiert:
    `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`
 2. Wenn der Ordner existiert, aber keine `STEMwerk`-Aktionen erscheinen, hat REAPER die Skripte noch nicht registriert.
-3. Oeffne in REAPER `Actions -> Show action list -> ReaScript: Load...`.
+3. Oeffne in REAPER `Actions -> Show action list -> ReaScript: Add...`.
 4. Bevorzugter Helfer fuer die einmalige Registrierung:
    `STEMwerk_Setup_Toolbar.lua`
 5. Wenn du den Helfer nicht verwenden willst, lade nur:

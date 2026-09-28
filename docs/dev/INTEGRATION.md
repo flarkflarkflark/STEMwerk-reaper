@@ -88,7 +88,7 @@ STEMwerk/
 
 1. **Load script in REAPER:**
    ```
-   Actions → Show action list → ReaScript: Load ReaScript...
+   Actions → Show action list → ReaScript: Add ReaScript...
    Select: STEMwerk/scripts/reaper/STEMwerk.lua
    ```
 

@@ -146,7 +146,7 @@ Recommended free space:
 
 After install or update, use `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) when runtime verification or repair is needed, then launch `STEMwerk: Main` (`STEMwerk.lua`).
 
-Windows installer note: the installer copies the REAPER script payload to `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`, but REAPER action entries may still need to be registered from inside REAPER. If `STEMwerk:` actions are missing, open `Actions -> Show action list -> ReaScript: Load...`, load `STEMwerk_Setup_Toolbar.lua`, and cancel the toolbar prompt if you only need action registration.
+Windows installer note: the installer copies the REAPER script payload to `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`, but REAPER action entries may still need to be registered from inside REAPER. If `STEMwerk:` actions are missing, open `Actions -> Show action list -> ReaScript: Add...`, load `STEMwerk_Setup_Toolbar.lua`, and cancel the toolbar prompt if you only need action registration.
 
 ### GitHub release assets for 2.3.1.2
 `2.3.1.2` is published at the [current GitHub Release](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.1.2) with these five platform assets and the checksum manifest:
@@ -222,7 +222,7 @@ Notes:
 ### Manual or developer install
 1. Install a supported 64-bit Python 3 version and ensure it is on your `PATH`.
 2. Clone or download this repository.
-3. In REAPER, open `Actions -> Show action list -> ReaScript: Load ReaScript...`
+3. In REAPER, open `Actions -> Show action list -> ReaScript: Add ReaScript...`
 4. Load and run `scripts/reaper/STEMwerk-SETUP.lua`.
 5. Then run `scripts/reaper/STEMwerk.lua`.
 
@@ -266,7 +266,7 @@ For normal use:
 - `STEMwerk: Explode Takes (In Place)`
 
 Windows installer note:
-- If STEMwerk does not appear in REAPER Actions after install, open `Actions -> Show action list -> ReaScript: Load...` and first try `STEMwerk_Setup_Toolbar.lua` from `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`.
+- If STEMwerk does not appear in REAPER Actions after install, open `Actions -> Show action list -> ReaScript: Add...` and first try `STEMwerk_Setup_Toolbar.lua` from `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`.
 - If you prefer manual registration, load only `STEMwerk-SETUP.lua`, `STEMwerk.lua`, `STEMwerk_Drum_Kit_Split.lua`, and `STEMwerk_Explode_Takes.lua`.
 - Do not load every `.lua` file in that folder, and do not load files under `scripts/reaper/_internal/`.
 - `STEMwerk_AI_Separate.lua` is a compatibility wrapper for older action bindings and is not needed on a fresh install.

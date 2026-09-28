@@ -40,7 +40,7 @@ These installers are intended to complete setup fully offline from bundled wheel
 2. If `STEMwerk` actions are already visible, run `STEMwerk: Setup` if you want to check the runtime.
 3. Use `Check only` to verify runtime health.
 4. Run `Stemwerk: Main` from the Actions menu for normal use.
-5. If `STEMwerk` actions are missing, open `Actions -> Show action list -> ReaScript: Load...`.
+5. If `STEMwerk` actions are missing, open `Actions -> Show action list -> ReaScript: Add...`.
 6. Preferred one-time registration helper:
    `C:\Users\<Username>\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\STEMwerk_Setup_Toolbar.lua`
 7. That helper registers the normal STEMwerk actions inside REAPER. If you only need the actions, you can cancel the later toolbar prompt.
@@ -63,7 +63,7 @@ Uninstall removes STEMwerk runtime data and installed STEMwerk REAPER scripts.
 1. First confirm the installed script folder exists:
    `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`
 2. If the folder exists but no `STEMwerk` actions appear, REAPER has not registered the scripts yet.
-3. In REAPER, open `Actions -> Show action list -> ReaScript: Load...`.
+3. In REAPER, open `Actions -> Show action list -> ReaScript: Add...`.
 4. Preferred one-time registration helper:
    `STEMwerk_Setup_Toolbar.lua`
 5. If you do not want to use the helper, manually load only:
