@@ -439,8 +439,14 @@ def test_installer_finished_page_no_longer_offers_check_or_repair_in_reaper() ->
     assert "check or repair the runtime" not in text, (
         "the installer finished-page must no longer tell the user STEMwerk: Setup can repair the runtime"
     )
-    idx = text.index("function BuildFinishedSummaryText")
-    end = text.index("\nfunction FindLastPos", idx)
+    # This guidance is success-path text: only a successfully completed
+    # install should tell the user to run "Setup: Check" and treat the
+    # installer as the repair path. BuildFinishedSummaryText (#120(b)/
+    # #122(b)) is now a thin dispatcher between BuildFinishedSuccessSummaryText
+    # and BuildFinishedFailureSummaryText, so anchor on the function that
+    # actually owns this text.
+    idx = text.index("function BuildFinishedSuccessSummaryText")
+    end = text.index("\nfunction BuildFinishedFailureSummaryText", idx)
     section = text[idx:end]
     assert "LText('- Use STEMwerk: Setup to check the runtime (Check only). " in section
     assert "re-run this STEMwerk installer to repair it." in section, "EN finished-page text must point to the external installer for repair"
