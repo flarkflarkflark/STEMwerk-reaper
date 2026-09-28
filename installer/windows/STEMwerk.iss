@@ -164,7 +164,7 @@ Name: "{userprograms}\STEMwerk\{cm:RunOpenGuide}"; Filename: "{code:GetLocalized
 Name: "{userprograms}\STEMwerk\License agreement"; Filename: "{app}\STEMwerk_License_Agreement.txt"
 
 [Run]
-Filename: "{code:GetLocalizedGuidePath}"; Description: "{cm:RunOpenGuide}"; Flags: postinstall shellexec skipifsilent; Check: BootstrapSucceeded
+Filename: "{code:GetLocalizedGuidePath}"; Description: "{cm:RunOpenGuide}"; Flags: postinstall shellexec skipifsilent; Check: IsBootstrapSucceeded
 Filename: "{sys}\notepad.exe"; Parameters: """{localappdata}\STEMwerk\logs\bootstrap.log"""; Description: "{cm:RunOpenLog}"; Flags: postinstall skipifsilent unchecked
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\STEMwerk_Installer_Windows.ps1""{code:GetInstallerScriptArgs}"; StatusMsg: "Preparing STEMwerk runtime..."; Flags: runhidden waituntilterminated
 
@@ -1521,6 +1521,11 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
     BootstrapSucceeded := ResolveBootstrapSucceeded;
+end;
+
+function IsBootstrapSucceeded: Boolean;
+begin
+  Result := BootstrapSucceeded;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

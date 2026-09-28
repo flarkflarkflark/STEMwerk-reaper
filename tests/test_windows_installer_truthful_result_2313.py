@@ -18,16 +18,22 @@ STATUS field is the narrowest reliable substitute, not free-text log
 scraping -- it is the exact structured value the bootstrap script treats as
 authoritative for its own exit code.
 
-These are static checks against the .iss source (no Inno Setup Compiler or
-Wine-hosted Inno Setup runtime is available in this Linux dev environment;
-see the accompanying report for what still needs real Windows validation),
-mirroring the style already used in tests/test_windows_payload_contract_2306.py
-and tests/test_windows_disk_space_preflight_2313.py.
+Most of these are static checks against the .iss source, mirroring the
+style already used in tests/test_windows_payload_contract_2306.py and
+tests/test_windows_disk_space_preflight_2313.py. The final test in this
+file additionally compiles the real .iss with a Wine-hosted Inno Setup
+Compiler when one is available on the machine running the suite (skipped
+otherwise -- this is environment-specific, not a general CI assumption).
+Running the compiled installer itself, and a real forced-success/
+forced-failure wizard smoke test, still need real Windows validation; see
+the accompanying report.
 """
 
 from __future__ import annotations
 
 import re
+
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -157,10 +163,17 @@ def test_guide_action_is_gated_on_bootstrap_success():
         line for line in text.splitlines()
         if "GetLocalizedGuidePath" in line and line.strip().startswith("Filename:")
     )
-    assert "Check: BootstrapSucceeded" in guide_line, (
-        "the post-install guide [Run] entry must be gated on BootstrapSucceeded "
+    # Inno's Check: parameter must name a function/procedure, not a plain
+    # variable -- IsBootstrapSucceeded wraps the BootstrapSucceeded global
+    # for exactly this reason (a bare `Check: BootstrapSucceeded` fails to
+    # compile: "Required function or procedure 'BootstrapSucceeded' not
+    # found", caught by actually compiling this file with ISCC).
+    assert "Check: IsBootstrapSucceeded" in guide_line, (
+        "the post-install guide [Run] entry must be gated on IsBootstrapSucceeded "
         "so it is not offered as a normal next step after a failed install"
     )
+    assert "function IsBootstrapSucceeded: Boolean;" in text
+    assert "Result := BootstrapSucceeded;" in text
 
 
 def test_setup_log_action_remains_unconditionally_available():
@@ -186,3 +199,51 @@ def test_bootstrap_installer_run_entry_is_unmodified():
         '""{app}\\STEMwerk_Installer_Windows.ps1""{code:GetInstallerScriptArgs}"; '
         'StatusMsg: "Preparing STEMwerk runtime..."; Flags: runhidden waituntilterminated'
     ) in text
+
+
+# --- Real ISCC compile, when available -------------------------------------
+#
+# Skipped unless this exact machine's known Wine-hosted Inno Setup Compiler
+# is present (not a general CI assumption -- ISCC/Wine availability is
+# environment-specific). When it is, this proves the .iss actually compiles,
+# not just that its source contains the right strings.
+
+_ISCC_WINEPREFIX = Path("/home/flark/.wine-inno")
+_ISCC_EXE = _ISCC_WINEPREFIX / "drive_c" / "InnoSetup" / "ISCC.exe"
+
+
+def _iscc_available() -> bool:
+    import shutil
+
+    return shutil.which("wine") is not None and _ISCC_EXE.is_file()
+
+
+@pytest.mark.skipif(not _iscc_available(), reason="Wine-hosted Inno Setup Compiler not available")
+def test_installer_compiles_with_iscc():
+    import os
+    import shutil
+    import subprocess
+
+    dist_dir = ISS.parent / "dist"
+    existed_before = dist_dir.exists()
+    win_iss_path = "Z:" + str(ISS).replace("/", "\\")
+    env = dict(os.environ)
+    env["WINEPREFIX"] = str(_ISCC_WINEPREFIX)
+    try:
+        result = subprocess.run(
+            ["wine", str(_ISCC_EXE), win_iss_path],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=180,
+        )
+        assert result.returncode == 0, (
+            f"ISCC compile failed:\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        )
+        assert "Successful compile" in result.stdout
+    finally:
+        # This test proves compilability; it must not leave a build
+        # artifact behind (installer/windows/dist/ is gitignored, but this
+        # avoids leaving stray output either way).
+        if dist_dir.exists() and not existed_before:
+            shutil.rmtree(dist_dir, ignore_errors=True)
