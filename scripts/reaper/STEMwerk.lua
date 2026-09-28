@@ -20414,21 +20414,73 @@ function resolveGfx1031RocmOverrideEnv()
         local cap = type(readCapabilities) == "function" and readCapabilities() or nil
         local backend = cap and cap.kv and string.lower(tostring(cap.kv.BACKEND or "")) or ""
         if backend == "rocm" then
-            local probe = io.popen(
-                "env -u HSA_OVERRIDE_GFX_VERSION -u HIP_VISIBLE_DEVICES -u ROCR_VISIBLE_DEVICES"
-                    .. " -u CUDA_VISIBLE_DEVICES rocminfo 2>/dev/null"
-            )
-            if probe then
-                local out = probe:read("*a") or ""
-                probe:close()
-                if out:lower():find("gfx1031", 1, true) then
-                    value = "10.3.0"
-                    source = "stemwerk_compatibility_rule"
-                else
-                    source = "rocm_backend_not_gfx1031"
+            -- REAPER's own process PATH (especially when launched from a
+            -- desktop icon/taskbar rather than a terminal that has sourced
+            -- a ROCm-aware shell profile) commonly does not include ROCm's
+            -- install directory, so relying on a bare `rocminfo` PATH
+            -- lookup alone silently loses the gfx1031 override on machines
+            -- where it is needed most. Nested locals here (rather than
+            -- top-level) to stay under STEMwerk.lua's existing top-level
+            -- local-variable ceiling.
+            local function rocmInfoCandidates()
+                local candidates = { "rocminfo" }
+                local rocmPathEnv = os.getenv("ROCM_PATH")
+                if rocmPathEnv and rocmPathEnv ~= "" then
+                    candidates[#candidates + 1] = rocmPathEnv .. "/bin/rocminfo"
                 end
+                candidates[#candidates + 1] = "/opt/rocm/bin/rocminfo"
+                -- Versioned installs without an /opt/rocm symlink (e.g. /opt/rocm-6.1.0/bin/rocminfo).
+                local globProbe = io.popen("ls -d /opt/rocm-*/bin/rocminfo 2>/dev/null")
+                if globProbe then
+                    for line in globProbe:lines() do
+                        if line and line ~= "" then
+                            candidates[#candidates + 1] = line
+                        end
+                    end
+                    globProbe:close()
+                end
+                return candidates
+            end
+
+            -- Try each candidate location in turn (clean env, mirroring the
+            -- prior single-candidate probe) and report whether io.popen
+            -- ever actually ran rocminfo, so the caller can tell "checked
+            -- everywhere and it's genuinely not gfx1031" apart from "could
+            -- not run rocminfo anywhere" instead of conflating the two.
+            local function probeRocmInfoOutput()
+                local ranAtLeastOnce = false
+                for _, exe in ipairs(rocmInfoCandidates()) do
+                    local probe = io.popen(
+                        "env -u HSA_OVERRIDE_GFX_VERSION -u HIP_VISIBLE_DEVICES -u ROCR_VISIBLE_DEVICES"
+                            .. " -u CUDA_VISIBLE_DEVICES " .. quoteArg(exe) .. " 2>/dev/null"
+                    )
+                    if probe then
+                        ranAtLeastOnce = true
+                        local out = probe:read("*a") or ""
+                        probe:close()
+                        if out ~= "" then
+                            return out, true
+                        end
+                    end
+                end
+                return "", ranAtLeastOnce
+            end
+
+            local out, probed = probeRocmInfoOutput()
+            if out ~= "" and out:lower():find("gfx1031", 1, true) then
+                value = "10.3.0"
+                source = "stemwerk_compatibility_rule"
+            elseif probed then
+                -- rocminfo actually ran (at bare PATH or one of the
+                -- absolute fallback locations) -- whatever it reported, or
+                -- its absence of gfx1031, is a real negative.
+                source = "rocm_backend_not_gfx1031"
             else
-                source = "rocminfo_probe_failed"
+                -- rocminfo could not be located/executed anywhere we
+                -- looked (bare PATH, ROCM_PATH, /opt/rocm, /opt/rocm-*):
+                -- this is a detection gap, not evidence the GPU isn't
+                -- gfx1031, and must not be conflated with a real negative.
+                source = "rocminfo_not_found"
             end
         end
     end
