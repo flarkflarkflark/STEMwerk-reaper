@@ -19225,6 +19225,16 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
                 policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_SHORT_MAX_PARALLEL)
                 policy.reason = "scheduler_dks_direct_directml_cap4"
             end
+        elseif route == "dks_extract" and opts.directmlAdapterClass == "discrete" then
+            -- Kit Split stage 1 is ordinary separation, not the fragile DrumSep
+            -- helper, and Auto already runs it in parallel on this very adapter
+            -- through the generic GPU branch below. Selecting the same adapter
+            -- explicitly must not be slower for identical execution. Stage 2
+            -- stays capped at 1 independently (directml_fixed_cap1 in
+            -- audio_separator_process.py), so this cannot parallelize DrumSep.
+            policy.sequentialMode = false
+            policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_GPU_MAX_PARALLEL)
+            policy.reason = "scheduler_dks_extract_stage1_directml_discrete_cap4"
         else
             policy.sequentialMode = true
             policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL

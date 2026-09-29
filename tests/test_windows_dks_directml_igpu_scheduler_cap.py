@@ -282,8 +282,19 @@ def test_single_item_and_user_sequential_are_unchanged(tmp_path, adapter_class):
 # --- other DirectML routes and non-DirectML backends are unaffected ------------
 
 
-@pytest.mark.parametrize("route", ["normal", "dks_extract"])
-@pytest.mark.parametrize("adapter_class", ["discrete", "integrated", "unknown"])
+@pytest.mark.parametrize(
+    "route, adapter_class",
+    [
+        ("normal", "discrete"),
+        ("normal", "integrated"),
+        ("normal", "unknown"),
+        # dks_extract + discrete is deliberately excluded: Kit Split stage 1 on a
+        # named discrete adapter now matches the cap Auto already used for the
+        # identical execution (see test_windows_dks_extract_directml_discrete_cap).
+        ("dks_extract", "integrated"),
+        ("dks_extract", "unknown"),
+    ],
+)
 def test_normal_and_kit_split_directml_stay_on_stability_cap(tmp_path, route, adapter_class):
     out = _policy(tmp_path, route=route, backend="directml", directmlAdapterClass=adapter_class, requestedParallel=True, jobCount=2)
     assert (out["cap"], out["sequential"], out["reason"]) == ("1", "true", "directml_multi_track")
