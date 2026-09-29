@@ -62,18 +62,42 @@ LUA = _lua_interpreter()
 requires_lua = pytest.mark.skipif(LUA is None, reason="no lua interpreter available")
 
 
-def _extract_lines(text: str, start_line: int, end_line_exclusive: int) -> str:
-    """1-indexed, matching the line numbers a plain text editor/grep would show."""
+def _declaration_index(lines: list[str], name: str) -> int:
+    prefixes = (f"function {name}(", f"local function {name}(")
+    for index, line in enumerate(lines):
+        if line.startswith(prefixes):
+            return index
+    raise AssertionError(f"no top-level declaration of {name}() in {MAIN_LUA.name}")
+
+
+def _extract_lua_span(text: str, first_name: str, last_name: str) -> str:
+    """Extract a run of adjacent top-level Lua functions, first..last inclusive.
+
+    Anchored on the declarations themselves, not on line numbers: STEMwerk.lua
+    declares these at column 0 and terminates each with a column-0 `end` (every
+    nested block inside is indented), so unrelated edits elsewhere in the file
+    cannot silently shift the extraction onto the wrong code.
+    """
     lines = text.splitlines(keepends=True)
-    return "".join(lines[start_line - 1 : end_line_exclusive - 1])
+    start = _declaration_index(lines, first_name)
+    last_start = _declaration_index(lines, last_name)
+    assert last_start >= start, f"{last_name}() is declared before {first_name}()"
+    for index in range(last_start + 1, len(lines)):
+        if lines[index].rstrip("\r\n") == "end":
+            return "".join(lines[start : index + 1])
+    raise AssertionError(f"no column-0 'end' terminates {last_name}()")
+
+
+def _extract_lua_function(text: str, name: str) -> str:
+    return _extract_lua_span(text, name, name)
 
 
 def test_trsafevalue_stub_matches_real_production_implementation():
     """Guards against silent drift between T_STUB's reproduced trSafeValue and
-    the real one at STEMwerk.lua:9121, which lies outside the extracted
-    ranges these tests otherwise pull verbatim from production."""
+    the real one in STEMwerk.lua, which lies outside the functions these tests
+    otherwise pull verbatim from production."""
     src = MAIN_LUA.read_text(encoding="utf-8")
-    real = _extract_lines(src, 9121, 9131)
+    real = _extract_lua_function(src, "trSafeValue")
     assert real.startswith("function trSafeValue(key, fallback)")
     assert real.rstrip().endswith("end")
     assert real.strip() in T_STUB
@@ -81,24 +105,23 @@ def test_trsafevalue_stub_matches_real_production_implementation():
 
 def _extract_reporting_functions() -> str:
     """Pull the exact, unmodified function bodies under test straight out of the
-    real production STEMwerk.lua by their real top-level function boundaries
-    (verified via `grep -n "^function \\|^local function "`), rather than
-    re-implementing or approximating their logic here. Boundaries are the
-    start of the next top-level function declaration, which is unambiguous
-    for well-formed top-level Lua function definitions."""
+    real production STEMwerk.lua by their real top-level function boundaries,
+    rather than re-implementing or approximating their logic here."""
     src = MAIN_LUA.read_text(encoding="utf-8", errors="replace")
 
-    format_label_fn = _extract_lines(src, 1126, 1196)
+    format_label_fn = _extract_lua_function(src, "formatUserFacingProcessingDeviceLabel")
     assert format_label_fn.startswith("function formatUserFacingProcessingDeviceLabel(...)")
     assert format_label_fn.rstrip().endswith("end")
 
-    method_label_fns = _extract_lines(src, 9366, 9457)
+    method_label_fns = _extract_lua_span(
+        src, "sanitizeUserFacingMethodLabel", "resolveSingleTrackMethodLabel"
+    )
     assert method_label_fns.startswith("function sanitizeUserFacingMethodLabel(candidate)")
     assert "function preferredRuntimeSelection(" in method_label_fns
     assert "function resolveResultMethodLabel(data)" in method_label_fns
     assert method_label_fns.rstrip().endswith("end")
 
-    parse_fn = _extract_lines(src, 14943, 15099)
+    parse_fn = _extract_lua_function(src, "parseRuntimeMetadataFromLogFile")
     assert parse_fn.startswith("function parseRuntimeMetadataFromLogFile(logFile, maxLines)")
     assert parse_fn.rstrip().endswith("end")
 
@@ -110,9 +133,9 @@ T_STUB = """
 -- trSafeValue(key, fallback) falls back to the English default text these
 -- functions were already written to return (e.g. "CPU", "AMD ROCm").
 function T(key) return nil end
--- trSafeValue itself (real implementation at STEMwerk.lua:9121) is outside
--- the extracted ranges below; reproduced verbatim here rather than widening
--- the extraction, since its own logic is not under test.
+-- trSafeValue itself is outside the extracted functions below; reproduced
+-- verbatim here rather than widening the extraction, since its own logic is
+-- not under test.
 function trSafeValue(key, fallback)
     local v = T(key)
     if not v or v == "" then return fallback end
