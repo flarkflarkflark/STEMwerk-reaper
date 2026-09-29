@@ -19010,6 +19010,43 @@ _sep.classifySchedulerBackend = function(device, hasGpuBackends)
     return "unknown"
 end
 
+-- The DirectML device probe exposes only adapter names (no memory size or
+-- adapter type), so only a name that positively identifies a discrete GPU
+-- unlocks parallel Direct Kit; integrated, other-vendor and unnamed adapters
+-- stay on the DirectML stability cap. APU names end in "Graphics", including
+-- "Radeon(TM) RX Vega ... Graphics", so that check comes first.
+_sep.classifyDirectmlSchedulerAdapter = function(name)
+    local lower = string.lower(tostring(name or ""))
+    if lower == "" then return "unknown" end
+    if lower:find("graphics", 1, true) then return "integrated" end
+    if lower:find("radeon", 1, true) and lower:find("%f[%w]rx%f[%W]") then return "discrete" end
+    return "unknown"
+end
+
+-- Adapter a DirectML run will execute on: the explicit directml:N entry, or
+-- for Auto / bare "directml" the default adapter (index 0), which is what
+-- both the Auto resolver and the DrumSep helper bind.
+_sep.resolveDirectmlSchedulerAdapter = function(requestedDevice, runtimeDevices)
+    local req = string.lower(tostring(requestedDevice or "auto"))
+    if req == "" then req = "auto" end
+    local default
+    for _, d in ipairs(runtimeDevices or {}) do
+        local id = string.lower(tostring(d.id or ""))
+        if id == "directml" or id:match("^directml:%d+$") then
+            if id == req then
+                return tostring(d.id), tostring(d.fullName or d.name or "")
+            end
+            if not default and (id == "directml" or id == "directml:0") then
+                default = d
+            end
+        end
+    end
+    if default and (req == "auto" or req == "directml") then
+        return tostring(default.id), tostring(default.fullName or default.name or "")
+    end
+    return "", ""
+end
+
 _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     opts = opts or {}
     local requestedParallel = opts.requestedParallel == true
@@ -19051,7 +19088,13 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     end
 
     if backend == "directml" then
-        if route == "dks_direct" then
+        if route == "dks_direct" and opts.directmlAdapterClass ~= "discrete" then
+            -- Concurrent DrumSep jobs on an integrated DirectML adapter lose the
+            -- device ("The GPU will not respond to more commands").
+            policy.sequentialMode = true
+            policy.cap = _sep.SCHEDULER_POLICY.DKS_DIRECT_DIRECTML_MAX_PARALLEL
+            policy.reason = "directml_multi_track"
+        elseif route == "dks_direct" then
             policy.sequentialMode = false
             if opts.longWorkload then
                 policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_LONG_MAX_PARALLEL)
@@ -20118,10 +20161,17 @@ _sep.runSingleTrackSeparation = function(trackList)
             requestedStage2ModelArg
         ))
     end
+    local directmlSchedulerAdapterId, directmlSchedulerAdapterName, directmlSchedulerAdapterClass = "", "", ""
+    if schedulerBackend == "directml" then
+        directmlSchedulerAdapterId, directmlSchedulerAdapterName =
+            _sep.resolveDirectmlSchedulerAdapter(effectiveRunDevice(), RUNTIME_DEVICES or DEVICES)
+        directmlSchedulerAdapterClass = _sep.classifyDirectmlSchedulerAdapter(directmlSchedulerAdapterName)
+    end
     local schedulerPolicy = _sep.resolveSchedulerConcurrencyPolicy({
         route = schedulerRoute,
         stage = schedulerStage,
         backend = schedulerBackend,
+        directmlAdapterClass = directmlSchedulerAdapterClass,
         drumsepSchedulerBackend = drumsepSchedulerBackend,
         drumsepStage2SchedulerBackend = drumsepStage2SchedulerBackend,
         requestedDevice = effectiveRunDevice(),
@@ -20283,6 +20333,9 @@ _sep.runSingleTrackSeparation = function(trackList)
             .. "\nscheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none")
             .. "\nscheduler_policy_reason=" .. tostring(multiTrackQueue.schedulerPolicyReason or "none")
             .. "\nscheduler_policy_long_workload=" .. tostring(multiTrackQueue.schedulerPolicyLongWorkload and "yes" or "no")
+            .. "\nscheduler_policy_directml_adapter=" .. tostring(directmlSchedulerAdapterId or "")
+            .. "\nscheduler_policy_directml_adapter_name=" .. tostring(directmlSchedulerAdapterName or "")
+            .. "\nscheduler_policy_directml_adapter_class=" .. tostring(directmlSchedulerAdapterClass or "")
             .. "\nbench_cpu_cap_env=" .. tostring(benchmarkCpuCapEnv or "")
             .. "\nbench_cpu_cap_requested=" .. tostring(benchmarkCpuCapRequested or benchmarkCpuCapRaw)
             .. "\nbench_cpu_cap_applied=" .. tostring(benchmarkCpuCapApplied or "none")
