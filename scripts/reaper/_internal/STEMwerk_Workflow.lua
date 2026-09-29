@@ -334,7 +334,24 @@ function WORKFLOW.updateProgressFromFile()
     if lastProgress then
         local prevPercent = tonumber(C.progressState.percent) or 0
         local prevStage = tostring(C.progressState.stage or "")
-        C.progressState.percent = lastProgress.percent
+        local workflowSource = tostring(C.progressState.workflowSource or "")
+        -- The drum workflows emit STAGE-LOCAL percentages: Kit Split stage 2 and
+        -- Direct Kit both restart their own counter, so painting them straight
+        -- onto the overall bar makes it jump backwards. Reuse the very same
+        -- normalizer the multi-item queue already applies so both paths agree.
+        -- The raw value is kept for diagnostics and milestone reporting.
+        C.progressState.rawPercent = lastProgress.percent
+        if type(C.normalizeProgressPercent) == "function"
+            and (workflowSource == "dks_extract" or workflowSource == "dks_direct") then
+            C.progressState.percent = C.normalizeProgressPercent(
+                lastProgress.percent,
+                lastProgress.stage,
+                workflowSource,
+                prevPercent
+            )
+        else
+            C.progressState.percent = lastProgress.percent
+        end
         C.progressState.stage = lastProgress.stage
         if lastProgress.percent ~= prevPercent or tostring(lastProgress.stage or "") ~= prevStage then
             touchProgressActivity("progress_update")

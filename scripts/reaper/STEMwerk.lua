@@ -9467,6 +9467,39 @@ end
 -- (Selected device / auto_selected_preferred / normal_workflow_backend_preview_name).
 -- DrumSep-only runs never emit one, so an empty value, a bare device id echo or a
 -- generic placeholder must not be presented as the device that did the work.
+-- Conservative queue ETA: an honest "no estimate yet" beats a confident wrong
+-- one. Returns 0 whenever the signal cannot be trusted -- too early, unknown
+-- work still queued, or no measurable throughput -- and both ETA render sites
+-- already hide the value when it is 0.
+-- Global, not local: this chunk sits at Lua's 200-local ceiling.
+function estimateQueueEta(opts)
+    opts = opts or {}
+    local minElapsedSeconds = 20
+    local minProgressPercent = 10
+    local minReportableEta = 5
+    local totalAudio = tonumber(opts.totalAudioDur or 0) or 0
+    local completedAudio = tonumber(opts.completedAudioDur or 0) or 0
+    local elapsed = tonumber(opts.elapsedSinceFirstJob or 0) or 0
+    local overallProgress = tonumber(opts.overallProgress or 0) or 0
+    local previousEta = tonumber(opts.previousEta or 0) or 0
+
+    if opts.pendingUnknownDuration then return 0 end
+    if elapsed < minElapsedSeconds or overallProgress < minProgressPercent then return 0 end
+    if totalAudio <= 0 or completedAudio <= 0 then return 0 end
+
+    local throughput = completedAudio / elapsed
+    local remaining = totalAudio - completedAudio
+    if throughput <= 0 or remaining <= 0 then return 0 end
+
+    local estimate = remaining / throughput
+    -- Guard against inf/NaN reaching the formatter.
+    if estimate ~= estimate or estimate == math.huge then return 0 end
+    if previousEta > 0 then
+        estimate = previousEta * 0.8 + estimate * 0.2
+    end
+    return math.max(minReportableEta, math.floor(estimate + 0.5))
+end
+
 function resolveResultDeviceName(data)
     local name = tostring((data and data.deviceName) or ""):gsub("^%s+", ""):gsub("%s+$", "")
     if name == "" then return "" end
@@ -17011,6 +17044,7 @@ HELPERS.configure({ makeDir = makeDir, adjustTrackLayout = UI_Window.adjustTrack
 dofile(script_path .. "_internal/STEMwerk_Workflow.lua")
 WORKFLOW.configure({
     progressState                 = progressState,
+    normalizeProgressPercent      = UI_PROGRESS.normalizeMultiTrackProgress,
     GUI                           = GUI,
     T                             = T,
     showMessage                   = showMessage,
@@ -22078,9 +22112,14 @@ function drawMultiTrackProgressWindow()
     local totalAudioDur = 0
     local completedAudioDur = 0
     local activeJob = nil
+    local firstJobStartTime = nil
+    local pendingUnknownDuration = false
 
     for _, job in ipairs(multiTrackQueue.jobs) do
         totalAudioDur = totalAudioDur + (job.audioDuration or 0)
+        if job.startTime and (not firstJobStartTime or job.startTime < firstJobStartTime) then
+            firstJobStartTime = job.startTime
+        end
         if job.done then
             completedJobs = completedJobs + 1
             completedAudioDur = completedAudioDur + (job.audioDuration or 0)
@@ -22090,6 +22129,11 @@ function drawMultiTrackProgressWindow()
             -- Estimate completed audio based on progress %
             completedAudioDur = completedAudioDur + (job.audioDuration or 0) * (job.percent or 0) / 100
         end
+        -- A job whose length REAPER could not report makes the remaining-work
+        -- term meaningless, so no ETA is claimed at all while one is pending.
+        if not job.done and (tonumber(job.audioDuration or 0) or 0) <= 0 then
+            pendingUnknownDuration = true
+        end
     end
 
     -- Calculate processing speed (realtime factor)
@@ -22098,16 +22142,23 @@ function drawMultiTrackProgressWindow()
         realtimeFactor = completedAudioDur / globalElapsed
     end
 
-    -- Estimate ETA
-    local eta = 0
-    local remainingAudio = totalAudioDur - completedAudioDur
-    if realtimeFactor > 0 then
-        eta = remainingAudio / realtimeFactor
-    elseif globalElapsed > 0 and overallProgress > 5 then
-        -- Fallback: estimate from progress %
-        local totalEstimate = globalElapsed * 100 / overallProgress
-        eta = totalEstimate - globalElapsed
+    -- Estimate ETA. Throughput is measured from the first job that actually
+    -- started, so queue setup and model load do not deflate it, and the estimate
+    -- is reseeded whenever a job finishes because the completed-audio term jumps
+    -- in one frame at that boundary.
+    if multiTrackQueue.etaCompletedJobs ~= completedJobs then
+        multiTrackQueue.etaCompletedJobs = completedJobs
+        multiTrackQueue.etaSmoothed = nil
     end
+    local eta = estimateQueueEta({
+        totalAudioDur = totalAudioDur,
+        completedAudioDur = completedAudioDur,
+        elapsedSinceFirstJob = (firstJobStartTime and (os.time() - firstJobStartTime)) or 0,
+        overallProgress = overallProgress,
+        pendingUnknownDuration = pendingUnknownDuration,
+        previousEta = multiTrackQueue.etaSmoothed,
+    })
+    multiTrackQueue.etaSmoothed = (eta > 0) and eta or nil
 
     -- Keep the UI minimal in terminal view (like the single-track Processing window).
     local summaryLine1, summaryLine2 = nil, nil
