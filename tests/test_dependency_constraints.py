@@ -8483,10 +8483,18 @@ def test_windows_installer_uses_five_step_progress_and_drumkit_finish_copy():
     assert "FindLastPos('[2/5]', Text)" in script
     assert "FindLastPos('[1/5]', Text)" in script
     assert "What was installed:" in script
-    assert "Installed locations:" in script
+    # "Installed locations:" was a separate heading repeating the same three
+    # items "What was installed:" already named; P2 merged them into one list
+    # (each item's path/size folded directly under it) after live validation
+    # showed the duplication was what pushed the size/FFmpeg/backend detail
+    # far enough down the page to be clipped behind the Finished-page RunList.
     assert "Next step:" in script
-    assert "%APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper" in script
-    assert "%LOCALAPPDATA%\\STEMwerk" in script
+    # Live validation found these literal %APPDATA%/%LOCALAPPDATA% placeholders
+    # displayed unresolved next to otherwise-real C:\Users\... paths; P2 fixed
+    # them to use the same resolved-path accessors ({app}, GetRuntimeBasePath)
+    # every other part of the wizard already uses.
+    assert "ExpandConstant('{app}')" in script
+    assert "GetRuntimeBasePath" in script
 
 
 def test_windows_update_patch_forces_current_runtime_repair_after_script_update():

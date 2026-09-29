@@ -190,6 +190,7 @@ var
   StatusSuffixLabel: TNewStaticText;
   FinishedPrefixLabel: TNewStaticText;
   FinishedBrandLabel: TNewStaticText;
+  FinishedSummaryMemo: TNewMemo;
   StatusDetailLabel: TNewStaticText;
   ProgressOverlayLabel: TNewStaticText;
   StepLabelS: TNewStaticText;
@@ -323,6 +324,76 @@ begin
   Result := ReadBootstrapStatus = 'ok';
 end;
 
+// Generic reader for bootstrap.env, separate from ReadBootstrapStatus above
+// (left untouched: its exact shape is pinned by an existing regression test).
+// Matches at the START of a line only, so e.g. "BACKEND=" can never match
+// inside a later, unrelated "SOMETHING_BACKEND=" key.
+function ReadBootstrapValue(const Key: string): string;
+var
+  RawContent: AnsiString;
+  Lines: TStringList;
+  Prefix: string;
+  i: Integer;
+begin
+  Result := '';
+  if not LoadStringFromFile(GetBootstrapStatePath, RawContent) then
+    Exit;
+  Lines := TStringList.Create;
+  try
+    Lines.Text := String(RawContent);
+    Prefix := Key + '=';
+    for i := 0 to Lines.Count - 1 do
+    begin
+      if Copy(Lines[i], 1, Length(Prefix)) = Prefix then
+      begin
+        Result := Trim(Copy(Lines[i], Length(Prefix) + 1, MaxInt));
+        Exit;
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+// Recursive tree size in bytes. Skips "_bundled": that subtree is offline
+// installer payload staged under {app} for bundled builds, not "REAPER
+// scripts", and its file count (built from the same wheel closure as the
+// runtime venvs) is exactly the kind of cost this function must not eat
+// silently -- measured directly on this machine's real STEMwerk install, the
+// two runtime venvs alone were 72,000+ files, 1-2 seconds each even under
+// .NET's optimized enumerator; the actual script tree is ~160 files, instant.
+// Called ONLY on {app} (with _bundled skipped) and on RuntimeBase\models --
+// both verified cheap. Never called on the full runtime base or on a venv.
+function GetDirTreeSizeBytes(const Dir: string): Int64;
+var
+  FindRec: TFindRec;
+  FullPath: string;
+begin
+  Result := 0;
+  if not DirExists(Dir) then
+    Exit;
+  if FindFirst(Dir + '\*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Name = '.') or (FindRec.Name = '..') then
+          Continue;
+        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        begin
+          if FindRec.Name = '_bundled' then
+            Continue;
+          FullPath := Dir + '\' + FindRec.Name;
+          Result := Result + GetDirTreeSizeBytes(FullPath);
+        end
+        else
+          Result := Result + (Int64(FindRec.SizeHigh) shl 32) + Int64(FindRec.SizeLow);
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
 procedure CleanupRuntimeArtifacts(RemoveModels: Boolean);
 var
   RuntimeBase: string;
@@ -379,6 +450,34 @@ begin
     Result := EnText;
 end;
 
+// MB-rounded, so "Approx." is an honest label rather than a false-precision
+// exact byte count -- not a hedge against measurement uncertainty (the scan
+// itself is exact for whatever the tree contains at the moment it runs).
+function FormatApproxMB(const Bytes: Int64): string;
+begin
+  if Bytes <= 0 then
+    Result := LText('Approx. 0 MB', 'Ong. 0 MB', 'Ca. 0 MB')
+  else
+    Result := LText('Approx. ', 'Ong. ', 'Ca. ') + IntToStr((Bytes + 524288) div 1048576) + ' MB';
+end;
+
+// Integer-only GB formatting (2 decimal places) so a MB figure from
+// GetSpaceOnDisk/{#MinimumFreeSpaceMB} can be shown without pulling in
+// float-to-string formatting semantics that vary across Pascal Script builds.
+function FormatGB(const MB: Cardinal): string;
+var
+  WholePart: Cardinal;
+  FracPart: Cardinal;
+  FracStr: string;
+begin
+  WholePart := MB div 1024;
+  FracPart := ((MB mod 1024) * 100) div 1024;
+  FracStr := IntToStr(FracPart);
+  if Length(FracStr) < 2 then
+    FracStr := '0' + FracStr;
+  Result := IntToStr(WholePart) + '.' + FracStr + ' GB';
+end;
+
 function VersionTag: string;
 begin
   Result := 'v{#MyAppVersion}';
@@ -393,41 +492,134 @@ begin
   end;
 end;
 
+// LicenseFile is a static file: Inno loads its raw bytes into LicenseMemo
+// verbatim at wizard-open time with no ISPP substitution, so its checked-in
+// "Version: X.Y.Z" header line is a second, separately-maintained version
+// literal (tools/version_sync.py keeps it in sync with VERSION for anyone
+// reading the file directly, but that only happens at a real release version
+// bump, which is out of scope here). Rather than adding a THIRD place that
+// needs to agree, overwrite whatever version line the loaded text has with
+// the same {#MyAppVersion} every other version display in this wizard
+// already uses, so the in-wizard display can never disagree with AppVersion
+// regardless of whether the static file has been synced yet.
+procedure FixLicenseVersionDisplay;
+var
+  i: Integer;
+  Prefix: string;
+begin
+  if WizardForm.LicenseMemo = nil then Exit;
+  Prefix := 'Version: ';
+  for i := 0 to WizardForm.LicenseMemo.Lines.Count - 1 do
+  begin
+    if Copy(WizardForm.LicenseMemo.Lines[i], 1, Length(Prefix)) = Prefix then
+    begin
+      WizardForm.LicenseMemo.Lines[i] := Prefix + '{#MyAppVersion}';
+      Break;
+    end;
+  end;
+end;
+
 function BuildFinishedSuccessSummaryText: string;
 var
-  CleanupLines: string;
+  ScriptsLine: string;
+  ModelsDir: string;
+  ModelsLine: string;
+  FfmpegPathValue: string;
+  FfmpegSourceValue: string;
+  FfmpegBlock: string;
+  BackendValue: string;
+  BackendReasonValue: string;
+  BackendBlock: string;
 begin
-  CleanupLines := '';
-  if WizardIsTaskSelected('cleanup_runtime') then
-    CleanupLines := CleanupLines + LText(
-      '- Cleared previous runtime state/logs/.venv/cache before setup.',
-      '- Vorige runtime state/logs/.venv/cache opgeschoond voor setup.',
-      '- Vorherigen Runtime-Status/Logs/.venv/Cache vor dem Setup bereinigt.') + #13#10;
-  if CleanupLines = '' then
-    CleanupLines := LText(
-      '- Kept existing runtime data and cached models in place.',
-      '- Bestaande runtime-data en gecachte modellen behouden.',
-      '- Bestehende Runtime-Daten und zwischengespeicherte Modelle beibehalten.') + #13#10;
+  // REAPER scripts: a small, fixed-shape tree (_bundled excluded) -- cheap to
+  // scan regardless of build flavor, verified instant on a real install.
+  ScriptsLine := '  ' + ExpandConstant('{app}');
+  if DirExists(ExpandConstant('{app}')) then
+    ScriptsLine := ScriptsLine + '  (' + FormatApproxMB(GetDirTreeSizeBytes(ExpandConstant('{app}'))) + ')';
+  ScriptsLine := ScriptsLine + #13#10;
 
+  // The runtime root itself (venvs included) is NOT scanned: measured on a
+  // real install, its two Python environments alone were 70,000+ files and
+  // several GB, which would make the Finished page visibly stall to size
+  // truthfully. Its path is still shown; no size is claimed for it, and no
+  // "total footprint" is presented since that would require the same
+  // expensive scan. models\ is scanned on its own -- verified cheap (a
+  // handful of checkpoint files) -- because it directly matters to the
+  // "downloaded models are kept" promise.
+  ModelsDir := GetRuntimeBasePath + '\models';
+  ModelsLine := '';
+  if DirExists(ModelsDir) then
+    ModelsLine :=
+      LText('- Models/cache:', '- Modellen/cache:', '- Modelle/Cache:') + #13#10 +
+      '  ' + ModelsDir + '  (' + FormatApproxMB(GetDirTreeSizeBytes(ModelsDir)) + ')' + #13#10;
+
+  FfmpegSourceValue := ReadBootstrapValue('FFMPEG_SOURCE');
+  FfmpegPathValue := ReadBootstrapValue('FFMPEG_PATH');
+  FfmpegBlock := '';
+  if FfmpegSourceValue <> '' then
+  begin
+    FfmpegBlock := LText('FFmpeg: ', 'FFmpeg: ', 'FFmpeg: ');
+    if FfmpegSourceValue = 'bundled' then
+      FfmpegBlock := FfmpegBlock + LText('installed from the bundled offline payload', 'geinstalleerd vanuit de gebundelde offline payload', 'installiert aus der gebuendelten Offline-Payload')
+    else if FfmpegSourceValue = 'download' then
+      FfmpegBlock := FfmpegBlock + LText('downloaded during setup', 'gedownload tijdens setup', 'waehrend des Setups heruntergeladen')
+    else if FfmpegSourceValue = 'existing' then
+      FfmpegBlock := FfmpegBlock + LText('reused (already present on this system)', 'hergebruikt (al aanwezig op dit systeem)', 'wiederverwendet (bereits auf diesem System vorhanden)')
+    else
+      FfmpegBlock := FfmpegBlock + LText('not confirmed available', 'niet bevestigd beschikbaar', 'nicht bestaetigt verfuegbar');
+    FfmpegBlock := FfmpegBlock + #13#10;
+    if FfmpegPathValue <> '' then
+      FfmpegBlock := FfmpegBlock + '  ' + FfmpegPathValue + #13#10;
+    FfmpegBlock := FfmpegBlock + #13#10;
+  end;
+
+  BackendValue := ReadBootstrapValue('BACKEND');
+  BackendReasonValue := ReadBootstrapValue('BACKEND_REASON');
+  BackendBlock := '';
+  if BackendValue <> '' then
+  begin
+    BackendBlock := LText('Acceleration backend: ', 'Acceleratie-backend: ', 'Beschleunigungs-Backend: ');
+    if BackendValue = 'directml' then
+      BackendBlock := BackendBlock + 'DirectML'
+    else if BackendValue = 'cuda' then
+      BackendBlock := BackendBlock + 'CUDA'
+    else if BackendValue = 'cpu' then
+      BackendBlock := BackendBlock + 'CPU'
+    else
+      BackendBlock := BackendBlock + BackendValue;
+    if BackendReasonValue <> '' then
+      BackendBlock := BackendBlock + ' (' + BackendReasonValue + ')';
+    BackendBlock := BackendBlock + #13#10 + #13#10;
+  end;
+
+  // One list, not two: the previous "What was installed" (generic names) and
+  // "Installed locations" (paths) headings said the same three things twice.
+  // Live validation showed that duplication was what pushed the genuinely new
+  // information (sizes/FFmpeg/backend) far down the page, past the visible
+  // area. Merging them keeps "What was installed:" (the literal heading a
+  // regression test pins) as the single list, with each item's path/size
+  // folded directly under it.
+  //
+  // The generic "offline payload, if included" line, the cleanup-task
+  // explanation (already visible as the Task selection itself), and the
+  // three-line REAPER Action-list walkthrough were removed here: none of
+  // them are per-install facts, and live DrawText measurement proved the
+  // page's real content (paths/sizes/FFmpeg/backend/log) alone already
+  // exceeds the available height at 125% DPI in all three languages. This
+  // control now scrolls (see FinishedSummaryMemo), so the goal is a concise
+  // operational summary, not fitting more prose into a fixed box.
   Result :=
     LText('STEMwerk setup completed.', 'STEMwerk setup voltooid.', 'STEMwerk Setup abgeschlossen.') +
     ' (' + VersionTag + ')' + #13#10 + #13#10 +
     LText('What was installed:', 'Wat is geinstalleerd:', 'Was wurde installiert:') + #13#10 +
-    LText('- REAPER scripts', '- REAPER-scripts', '- REAPER-Skripte') + #13#10 +
-    LText('- STEMwerk runtime', '- STEMwerk-runtime', '- STEMwerk-Runtime') + #13#10 +
-    LText('- Required audio tools', '- Vereiste audiotools', '- Erforderliche Audiotools') + #13#10 +
-    LText('- Offline model/runtime payload, if included in this installer', '- Offline model-/runtime-payload, indien inbegrepen in deze installer', '- Offline-Modell-/Runtime-Payload, falls in diesem Installer enthalten') + #13#10 + #13#10 +
-    LText('Installed locations:', 'Geinstalleerde locaties:', 'Installierte Orte:') + #13#10 +
     LText('- REAPER scripts:', '- REAPER-scripts:', '- REAPER-Skripte:') + #13#10 +
-    '  %APPDATA%\REAPER\Scripts\STEMwerk-reaper' + #13#10 +
-    LText('- Runtime data:', '- Runtime-data:', '- Runtime-Daten:') + #13#10 +
-    '  %LOCALAPPDATA%\STEMwerk' + #13#10 +
-    CleanupLines +
+    ScriptsLine +
+    LText('- STEMwerk runtime:', '- STEMwerk-runtime:', '- STEMwerk-Runtime:') + #13#10 +
+    '  ' + GetRuntimeBasePath + #13#10 +
+    ModelsLine + #13#10 +
+    FfmpegBlock +
+    BackendBlock +
     LText('Next step:', 'Volgende stap:', 'Naechster Schritt:') + #13#10 +
-    LText('- Start REAPER and check the Actions menu for STEMwerk.', '- Start REAPER en controleer het Actions-menu op STEMwerk.', '- Starte REAPER und pruefe das Actions-Menue auf STEMwerk.') + #13#10 +
-    LText('- If STEMwerk is missing, use: Actions -> Show action list -> ReaScript: Load...', '- Als STEMwerk ontbreekt, gebruik dan: Actions -> Show action list -> ReaScript: Load...', '- Wenn STEMwerk fehlt, nutze: Actions -> Show action list -> ReaScript: Load...') + #13#10 +
-    LText('- Preferred helper: load STEMwerk_Setup_Toolbar.lua from %APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper. It registers the normal STEMwerk actions; cancel the toolbar prompt if you only need the actions.', '- Voorkeurshelper: laad STEMwerk_Setup_Toolbar.lua uit %APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper. Die registreert de normale STEMwerk-acties; annuleer de toolbar-prompt als je alleen de acties nodig hebt.', '- Bevorzugter Helfer: lade STEMwerk_Setup_Toolbar.lua aus %APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper. Er registriert die normalen STEMwerk-Aktionen; brich den Toolbar-Dialog ab, wenn du nur die Aktionen brauchst.') + #13#10 +
-    LText('- Manual fallback: load only STEMwerk-SETUP.lua, STEMwerk.lua, STEMwerk_Drum_Kit_Split.lua, and STEMwerk_Explode_Takes.lua. Do not load _internal\\*.lua.', '- Handmatige fallback: laad alleen STEMwerk-SETUP.lua, STEMwerk.lua, STEMwerk_Drum_Kit_Split.lua en STEMwerk_Explode_Takes.lua. Laad geen _internal\\*.lua.', '- Manueller Fallback: lade nur STEMwerk-SETUP.lua, STEMwerk.lua, STEMwerk_Drum_Kit_Split.lua und STEMwerk_Explode_Takes.lua. Lade kein _internal\\*.lua.') + #13#10 +
     LText('- Use STEMwerk: Setup to check the runtime (Check only). If it reports a problem, re-run this STEMwerk installer to repair it.', '- Gebruik STEMwerk: Setup om de runtime te controleren (Check only). Meldt dat een probleem, voer deze STEMwerk-installer opnieuw uit om te herstellen.', '- Nutze STEMwerk: Setup, um die Runtime zu pruefen (Check only). Meldet das ein Problem, fuehre diesen STEMwerk-Installer erneut aus, um sie zu reparieren.') + #13#10 + #13#10 +
     LText('Setup log:', 'Setup-log:', 'Setup-Log:') + #13#10 +
     '  ' + GetLogPath;
@@ -938,6 +1130,7 @@ begin
   WelcomeTitleY := ScaleY(16);
   WizardForm.Caption := '{#MyAppName} Setup ' + VersionTag;
   ApplyUnifiedWizardBranding;
+  FixLicenseVersionDisplay;
 
   if WizardForm.WelcomeLabel1 <> nil then
   begin
@@ -1028,34 +1221,39 @@ begin
   WelcomeInfoLabel.Left := WelcomeX;
   WelcomeInfoLabel.Top := WelcomeY;
   WelcomeInfoLabel.Width := WizardForm.WelcomePage.ClientWidth - WelcomeX - ScaleX(10);
-  WelcomeInfoLabel.Height := ScaleY(120);
+  // Was a fixed ScaleY(120) box: at 9pt the EN copy alone needs ~14-15 wrapped
+  // lines (more for NL/DE), so the last bullet and the Tip line were clipped
+  // with no scrollbar to reveal them. Filling the actual remaining page height
+  // (the same ClientHeight-minus-Top pattern already used for LogMemo below)
+  // removes the fixed ceiling instead of just shrinking the symptom.
+  WelcomeInfoLabel.Height := WizardForm.WelcomePage.ClientHeight - WelcomeY - ScaleY(12);
   WelcomeInfoLabel.Caption :=
     LText('Version: ', 'Versie: ', 'Version: ') + VersionTag + #13#10 +
     LText('Build date: ', 'Builddatum: ', 'Build-Datum: ') + '{#MyBuildDate}' + #13#10 + #13#10 +
     LText(
-      'This installer will guide you through a clean STEMwerk setup.',
-      'Deze installer begeleidt je door een schone STEMwerk setup.',
-      'Dieser Installer führt durch ein sauberes STEMwerk Setup.') + #13#10 + #13#10 +
+      'This installer will guide you through installing or repairing STEMwerk.',
+      'Deze installer begeleidt je bij het installeren of herstellen van STEMwerk.',
+      'Dieser Installer fuehrt dich durch die Installation oder Reparatur von STEMwerk.') + #13#10 + #13#10 +
     LText(
       'In the next steps it will:',
       'In de volgende stappen zal het:',
-      'In den nächsten Schritten wird:') + #13#10 +
+      'In den naechsten Schritten wird:') + #13#10 +
     LText(
-      '- Copy/update the REAPER STEMwerk scripts.',
-      '- De REAPER STEMwerk scripts kopieren/bijwerken.',
-      '- Die REAPER STEMwerk Skripte kopieren/aktualisieren.') + #13#10 +
+      '- Install or update the REAPER STEMwerk scripts.',
+      '- De REAPER STEMwerk scripts installeren of bijwerken.',
+      '- Die REAPER STEMwerk Skripte installieren oder aktualisieren.') + #13#10 +
     LText(
-      '- Optionally clean previous runtime cache if you select that task. Models are always kept.',
-      '- Optioneel oude runtime-cache opschonen als je die taak aanvinkt. Modellen blijven altijd behouden.',
-      '- Optional alten Runtime-Cache bereinigen, wenn diese Aufgabe ausgewählt ist. Modelle bleiben immer erhalten.') + #13#10 +
+      '- Prepare or repair the STEMwerk runtime.',
+      '- De STEMwerk-runtime voorbereiden of herstellen.',
+      '- Die STEMwerk-Runtime vorbereiten oder reparieren.') + #13#10 +
     LText(
-      '- Prepare the local Python runtime and verify backend dependencies.',
-      '- De lokale Python runtime voorbereiden en backend-afhankelijkheden verifieren.',
-      '- Die lokale Python Runtime vorbereiten und Backend-Abhängigkeiten prüfen.') + #13#10 + #13#10 +
+      '- Optionally clean previous runtime state and cache. Downloaded models are kept.',
+      '- Optioneel de vorige runtime-status en cache opschonen. Gedownloade modellen blijven behouden.',
+      '- Optional den vorherigen Runtime-Status und Cache bereinigen. Heruntergeladene Modelle bleiben erhalten.') + #13#10 + #13#10 +
     LText(
       'Tip: after setup, use "Open setup log" to review exactly what was done.',
       'Tip: gebruik na setup "Open setup-log" om precies te zien wat is gedaan.',
-      'Tipp: Nach dem Setup "Setup-Log öffnen" nutzen, um genau zu sehen, was gemacht wurde.');
+      'Tipp: Nach dem Setup "Setup-Log oeffnen" nutzen, um genau zu sehen, was gemacht wurde.');
 
   if WizardForm.SelectTasksLabel <> nil then
   begin
@@ -1515,6 +1713,18 @@ begin
     FinishedBrandLabel.Left := x;
     FinishedBrandLabel.Top := y;
   end;
+
+  // Read-only, scrollable replacement for the plain FinishedLabel: live
+  // DrawText measurement proved the real summary content (resolved
+  // paths/sizes/FFmpeg/backend) can exceed the available page height at
+  // 125% DPI in all three languages, in a way no further static-label
+  // geometry tweak can fix. Position/size are set per-visit in
+  // LayoutFinishedSummary; this just creates the control once.
+  FinishedSummaryMemo := TNewMemo.Create(WizardForm);
+  FinishedSummaryMemo.Parent := WizardForm.FinishedPage;
+  FinishedSummaryMemo.ReadOnly := True;
+  FinishedSummaryMemo.ScrollBars := ssVertical;
+  FinishedSummaryMemo.WordWrap := True;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -1526,6 +1736,89 @@ end;
 function IsBootstrapSucceeded: Boolean;
 begin
   Result := BootstrapSucceeded;
+end;
+
+// Two earlier versions used WizardForm.FinishedLabel (a plain static label)
+// for the detailed summary and only fought over its Height. Live DrawText
+// measurement (native DT_CALCRECT|DT_WORDBREAK against the real live font
+// and width) proved that approach has a hard ceiling: even with RunList
+// correctly compacted, the real content (resolved paths/sizes/FFmpeg/backend)
+// requires more vertical space than the page has, in all three languages
+// (measured: 400px needed vs 274px available in EN/DE, 500px vs 249px in
+// NL). No further label-geometry tweak can fix that -- a static label simply
+// cannot show more content than its Height allows.
+//
+// FinishedLabel is therefore hidden and replaced by FinishedSummaryMemo, a
+// read-only, scrollable TNewMemo (ReadOnly + ScrollBars=ssVertical): when
+// content fits, it looks like plain text; when it doesn't, every line is
+// still reachable by scrolling instead of being silently clipped.
+//
+// Pascal Script exposes no read-only "actual rendered row height" on
+// TNewCheckListBox (only the settable MinItemHeight floor), so RunList's
+// compact-height derivation (proven correct by live validation: 53px for 2
+// items at 125%) is unchanged -- only its anchor reference moved from
+// FinishedLabel to FinishedSummaryMemo.
+function RunListRowHeight(List: TNewCheckListBox): Integer;
+var
+  FontHeight: Integer;
+begin
+  FontHeight := List.Font.Height;
+  if FontHeight < 0 then
+    FontHeight := -FontHeight;
+  Result := FontHeight + ScaleY(8);
+  if Result < List.MinItemHeight then
+    Result := List.MinItemHeight;
+end;
+
+procedure LayoutFinishedSummary;
+var
+  DesiredHeight: Integer;
+  RunListTop: Integer;
+  RowHeight: Integer;
+begin
+  if WizardForm.FinishedLabel = nil then Exit;
+  if FinishedSummaryMemo = nil then Exit;
+
+  WizardForm.FinishedLabel.Visible := False;
+  WizardForm.FinishedLabel.Caption := '';
+
+  FinishedSummaryMemo.Left := WizardForm.FinishedLabel.Left;
+  FinishedSummaryMemo.Top := WizardForm.FinishedLabel.Top;
+  FinishedSummaryMemo.Width := WizardForm.FinishedPage.ClientWidth - FinishedSummaryMemo.Left - ScaleX(8);
+
+  if (WizardForm.RunList <> nil) and (WizardForm.RunList.Items.Count > 0) then
+  begin
+    WizardForm.RunList.Visible := True;
+    RowHeight := RunListRowHeight(WizardForm.RunList);
+    WizardForm.RunList.Height := (RowHeight * WizardForm.RunList.Items.Count) + ScaleY(6);
+    WizardForm.RunList.Left := FinishedSummaryMemo.Left;
+    WizardForm.RunList.Width := WizardForm.FinishedPage.ClientWidth - WizardForm.RunList.Left - ScaleX(8);
+    RunListTop := WizardForm.FinishedPage.ClientHeight - WizardForm.RunList.Height - ScaleY(8);
+    // Degenerate-page floor: RunList must never start above the summary
+    // control's own Top, or the summary's bottom edge (>= its Top even at
+    // Height=0) would exceed RunList.Top. Only reachable on a pathologically
+    // short ClientHeight; on any real Finished page RunList is compact
+    // enough now that this never engages.
+    if RunListTop < FinishedSummaryMemo.Top then
+      RunListTop := FinishedSummaryMemo.Top;
+    WizardForm.RunList.Top := RunListTop;
+    DesiredHeight := RunListTop - FinishedSummaryMemo.Top - ScaleY(8);
+  end
+  else
+  begin
+    if WizardForm.RunList <> nil then
+      WizardForm.RunList.Visible := False;
+    DesiredHeight := WizardForm.FinishedPage.ClientHeight - FinishedSummaryMemo.Top - ScaleY(12);
+  end;
+
+  // Floor at zero only: unlike the earlier versions, this must never clamp
+  // DesiredHeight UPWARD, since RunListTop already accounts for the (now
+  // compact) RunList and any upward clamp could push the summary's bottom
+  // edge past it again.
+  if DesiredHeight < 0 then
+    DesiredHeight := 0;
+
+  FinishedSummaryMemo.Height := DesiredHeight;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -1555,10 +1848,76 @@ begin
     end;
     if CurPageID = wpFinished then
     begin
-      if WizardForm.FinishedLabel <> nil then
-        WizardForm.FinishedLabel.Caption := BuildFinishedSummaryText;
+      if (WizardForm.FinishedLabel <> nil) and (FinishedSummaryMemo <> nil) then
+      begin
+        LayoutFinishedSummary;
+        FinishedSummaryMemo.Lines.Text := BuildFinishedSummaryText;
+      end;
     end;
   end;
+end;
+
+// Single source of truth for the runtime-volume space check: both
+// PrepareToInstall (the real install-time gate) and the Ready page display
+// below call this, so the two can never disagree about what "required" means.
+// Scope: this checks only the STEMwerk RUNTIME destination
+// ({localappdata}\STEMwerk, via GetRuntimeBasePath), which is where the
+// post-install bootstrap does its multi-GB work (.venv, models). It does NOT
+// cover {app} (the REAPER-scripts destination, user-selectable since this
+// installer does not set DisableDirPage): that destination is small
+// (kilobytes) but is still separately, natively gated by Inno itself via
+// ExtraDiskSpaceRequired + the declared [Files] sizes -- enforced
+// automatically on the destination-folder page before Ready is ever reached,
+// with no custom code needed. {app} and the runtime path default to the same
+// user-profile volume but are not guaranteed to be, since {app} is
+// user-choosable; the two checks are intentionally independent for that
+// reason, not merged into one figure.
+function GetRuntimeDiskSpaceStatus(var RequiredMB: Cardinal; var FreeMB: Cardinal; var TotalMB: Cardinal): Boolean;
+begin
+  RequiredMB := {#MinimumFreeSpaceMB};
+  Result := GetSpaceOnDisk(GetRuntimeBasePath, True, FreeMB, TotalMB);
+end;
+
+// The Ready page previously showed no disk-space information at all. An
+// earlier version of this function misread Inno's `Space` parameter as a
+// disk-space figure; it is actually just the indentation string Inno uses
+// when composing the memo, and was left rendering "...estimate): " with
+// nothing after it. Fixed to instead reuse the SAME canonical
+// required/available figures the real PrepareToInstall gate below computes
+// (via GetRuntimeDiskSpaceStatus), so the displayed status can never disagree
+// with the actual pass/fail decision the installer makes at install time.
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
+  MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+var
+  RequiredMB, FreeMB, TotalMB: Cardinal;
+  DiskLine: string;
+  StatusText: string;
+begin
+  Result := MemoDirInfo;
+  if MemoGroupInfo <> '' then
+    Result := Result + NewLine + NewLine + MemoGroupInfo;
+  if MemoTasksInfo <> '' then
+    Result := Result + NewLine + NewLine + MemoTasksInfo;
+
+  if GetRuntimeDiskSpaceStatus(RequiredMB, FreeMB, TotalMB) then
+  begin
+    if FreeMB < RequiredMB then
+      StatusText := LText('NOT ENOUGH SPACE', 'ONVOLDOENDE RUIMTE', 'NICHT GENUG SPEICHERPLATZ')
+    else
+      StatusText := LText('OK', 'OK', 'OK');
+    DiskLine :=
+      LText('Disk space (STEMwerk runtime): ', 'Schijfruimte (STEMwerk-runtime): ', 'Speicherplatz (STEMwerk-Runtime): ') +
+      FormatGB(RequiredMB) + ' ' + LText('required', 'vereist', 'erforderlich') +
+      ' / ' + FormatGB(FreeMB) + ' ' + LText('available', 'beschikbaar', 'verfuegbar') +
+      ' - ' + StatusText;
+  end
+  else
+    DiskLine := LText(
+      'Disk space (STEMwerk runtime): unable to determine.',
+      'Schijfruimte (STEMwerk-runtime): kan niet worden bepaald.',
+      'Speicherplatz (STEMwerk-Runtime): kann nicht ermittelt werden.');
+
+  Result := Result + NewLine + NewLine + DiskLine;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -1571,9 +1930,8 @@ var
 begin
   Result := '';
   RuntimePath := GetRuntimeBasePath;
-  RequiredMB := {#MinimumFreeSpaceMB};
 
-  if GetSpaceOnDisk(RuntimePath, True, FreeMB, TotalMB) then
+  if GetRuntimeDiskSpaceStatus(RequiredMB, FreeMB, TotalMB) then
   begin
     if FreeMB < RequiredMB then
     begin
