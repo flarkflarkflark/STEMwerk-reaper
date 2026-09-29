@@ -369,6 +369,7 @@ def _uvr_equivalent_mdxc_reconstruction(concrete, mix):
     CUDA, ROCm, and MPS.
     """
     import torch
+    from tqdm import tqdm
 
     try:
         num_stems = concrete.model_run.num_target_instruments
@@ -396,8 +397,15 @@ def _uvr_equivalent_mdxc_reconstruction(concrete, mix):
     overlap_width = chunk_size - hop_size
     accumulator = torch.zeros(num_stems, 2, overlap_width) if num_stems > 1 else torch.zeros(2, overlap_width)
 
+    # tqdm only wraps the iterable: iteration count, order and every tensor
+    # operation below are untouched. It restores the real per-batch progress
+    # audio-separator's own MDXC path emits, which this UVR-equivalent
+    # reconstruction otherwise leaves silent -- the caller scrapes that same
+    # "NN%|" format. Its 100% means "inference loop done", not "job done"; the
+    # caller maps it into the reserved 1..90 band so writing keeps 95 and only
+    # genuine completion reaches 100.
     with torch.no_grad():
-        for batch in batches:
+        for batch in tqdm(batches):
             single_batch_result = concrete.model_run(batch.to(concrete.torch_device))
             for individual_output in single_batch_result:
                 individual_output_cpu = individual_output.cpu()

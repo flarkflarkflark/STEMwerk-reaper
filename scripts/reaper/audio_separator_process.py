@@ -3087,6 +3087,17 @@ def _run_direct_dks_drumsep_helper(
             return None
         return max(0, min(99, int(matches[-1].group(1))))
 
+    def helper_inference_band_percent(raw_percent: int) -> int:
+        """Map the helper's inference progress into the reserved 1..90 band.
+
+        The helper's tqdm reaching 100% means its inference loop finished, not
+        that the job did: reconstruction and six WAV writes still follow. 95 is
+        owned by "Writing drum tracks" and 100 by genuine completion, so helper
+        progress must never present itself as either.
+        """
+        bounded = max(0, min(99, int(raw_percent)))
+        return max(1, min(90, 1 + (bounded * 89) // 99))
+
     def helper_file_signature(path: Path) -> Tuple[int, int]:
         try:
             stat = path.stat()
@@ -3138,7 +3149,7 @@ def _run_direct_dks_drumsep_helper(
                 elapsed = int(now - start_time)
                 percent = min(12, 1 + elapsed // 10)
             else:
-                percent = observed_progress
+                percent = helper_inference_band_percent(observed_progress)
             if percent != last_percent:
                 print(f"PROGRESS:{percent}:Splitting drum kit...", flush=True)
                 last_percent = percent
