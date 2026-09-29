@@ -5995,6 +5995,28 @@ def test_setup_internal_luac_compiles_under_reaper_limits():
     assert result.returncode == 0, result.stderr or result.stdout
 
 
+def test_main_script_luac_compiles_under_reaper_limits():
+    """STEMwerk.lua sits just under Lua's hard ceiling of 200 top-level locals,
+    so one more `local` in the main chunk stops the whole script compiling --
+    a total product failure that no behavioural test would reach, because the
+    file never loads. Same luac -p mechanism as the Setup_Internal guard above.
+    """
+    luac = shutil.which("luac")
+    if not luac:
+        pytest.skip("luac not available")
+    result = subprocess.run(
+        [luac, "-p", "scripts/reaper/STEMwerk.lua"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = result.stderr or result.stdout
+    assert result.returncode == 0 and "too many local variables" not in output, (
+        "STEMwerk.lua no longer compiles; if this mentions 'too many local variables', "
+        "make the newly added top-level function a global instead of a local.\n" + output
+    )
+
+
 def test_support_bundle_windows_zip_helper_prefers_python_and_writes_clean_entries(tmp_path):
     script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
 
@@ -7805,12 +7827,16 @@ def test_result_window_keeps_method_line_and_uses_runtime_metadata_sanitizer():
     assert 'data.effectiveDevice = tostring((state and (state._effectiveDevice or state._drumsepHelperDeviceArg)) or "")' in script
     assert 'function sanitizeUserFacingMethodLabel(candidate)' in script
     assert 'function resolveSingleTrackMethodLabel(data)' in script
-    assert 'if methodLabel == "CPU" then return "CPU" end' in script
-    assert 'if methodLabel ~= "" then return "GPU" end' in script
+    # Method (CPU vs GPU), Backend (the implementation) and Device (only when
+    # trustworthy) are resolved once and shared by the single-item and
+    # multi-item branches, so their wording cannot diverge.
+    assert 'function resolveResultReportingTriple(data)' in script
+    assert 'if label == cpuLabel then return cpuLabel, "", "" end' in script
+    assert 'local methodLabel = resolveResultReportingTriple(data)' in script
     assert 'return sanitizeUserFacingMethodLabel(data and data.methodLabel or "")' in script
-    assert 'string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)' in script
-    assert 'local methodLabel = resolveSingleTrackMethodLabel(data)' in script
-    assert 'line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)' in script
+    assert 'string.format(trSafeValue("result_method_line", "Method: %s"), method)' in script
+    assert 'local methodSuffix, methodDetail = resultMethodReportingText(data)' in script
+    assert 'line2 = line2 .. methodSuffix' in script
     assert 'resultData.methodLabel = tostring(resolveResultMethodLabel(resultData) or resultData.methodLabel or "")' in script
     assert 'local resolvedMethod = resolveResultMethodLabel(data)' in script
     assert 'if resolvedMethod ~= "" then' in script

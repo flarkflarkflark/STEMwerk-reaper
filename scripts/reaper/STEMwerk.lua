@@ -1648,6 +1648,22 @@ local function isKnownMpsUnsupportedFailure(logSnippet)
     return text:find("output channels > 65536 not supported at the mps device", 1, true) ~= nil
 end
 
+-- The drum workflows share one failure branch, so the title has to name the
+-- workflow the user actually ran. workflow_source= is emitted by every drum run
+-- and survives in the log head; the command line is the fallback for the direct
+-- route, whose wrapper invocations do not always carry the source inline.
+-- Global, not local: this chunk sits at Lua's 200-local ceiling.
+function dksSeparationFailureTitle(lowerLog, isDirectDksCmd)
+    local text = tostring(lowerLog or "")
+    if text:find("workflow_source=dks_extract", 1, true) then
+        return "Kit Split separation failed."
+    end
+    if text:find("workflow_source=dks_direct", 1, true) or isDirectDksCmd then
+        return "Direct Kit separation failed."
+    end
+    return "Drum Kit separation failed."
+end
+
 local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine, logPath, debugLogPath, stdoutSnippet)
     local lowerLog = string.lower(tostring(logSnippet or ""))
     local lowerCmd = string.lower(tostring(cmdLine or ""))
@@ -1774,7 +1790,7 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
             end
             return msg
         end
-        local msg = "Drum Kit Split separation failed.\n"
+        local msg = dksSeparationFailureTitle(lowerLog, isDirectDksCmd) .. "\n"
             .. "Reason: " .. tostring(reason)
             .. "\nerror_stage=" .. tostring(stage)
             .. "\nerror_reason=" .. tostring(reason)
@@ -9447,11 +9463,41 @@ function resolveResultMethodLabel(data)
     return sanitizeUserFacingMethodLabel(data and data.methodLabel or "")
 end
 
+-- A friendly device name only reaches the UI when a run actually reported one
+-- (Selected device / auto_selected_preferred / normal_workflow_backend_preview_name).
+-- DrumSep-only runs never emit one, so an empty value, a bare device id echo or a
+-- generic placeholder must not be presented as the device that did the work.
+function resolveResultDeviceName(data)
+    local name = tostring((data and data.deviceName) or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if name == "" then return "" end
+    local lower = name:lower()
+    if lower == "auto" or lower == "cpu" or lower == "gpu" or lower == "directml" then return "" end
+    for _, prefix in ipairs({ "cuda", "directml", "privateuseone", "gpu" }) do
+        if lower:match("^" .. prefix .. "%s*:?%s*%d*$") or lower:match("^" .. prefix .. "%s+gpu%s*%d*$") then
+            return ""
+        end
+    end
+    return name
+end
+
+-- Method says CPU vs GPU; Backend names the implementation that ran it
+-- (DirectML / AMD ROCm / NVIDIA CUDA / Apple MPS); Device is only ever shown when
+-- a trustworthy friendly name exists. Single-item and multi-item completion both
+-- read this one resolver so their wording cannot drift apart again. CPU returns no
+-- backend, so a CPU-via-DirectML/ROCm fallback can never claim an accelerator.
+function resolveResultReportingTriple(data)
+    local label = resolveResultMethodLabel(data)
+    if label == "" then return "", "", "" end
+    local cpuLabel = trSafeValue("footer_device_cpu_label", "CPU")
+    if label == cpuLabel then return cpuLabel, "", "" end
+    local gpuLabel = trSafeValue("footer_device_gpu_intent", "GPU")
+    local backendLabel = (label ~= gpuLabel) and label or ""
+    return gpuLabel, backendLabel, resolveResultDeviceName(data)
+end
+
 function resolveSingleTrackMethodLabel(data)
-    local methodLabel = resolveResultMethodLabel(data)
-    if methodLabel == "CPU" then return "CPU" end
-    if methodLabel ~= "" then return "GPU" end
-    return ""
+    local methodLabel = resolveResultReportingTriple(data)
+    return methodLabel
 end
 
 local function logNormalFinalMethodDiagnostics(tag, data, resolvedLabel)
@@ -9463,6 +9509,45 @@ local function logNormalFinalMethodDiagnostics(tag, data, resolvedLabel)
     SW_LOG.logExecResult(prefix .. "_label_input_backend=" .. tostring(data and data.backendRuntime or data and data.backend or ""), nil, "")
     SW_LOG.logExecResult(prefix .. "_label_input_runtime_selected=" .. tostring(data and data.runtimeSelected or ""), nil, "")
     SW_LOG.logExecResult(prefix .. "_label_resolved=" .. tostring(resolvedLabel or ""), nil, "")
+end
+
+-- Shared by every completion branch: the "| Method: ..." suffix for the stats
+-- line, plus the optional follow-up line carrying Backend and Device.
+-- Global, not local: this chunk sits at Lua's 200-local ceiling.
+function resultMethodReportingText(data)
+    local method, backend, device = resolveResultReportingTriple(data)
+    local suffix = ""
+    if method ~= "" then
+        suffix = " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), method)
+    end
+    local detail = ""
+    if backend ~= "" then
+        detail = string.format(trSafeValue("result_backend_line", "Backend: %s"), backend)
+    end
+    if device ~= "" then
+        local deviceText = string.format(trSafeValue("result_device_line", "Device: %s"), device)
+        detail = (detail ~= "") and (detail .. " | " .. deviceText) or deviceText
+    end
+    return suffix, detail
+end
+
+-- failedJobIndices is a raw comma-joined list of job NUMBERS ("2", "1,2").
+-- Rendered as #-prefixed ids so it cannot be misread as a count of failures.
+function formatFailedJobIndices(raw)
+    local ids = {}
+    for token in tostring(raw or ""):gmatch("[^,%s]+") do
+        ids[#ids + 1] = "#" .. token
+    end
+    return table.concat(ids, ", "), #ids
+end
+
+function failedJobsLine(rawIndices)
+    local idList, idCount = formatFailedJobIndices(rawIndices)
+    if idCount == 0 then return "" end
+    if idCount == 1 then
+        return string.format(trSafeValue("dks_multi_failed_job_one", "Failed job: %s"), idList)
+    end
+    return string.format(trSafeValue("dks_multi_failed_jobs", "Failed jobs: %s"), idList)
 end
 
 function buildResultMessageLines()
@@ -9529,8 +9614,9 @@ function buildResultMessageLines()
                 data.expectedOutputs or stemsCreated
             )
             table.insert(lines, line1)
-            if data.failedJobIndices and data.failedJobIndices ~= "" then
-                table.insert(lines, string.format(trSafeValue("dks_multi_failed_jobs", "Failed jobs: %s"), data.failedJobIndices))
+            local failedLine = failedJobsLine(data.failedJobIndices)
+            if failedLine ~= "" then
+                table.insert(lines, failedLine)
             end
             return lines
         end
@@ -9556,12 +9642,13 @@ function buildResultMessageLines()
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
         local runtimeMode, _, runtimeReason = getRuntimeModeLabel(data)
         local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, runtimeMode)
-        local methodLabel = resolveResultMethodLabel(data)
-        if methodLabel ~= "" then
-            line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
-        end
+        local methodSuffix, methodDetail = resultMethodReportingText(data)
+        line2 = line2 .. methodSuffix
         table.insert(lines, line1)
         table.insert(lines, line2)
+        if methodDetail ~= "" then
+            table.insert(lines, methodDetail)
+        end
         if runtimeReason ~= "" then
             local reasonLabel = T("mode_reason_label") or "Reason"
             table.insert(lines, string.format("%s: %s", reasonLabel, runtimeReason))
@@ -9592,15 +9679,19 @@ function buildResultMessageLines()
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
         local runtimeMode, _, runtimeReason = getRuntimeModeLabel(data)
         local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, runtimeMode)
-        if data.resultStatus == "partial" and drumKitCopyActive and data.failedJobIndices and data.failedJobIndices ~= "" then
-            table.insert(lines, string.format(trSafeValue("dks_multi_failed_jobs", "Failed jobs: %s"), data.failedJobIndices))
+        if data.resultStatus == "partial" and drumKitCopyActive then
+            local failedLine = failedJobsLine(data.failedJobIndices)
+            if failedLine ~= "" then
+                table.insert(lines, failedLine)
+            end
         end
-        local methodLabel = resolveResultMethodLabel(data)
-        if methodLabel ~= "" then
-            line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
-        end
+        local methodSuffix, methodDetail = resultMethodReportingText(data)
+        line2 = line2 .. methodSuffix
         table.insert(lines, line1)
         table.insert(lines, line2)
+        if methodDetail ~= "" then
+            table.insert(lines, methodDetail)
+        end
         if runtimeReason ~= "" then
             local reasonLabel = T("mode_reason_label") or "Reason"
             table.insert(lines, string.format("%s: %s", reasonLabel, runtimeReason))
@@ -9667,20 +9758,17 @@ function buildResultMessageLines()
             table.insert(lines, T(actionKey) or "")
         end
         local speed = tonumber(data.realtimeFactor or 0) or 0
-        local methodLabel = resolveSingleTrackMethodLabel(data)
+        local methodSuffix, methodDetail = resultMethodReportingText(data)
         if speed > 0 then
             local speedStr = string.format("%.2fx", speed)
             local line2 = string.format(T("result_time_speed_line") or "Time: %s | Speed: %s realtime", timeStr, speedStr)
-            if methodLabel ~= "" then
-                line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
-            end
-            table.insert(lines, line2)
+            table.insert(lines, line2 .. methodSuffix)
         else
             local line2 = string.format(T("result_time_line") or "Time: %s", timeStr)
-            if methodLabel ~= "" then
-                line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
-            end
-            table.insert(lines, line2)
+            table.insert(lines, line2 .. methodSuffix)
+        end
+        if methodDetail ~= "" then
+            table.insert(lines, methodDetail)
         end
     end
 
