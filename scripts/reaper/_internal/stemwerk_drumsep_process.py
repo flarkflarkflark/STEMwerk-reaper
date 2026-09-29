@@ -10,6 +10,7 @@ import importlib.metadata as metadata
 import inspect
 import json
 import os
+import re
 import shutil
 import sys
 import traceback
@@ -189,6 +190,63 @@ def _probe_gpu_device(device: str) -> tuple[bool, str, dict[str, str]]:
         }
     except Exception as exc:
         return False, f"{type(exc).__name__}:{exc}", {}
+
+
+def _requested_directml_adapter_index(device: str, requested_device: str) -> int | None:
+    """Adapter index of an explicit ``directml:N`` request.
+
+    None means no specific adapter was requested (Auto / bare ``directml``),
+    which keeps torch-directml's default adapter exactly as before.
+    """
+    if str(device or "").strip().lower() != "directml":
+        return None
+    match = re.fullmatch(r"directml:(\d+)", str(requested_device or "").strip().lower())
+    return int(match.group(1)) if match else None
+
+
+def _probe_directml_adapter(index: int) -> tuple[bool, str, dict[str, str]]:
+    # Same checks as _probe_gpu_device's DirectML branch, but on the requested
+    # adapter: bare torch_directml.device() always returns the default adapter.
+    try:
+        import onnxruntime as ort
+        import torch
+        import torch_directml
+
+        if not bool(torch_directml.is_available()):
+            return False, "torch_directml_unavailable", {}
+        providers = [str(item) for item in ort.get_available_providers()]
+        if "DmlExecutionProvider" not in providers:
+            return False, "onnxruntime_dml_provider_missing", {"onnx_providers": "|".join(providers)}
+        count = int(torch_directml.device_count())
+        if index >= count:
+            return False, f"directml_adapter_index_out_of_range:requested={index},available={count}", {}
+        device_obj = torch_directml.device(index)
+        tensor = torch.ones((1, 1, 8, 8), device=device_obj)
+        weight = torch.ones((1, 1, 3, 3), device=device_obj)
+        output = torch.nn.functional.conv2d(tensor, weight)
+        expected = f"privateuseone:{index}"
+        if str(output.device) != expected:
+            return False, f"directml_adapter_binding_mismatch:expected={expected},actual={output.device}", {}
+        return True, "ok", {
+            "tensor_device": str(tensor.device),
+            "conv_device": str(output.device),
+            "device_name": str(torch_directml.device_name(index)).strip("\x00").strip(),
+            "onnx_provider": "DmlExecutionProvider",
+            "torch_version": str(getattr(torch, "__version__", "")),
+        }
+    except Exception as exc:
+        return False, f"{type(exc).__name__}:{exc}", {}
+
+
+def _bind_separator_directml_adapter(separator: Any, index: int) -> None:
+    # audio-separator's configure_dml() binds bare torch_directml.device()
+    # (adapter 0); load_model() reads torch_device at load time, so rebinding
+    # here moves the model onto the requested adapter.
+    import torch_directml
+
+    dml_device = torch_directml.device(index)
+    separator.torch_device = dml_device
+    separator.torch_device_dml = dml_device
 
 
 def _classify_runtime_exception(exc: Exception, device: str, gpu_probe: dict[str, str]) -> tuple[str, str]:
@@ -785,7 +843,12 @@ def run(args: argparse.Namespace) -> int:
         write_result(result_json, _error_payload("drumsep_helper_failed", "stage2_runtime", f"{type(exc).__name__}: {exc}"))
         return 1
 
-    gpu_probe_ok, gpu_probe_reason, gpu_probe = _probe_gpu_device(args.device)
+    directml_index = _requested_directml_adapter_index(args.device, getattr(args, "requested_device", ""))
+    if directml_index is None:
+        gpu_probe_ok, gpu_probe_reason, gpu_probe = _probe_gpu_device(args.device)
+    else:
+        print(f"drumsep_helper_directml_adapter_index={directml_index}", file=sys.stderr)
+        gpu_probe_ok, gpu_probe_reason, gpu_probe = _probe_directml_adapter(directml_index)
     print(f"drumsep_helper_gpu_probe_status={'ok' if gpu_probe_ok else 'failed'}", file=sys.stderr)
     print(f"drumsep_helper_gpu_probe_reason={gpu_probe_reason}", file=sys.stderr)
     print(f"drumsep_helper_gpu_probe_torch_hip={gpu_probe.get('torch_hip', '')}", file=sys.stderr)
@@ -800,6 +863,8 @@ def run(args: argparse.Namespace) -> int:
     if not gpu_probe_ok:
         probe_error_reason = "drumsep_helper_gpu_probe_failed"
         probe_error_message = gpu_probe_reason
+        if directml_index is not None:
+            probe_error_reason = "drumsep_directml_adapter_unavailable"
         if "no kernel image is available for execution on the device" in gpu_probe_reason.lower():
             probe_error_reason = "cuda_architecture_unsupported"
             probe_error_message = CUDA_ARCHITECTURE_UNSUPPORTED_GUIDANCE
@@ -866,6 +931,8 @@ def run(args: argparse.Namespace) -> int:
         )
         if args.route in {"mps-direct-demix", "direct-demix"} or managed_macos_wrapper:
             _apply_separator_requested_device(sep, str(args.device or "cpu"))
+        if directml_index is not None:
+            _bind_separator_directml_adapter(sep, directml_index)
         sep.load_model(model_name)
         print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_model_load_end", file=sys.stderr)
     except Exception as exc:
@@ -879,6 +946,24 @@ def run(args: argparse.Namespace) -> int:
             ),
         )
         return 1
+
+    if directml_index is not None:
+        expected_device = f"privateuseone:{directml_index}"
+        bound_device = str(getattr(sep, "torch_device", "unknown"))
+        loaded_model_device = _direct_demix_model_device(sep)
+        if bound_device != expected_device or loaded_model_device not in {expected_device, "unknown"}:
+            write_result(
+                result_json,
+                _error_payload(
+                    "drumsep_directml_adapter_mismatch",
+                    "stage2_model_load",
+                    f"requested {expected_device}, separator={bound_device}, model={loaded_model_device}",
+                    requested_device=_observability_requested_device(args),
+                    effective_device=bound_device,
+                    model_device=loaded_model_device,
+                ),
+            )
+            return 1
 
     model_meta = _load_model_metadata(model_dir, model_name)
     requested_device = _observability_requested_device(args)
