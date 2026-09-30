@@ -19256,6 +19256,26 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
             policy.sequentialMode = true
             policy.cap = 1
             policy.reason = "scheduler_dks_extract_mps_sequential"
+        elseif route == "dks_direct" and tostring(opts.requestedDevice or ""):lower() == "auto" then
+            -- Direct Kit's own DrumSep helper (unlike Kit Split's stage-1
+            -- normal separation) is the fragile, memory-heavy step, so Auto's
+            -- cap is keyed off physical unified memory rather than mirroring
+            -- Kit Split stage-1's blanket cap2. Proven safe at cap=1 on the
+            -- supported M1 8 GB config (2.3.1.3 hardware A/B: cap2 sustained
+            -- kernel-critical memory pressure there for ~5% wall-clock gain).
+            -- Higher-memory Apple Silicon keeps cap2 as a preserved, not yet
+            -- hardware-validated, policy -- unknown RAM defaults to the safe
+            -- side.
+            local ramGiB = tonumber(opts.ramGiB)
+            if ramGiB and ramGiB > 8.5 then
+                policy.sequentialMode = false
+                policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL)
+                policy.reason = "scheduler_dks_direct_mps_cap2"
+            else
+                policy.sequentialMode = true
+                policy.cap = 1
+                policy.reason = "scheduler_dks_direct_mps_low_memory_sequential"
+            end
         else
             policy.sequentialMode = true
             policy.cap = _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL
@@ -20253,7 +20273,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         and hasRuntimeBackendType("mps")
         and not hasRuntimeBackendType("cuda")
         and not hasRuntimeBackendType("directml") then
-        if schedulerRoute == "normal" or schedulerRoute == "dks_extract" then
+        if schedulerRoute == "normal" or schedulerRoute == "dks_extract" or schedulerRoute == "dks_direct" then
             schedulerBackend = "mps"
         else
             schedulerBackend = "cpu"

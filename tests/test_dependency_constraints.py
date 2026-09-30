@@ -1182,12 +1182,21 @@ def test_normal_mps_scheduler_cap2_slice_preserves_parallel_launch_limiter():
     assert ' .. " cap=" .. tostring(multiTrackQueue.parallelJobLimit or "none")' in script
 
 
-def test_normal_auto_mps_slice_prefers_mps_without_changing_dks_routes():
+def test_normal_auto_mps_slice_prefers_mps_and_now_also_classifies_dks_direct():
+    # 2.3.1.3: dks_direct joined normal/dks_extract in the Auto-on-Apple-
+    # Silicon "mps" classification (it was the one route still forced onto
+    # the old CPU misclassification here; explicit_mps_conservative in
+    # resolveSchedulerConcurrencyPolicy separately keys its actual cap off
+    # physical RAM -- see test_dks_direct_mps_branch_is_memory_scaled_not_a_
+    # bare_hardcode in test_macos_dks_direct_auto_mps_scheduler_cap_2313.py).
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 
     assert 'if string.lower(tostring(effectiveRunDevice() or "")) == "auto"' in script
     assert 'and hasRuntimeBackendType("mps")' in script
-    assert 'if schedulerRoute == "normal" or schedulerRoute == "dks_extract" then' in script
+    assert (
+        'if schedulerRoute == "normal" or schedulerRoute == "dks_extract"'
+        ' or schedulerRoute == "dks_direct" then'
+    ) in script
     assert 'schedulerBackend = "mps"' in script
     assert 'schedulerBackend = "cpu"' in script
     assert 'if isDrumKitMultiRun and workflowSourceArg == "dks_direct" then' in script
