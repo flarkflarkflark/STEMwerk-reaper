@@ -8482,13 +8482,12 @@ def test_windows_installer_uses_five_step_progress_and_drumkit_finish_copy():
     assert "FindLastPos('[3/5]', Text)" in script
     assert "FindLastPos('[2/5]', Text)" in script
     assert "FindLastPos('[1/5]', Text)" in script
-    assert "What was installed:" in script
-    # "Installed locations:" was a separate heading repeating the same three
-    # items "What was installed:" already named; P2 merged them into one list
-    # (each item's path/size folded directly under it) after live validation
-    # showed the duplication was what pushed the size/FFmpeg/backend detail
-    # far enough down the page to be clipped behind the Finished-page RunList.
-    assert "Next step:" in script
+    # P2.1 replaced the overflowing narrative with native structured rows.
+    assert "Installed components" in script
+    assert "FinishedPathsHeading" in script
+    assert "FinishedStatusNames[4]" in script
+    assert "FinishedPathEdits[3].Text := GetLogPath;" in script
+    assert "Use STEMwerk: Setup to check the runtime (Check only)." in script
     # Live validation found these literal %APPDATA%/%LOCALAPPDATA% placeholders
     # displayed unresolved next to otherwise-real C:\Users\... paths; P2 fixed
     # them to use the same resolved-path accessors ({app}, GetRuntimeBasePath)

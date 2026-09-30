@@ -10,15 +10,11 @@ Two real problems, fixed here:
    also misleading ("a clean STEMwerk setup") even though this installer also
    repairs an existing one.
 
-2. Finish page: previously only ever said "setup completed" with no useful
-   detail. Added REAPER-scripts size, models/cache size, FFmpeg path+status
-   and the acceleration backend -- all read from state the bootstrap script
-   already writes, or from directory scans measured cheap on a real install
-   (REAPER scripts: 164 files, instant; models: 12 files, instant). The
-   runtime root itself (its two Python venvs alone were 70,000+ files, several
-   GB) is deliberately NOT scanned -- measured directly, that would visibly
-   stall the page -- so no runtime size and no "total footprint" are claimed;
-   truthfulness over false precision.
+2. Finish page: structured component, system and path rows report the result
+   without a page-level scrolling memo. Final installed sizes are measured
+   once by the bootstrap during installation and persisted in bootstrap.env;
+   the Finish page only reads and formats those values, so opening it never
+   recursively scans the multi-GB runtime tree.
 
 Static checks against the .iss source (declaration-anchored, no line
 numbers), mirroring the existing style in test_windows_installer_truthful_result_2313.py,
@@ -28,6 +24,7 @@ installed at.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -37,6 +34,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 ISS = ROOT / "installer" / "windows" / "STEMwerk.iss"
+BOOTSTRAP = ROOT / "scripts" / "reaper" / "STEMwerk_Bootstrap_Windows.ps1"
 
 
 def _text() -> str:
@@ -74,6 +72,40 @@ def _function_body(text: str, name: str) -> str:
 
 def _lext_calls(body: str) -> list[tuple[str, str, str]]:
     return re.findall(r"LText\(\s*'((?:[^'\\]|\\.)*)',\s*'((?:[^'\\]|\\.)*)',\s*'((?:[^'\\]|\\.)*)'", body)
+
+
+def _powershell_function(text: str, name: str) -> str:
+    start = text.index(f"function {name}")
+    end = text.find("\nfunction ", start + len(name) + 9)
+    assert end != -1, f"could not find end of PowerShell function {name}"
+    return text[start:end]
+
+
+def _run_footprint_measurement(tmp_path: Path, script_root: Path, runtime_root: Path) -> dict[str, int]:
+    powershell = shutil.which("powershell.exe")
+    if powershell is None:
+        pytest.skip("Windows PowerShell is required for footprint behavior coverage")
+    helper = _powershell_function(BOOTSTRAP.read_text(encoding="utf-8"), "Measure-StemwerkInstalledFootprint")
+    quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+    harness = tmp_path / "measure-footprint.ps1"
+    harness.write_text(
+        helper
+        + "\n$result = Measure-StemwerkInstalledFootprint "
+        + quote(script_root)
+        + " "
+        + quote(runtime_root)
+        + "\nif ($null -eq $result) { exit 9 }\n"
+        + "$result | ConvertTo-Json -Compress\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(harness)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return json.loads(result.stdout.strip().splitlines()[-1])
 
 
 # --- Welcome page: layout fix -------------------------------------------------
@@ -146,229 +178,247 @@ def test_welcome_bullet_count_is_exactly_three_per_language():
     assert block.count("'- ") == 9, "expected 3 bullets x 3 languages (EN/NL/DE) in the Welcome caption"
 
 
-# --- Finish page: read-only scrollable summary control ---------------------------
-#
-# Live DrawText measurement (native DT_CALCRECT|DT_WORDBREAK against the real
-# live font/width) proved a plain static label has a hard ceiling: even with
-# RunList correctly compacted, the real content needs more height than the
-# page has, in all three languages (400px needed vs 274px available in EN/DE,
-# 500px vs 249px in NL). WizardForm.FinishedLabel is hidden; a new read-only,
-# vertically-scrollable TNewMemo (FinishedSummaryMemo) shows the detailed
-# summary instead, so overflow is reachable by scrolling rather than clipped.
+# --- Finish page: compact structured dashboard ---------------------------------
 
 
-def test_finished_label_is_hidden_not_left_showing_duplicate_text():
-    body = _function_body(_text(), "LayoutFinishedSummary")
+def test_finished_label_is_hidden_and_old_summary_memo_is_gone():
+    text = _text()
+    body = _function_body(text, "LayoutFinishedPage")
     assert "WizardForm.FinishedLabel.Visible := False;" in body
     assert "WizardForm.FinishedLabel.Caption := '';" in body
+    assert "FinishedSummaryMemo" not in text
+    assert "LayoutFinishedSummary" not in text
 
 
-def test_finished_summary_memo_created_read_only_and_scrollable():
+def test_finished_page_uses_native_structured_controls():
     text = _text()
-    assert "FinishedSummaryMemo := TNewMemo.Create(WizardForm);" in text
-    init_body = _function_body(text, "InitializeWizard")
-    assert "FinishedSummaryMemo.Parent := WizardForm.FinishedPage;" in init_body
-    assert "FinishedSummaryMemo.ReadOnly := True;" in init_body
-    assert "FinishedSummaryMemo.ScrollBars := ssVertical;" in init_body
-    assert "FinishedSummaryMemo.WordWrap := True;" in init_body
-
-
-def test_finish_layout_positions_the_memo_not_the_old_label():
-    text = _text()
-    assert "procedure LayoutFinishedSummary;" in text
-    body = _function_body(text, "LayoutFinishedSummary")
-    assert "FinishedSummaryMemo.Left := WizardForm.FinishedLabel.Left;" in body
-    assert "FinishedSummaryMemo.Top := WizardForm.FinishedLabel.Top;" in body
-    assert "FinishedSummaryMemo.Width :=" in body
-    assert "WizardForm.RunList" in body, "must not overlap the Open guide/Open log checkboxes"
-
-
-def test_finish_layout_is_actually_called_before_setting_the_text():
-    text = _text()
-    idx_layout = text.index("LayoutFinishedSummary;", text.index("procedure CurPageChanged"))
-    idx_settext = text.index("FinishedSummaryMemo.Lines.Text := BuildFinishedSummaryText;")
-    assert idx_layout < idx_settext, "layout must be applied before the (possibly overflowing) text is assigned"
-
-
-def test_only_one_control_shows_the_detailed_summary():
-    """Guard against two competing summary controls / duplicate text: the
-    hidden, emptied FinishedLabel must never also receive the built summary
-    text anywhere in CurPageChanged."""
-    curpage_body = _function_body(_text(), "CurPageChanged")
-    assert "WizardForm.FinishedLabel.Caption := BuildFinishedSummaryText;" not in curpage_body
-    assert "FinishedSummaryMemo.Lines.Text := BuildFinishedSummaryText;" in curpage_body
-
-
-# --- Finish page: new fields, cheap and truthful --------------------------------
-
-
-def test_dir_size_scan_skips_bundled_offline_payload():
-    body = _function_body(_text(), "GetDirTreeSizeBytes")
-    assert "_bundled" in body
-    assert "Continue" in body
-
-
-def test_dir_size_scan_is_never_called_on_the_full_runtime_base_or_a_venv():
-    """The expensive trees (measured: 70,000+ files, several GB) must not be
-    scanned anywhere in the finish-summary builder."""
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    for call in re.finditer(r"GetDirTreeSizeBytes\(([^)]*)\)", body):
-        arg = call.group(1)
-        assert "GetRuntimeBasePath" not in arg or "\\models" in arg, (
-            f"GetDirTreeSizeBytes called on {arg!r}: only {{app}} and RuntimeBase\\models "
-            "were measured cheap; the runtime root itself must never be scanned"
-        )
-        assert ".venv" not in arg
-
-
-def test_scripts_and_models_sizes_use_the_approx_formatter():
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    assert "FormatApproxMB(GetDirTreeSizeBytes(ExpandConstant('{app}')))" in body
-    assert "FormatApproxMB(GetDirTreeSizeBytes(ModelsDir))" in body
-
-
-def test_models_line_only_shown_when_models_dir_actually_exists():
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    # The populating assignment (second "ModelsLine :=", after the empty-string
-    # default) must be the statement immediately guarded by DirExists(ModelsDir).
-    guard_idx = body.index("if DirExists(ModelsDir) then")
-    next_assign_idx = body.index("ModelsLine :=", guard_idx)
-    between = body[guard_idx + len("if DirExists(ModelsDir) then") : next_assign_idx]
-    assert between.strip() == "", f"unexpected statements between the guard and the assignment: {between!r}"
-
-
-def test_no_total_footprint_or_space_added_claim_anywhere():
-    """These require scanning the expensive runtime tree; since that scan is
-    deliberately not performed, no total/added-space figure may be shown."""
-    text = _text()
-    for forbidden in (
-        "Total STEMwerk footprint",
-        "Total current STEMwerk footprint",
-        "space added",
-        "Space added",
-        "added by this",
-        "newly added",
+    init = _function_body(text, "InitializeWizard")
+    for name in (
+        "FinishedOutcomeLabel",
+        "FinishedComponentsHeading",
+        "FinishedSystemHeading",
+        "FinishedPathsHeading",
     ):
-        assert forbidden not in text, f"found unmeasurable claim: {forbidden!r}"
+        assert name in init
+    assert "FinishedPathEdits[i] := TNewEdit.Create(WizardForm);" in init
+    assert "FinishedPathEdits[i].ReadOnly := True;" in init
+    assert "FinishedOpenButtons[i] := TNewButton.Create(WizardForm);" in init
 
 
-def test_runtime_data_line_has_no_size_claim():
-    """The runtime root's path must still be shown; unlike scripts/models, no
-    size follows it on the same or next line."""
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    idx = body.index("'  ' + GetRuntimeBasePath + #13#10")
-    following = body[idx : idx + 200]
-    assert "FormatApproxMB" not in following
+def test_component_column_gets_more_room_than_system_column():
+    body = _function_body(_text(), "LayoutFinishedPage")
+    assert "ComponentW := (CW * 55) div 100;" in body
+    assert "SystemW := CW - ComponentW;" in body
+    assert "FinishedSystemHeading.Left := L + ComponentW;" in body
 
 
-def test_finished_summary_paths_are_resolved_not_placeholder_env_vars():
-    """BUG 3 (live validation, round 2): the Finished page literally displayed
-    '%APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper' instead of the real resolved
-    path, while other lines already showed real C:\\Users\\... paths. Every
-    path shown here must come from the same resolved-path accessors the rest
-    of the wizard already uses ({app} via ExpandConstant, GetRuntimeBasePath),
-    never a literal %ENVVAR%-style placeholder string."""
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    assert "%APPDATA%" not in body
-    assert "%LOCALAPPDATA%" not in body
+def test_finish_page_is_filled_then_laid_out_on_entry():
+    body = _function_body(_text(), "CurPageChanged")
+    assert body.index("FillFinishedPage;") < body.index("LayoutFinishedPage;")
+    assert "WizardForm.FinishedLabel.Caption := BuildFinishedSummaryText;" not in body
+
+
+def test_outcome_height_avoids_the_uncallable_adjustheight_rtti_method():
+    body = _function_body(_text(), "LayoutFinishedPage")
+    assert "FinishedOutcomeLabel.AdjustHeight;" not in body
+    assert "if BootstrapSucceeded then" in body
+    assert "FinishedOutcomeLabel.Height := ScaleY(54)" in body
+    assert "FinishedOutcomeLabel.Height := ScaleY(84)" in body
+
+
+def test_finish_has_five_status_facts_and_four_location_rows():
+    text = _text()
+    assert "FinishedStatusNames: array[0..4]" in text
+    assert "FinishedStatusValues: array[0..4]" in text
+    assert "FinishedComponentSizes: array[0..2]" in text
+    assert "FinishedTotalNameLabel: TNewStaticText" in text
+    assert "FinishedTotalSizeLabel: TNewStaticText" in text
+    assert "FinishedPathLabels: array[0..3]" in text
+    assert "FinishedPathEdits: array[0..3]" in text
+    assert "FinishedOpenButtons: array[0..3]" in text
+    assert "FinishedCopyButtons" not in text
+    init = _function_body(text, "InitializeWizard")
+    for label in ("REAPER scripts", "STEMwerk runtime", "Models/cache", "FFmpeg", "Acceleration"):
+        assert label in init
+    for label in ("REAPER scripts", "Runtime", "Models/cache", "Setup log"):
+        assert label in init
+    assert "for i := 0 to 4 do" in init
+    assert "FinishedStatusValues[i] := CreateFinishedText('', False);" in init
+    assert "for i := 0 to 2 do" in init
+    assert "FinishedComponentSizes[i] := CreateFinishedText('', False);" in init
+    assert "for i := 0 to 3 do" in init
+    assert init.index("for i := 0 to 4 do") < init.index("for i := 0 to 3 do")
+
+
+def test_path_rows_use_resolved_values_and_keep_ffmpeg_path_off_the_main_page():
+    body = _function_body(_text(), "FillFinishedPage")
     assert "ExpandConstant('{app}')" in body
     assert "GetRuntimeBasePath" in body
+    assert "FinishedModelsDir" in body
+    assert "GetLogPath" in body
+    assert "%APPDATA%" not in body and "%LOCALAPPDATA%" not in body
+    assert "FFMPEG_PATH" not in body
 
 
-@pytest.mark.parametrize(
-    "needle",
-    [
-        "- Models/cache:",
-        "- Modellen/cache:",
-        "- Modelle/Cache:",
-    ],
-)
-def test_models_cache_label_present_in_all_three_languages(needle):
-    assert needle in _function_body(_text(), "BuildFinishedSuccessSummaryText")
+def test_open_buttons_use_the_resolved_field_values():
+    click = _function_body(_text(), "FinishedOpenClick")
+    assert "ShellExec('', FinishedPathEdits[i].Text" in click
+    assert "FinishedOpenTarget" not in _text()
 
 
-@pytest.mark.parametrize(
-    "needle",
-    [
-        "installed from the bundled offline payload",
-        "geinstalleerd vanuit de gebundelde offline payload",
-        "installiert aus der gebuendelten Offline-Payload",
-        "downloaded during setup",
-        "gedownload tijdens setup",
-        "waehrend des Setups heruntergeladen",
-        "reused (already present on this system)",
-        "hergebruikt (al aanwezig op dit systeem)",
-        "wiederverwendet (bereits auf diesem System vorhanden)",
-    ],
-)
-def test_ffmpeg_status_labels_present_in_all_three_languages(needle):
-    assert needle in _function_body(_text(), "BuildFinishedSuccessSummaryText")
-
-
-def test_ffmpeg_path_only_shown_when_a_path_value_exists():
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    assert "if FfmpegPathValue <> '' then" in body
-
-
-def test_ffmpeg_block_only_shown_when_source_is_known():
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    assert "if FfmpegSourceValue <> '' then" in body
-
-
-@pytest.mark.parametrize(
-    "needle",
-    ["Acceleration backend: ", "Acceleratie-backend: ", "Beschleunigungs-Backend: "],
-)
-def test_backend_label_present_in_all_three_languages(needle):
-    assert needle in _function_body(_text(), "BuildFinishedSuccessSummaryText")
-
-
-def test_backend_block_only_shown_when_backend_is_known():
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    assert "if BackendValue <> '' then" in body
-
-
-def test_backend_values_map_to_their_display_names():
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    assert "if BackendValue = 'directml' then" in body and "'DirectML'" in body
-    assert "if BackendValue = 'cuda' then" in body and "'CUDA'" in body
-    assert "if BackendValue = 'cpu' then" in body and "'CPU'" in body
-
-
-def test_backend_reason_appended_only_when_present():
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    assert "if BackendReasonValue <> '' then" in body
-
-
-# --- Finish page: trimmed prose (scrolling replaces "must all fit" pressure) -----
-#
-# Live DrawText measurement proved the page's real facts alone already exceed
-# the available height; these removals are the concise-operational-summary
-# trim, not another attempt to force-fit content. The scrollable
-# FinishedSummaryMemo (see above) is what actually handles any remaining
-# overflow -- these are the genuinely redundant lines, not required facts.
-
-
-def test_cleanup_explanation_prose_removed_from_summary():
-    """The cleanup task's effect is already visible as the Task selection
-    itself on the previous wizard page; repeating it here in prose was
-    redundant, not a fact unique to the Finished page."""
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    for forbidden in (
-        "Cleared previous runtime state",
-        "Kept existing runtime data",
-        "WizardIsTaskSelected('cleanup_runtime')",
+def test_finish_page_reads_persisted_sizes_and_never_scans_any_tree():
+    text = _text()
+    fill = _function_body(text, "FillFinishedPage")
+    assert "GetDirTreeSizeBytes" not in text
+    for key in (
+        "INSTALLED_SCRIPTS_BYTES",
+        "INSTALLED_RUNTIME_BYTES",
+        "INSTALLED_MODELS_BYTES",
+        "INSTALLED_TOTAL_BYTES",
     ):
-        assert forbidden not in body
+        assert f"FinishedMeasuredSizeText('{key}')" in fill
+    assert "FindFirst" not in fill and "FindNext" not in fill
 
 
-def test_generic_offline_payload_prose_removed_from_summary():
-    """Not a per-install fact -- generic boilerplate about the installer
-    build flavor, unrelated to what actually happened on this machine."""
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    assert "Offline model/runtime payload" not in body
-    assert "Offline model-/runtime-payload" not in body
-    assert "Offline-Modell-/Runtime-Payload" not in body
+def test_models_status_is_only_available_when_models_exist():
+    body = _function_body(_text(), "FinishedModelsStatusText")
+    assert "if DirExists(FinishedModelsDir) then" in body
+    assert "Not present" in body and "Niet aanwezig" in body and "Nicht vorhanden" in body
+
+
+def test_ffmpeg_status_is_compact_and_localized():
+    body = _function_body(_text(), "FinishedFfmpegStatusText")
+    for source in ("bundled", "download", "existing"):
+        assert f"Source = '{source}'" in body
+    for value in ("Bundled", "Meegeleverd", "Mitgeliefert", "Downloaded", "Gedownload", "Heruntergeladen", "Reused", "Hergebruikt", "Wiederverwendet"):
+        assert value in body
+
+
+def test_backend_status_maps_known_backends_without_long_reason_suffix():
+    body = _function_body(_text(), "FinishedBackendStatusText")
+    for raw, display in (("directml", "DirectML"), ("cuda", "CUDA"), ("cpu", "CPU")):
+        assert f"BackendValue = '{raw}'" in body and f"Result := '{display}'" in body
+    assert "BACKEND_REASON" not in body
+
+
+def test_no_run_delta_or_required_space_is_mislabeled_as_installed_total():
+    text = _text()
+    for forbidden in ("space added", "Space added", "added by this", "newly added"):
+        assert forbidden not in text
+    fill = _function_body(text, "FillFinishedPage")
+    assert "MinimumFreeSpaceMB" not in fill
+    assert "GetSpaceOnDisk" not in fill
+
+
+def test_bootstrap_persists_all_footprint_metrics_together_only_after_success():
+    text = BOOTSTRAP.read_text(encoding="utf-8")
+    measure_idx = text.index("$installedFootprint = Measure-StemwerkInstalledFootprint $scriptRoot $RuntimeBase")
+    final_state_idx = text.index('$lines += "STATUS=$status"', measure_idx)
+    assert text.rfind('if ($status -eq "ok")', 0, measure_idx) != -1
+    assert measure_idx < final_state_idx
+    state_block = text[final_state_idx:text.index("$lines | Out-File -FilePath $StateFile", final_state_idx)]
+    assert 'if ($null -ne $installedFootprint)' in state_block
+    for key in (
+        "INSTALLED_SCRIPTS_BYTES",
+        "INSTALLED_RUNTIME_BYTES",
+        "INSTALLED_MODELS_BYTES",
+        "INSTALLED_TOTAL_BYTES",
+    ):
+        assert key in state_block
+
+
+def test_runtime_excludes_models_total_counts_models_once_and_external_ffmpeg_is_excluded(tmp_path: Path):
+    scripts = tmp_path / "scripts"
+    runtime = tmp_path / "runtime"
+    external = tmp_path / "external-ffmpeg"
+    (scripts / "_bundled").mkdir(parents=True)
+    (runtime / ".venv").mkdir(parents=True)
+    (runtime / "models").mkdir(parents=True)
+    (runtime / "state").mkdir(parents=True)
+    external.mkdir()
+    (scripts / "main.lua").write_bytes(b"s" * 9)
+    (scripts / "_bundled" / "payload.whl").write_bytes(b"b" * 999)
+    (runtime / ".venv" / "package.py").write_bytes(b"r" * 100)
+    (runtime / "state" / "bootstrap.env").write_bytes(b"e" * 5)
+    (runtime / "models" / "model.ckpt").write_bytes(b"m" * 200)
+    (external / "ffmpeg.exe").write_bytes(b"f" * 1000)
+
+    measured = _run_footprint_measurement(tmp_path, scripts, runtime)
+    assert measured == {
+        "ScriptsBytes": 9,
+        "RuntimeBytes": 105,
+        "ModelsBytes": 200,
+        "TotalBytes": 314,
+    }
+
+
+def test_total_uses_unique_paths_when_script_and_runtime_roots_overlap(tmp_path: Path):
+    runtime = tmp_path / "runtime"
+    scripts = runtime / "scripts"
+    (runtime / "models").mkdir(parents=True)
+    scripts.mkdir()
+    (scripts / "main.lua").write_bytes(b"s" * 9)
+    (runtime / "runtime.bin").write_bytes(b"r" * 100)
+    (runtime / "models" / "model.ckpt").write_bytes(b"m" * 200)
+
+    measured = _run_footprint_measurement(tmp_path, scripts, runtime)
+    assert measured["ScriptsBytes"] == 9
+    assert measured["RuntimeBytes"] == 109
+    assert measured["ModelsBytes"] == 200
+    assert measured["TotalBytes"] == 309
+
+
+def test_missing_or_invalid_metrics_render_no_fake_total():
+    text = _text()
+    reader = _function_body(text, "FinishedMeasuredSizeText")
+    layout = _function_body(text, "LayoutFinishedPage")
+    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+    assert "Result := '';" in reader
+    assert "if TryReadBootstrapBytes(Key, Bytes) then" in reader
+    assert "FinishedTotalSizeLabel.Caption <> ''" in layout
+    assert "FinishedTotalNameLabel.Visible := BootstrapSucceeded and" in layout
+    assert "if ($null -eq $installedFootprint)" in bootstrap
+    assert "no size total will be reported" in bootstrap
+
+
+def test_installed_size_labels_have_en_nl_de_parity():
+    text = _text()
+    init = _function_body(text, "InitializeWizard")
+    formatter = _function_body(text, "FormatApproxInstalledSize")
+    assert "LText('Total STEMwerk', 'Totaal STEMwerk', 'STEMwerk gesamt')" in init
+    assert "LText('Approx. ', 'Ong. ', 'Ca. ')" in formatter
+    assert "' KiB'" in formatter
+    assert "' MiB'" in formatter
+    assert "' GiB'" in formatter
+
+
+def test_finished_binary_size_formatter_uses_iec_units_and_concise_rounding():
+    formatter = _function_body(_text(), "FormatApproxInstalledSize")
+    assert "Bytes < 1048576" in formatter
+    assert "(Bytes + 512) div 1024" in formatter
+    assert "Bytes < 1073741824" in formatter
+    assert "(Bytes + 524288) div 1048576" in formatter
+    assert "((Bytes * 100) + 536870912) div 1073741824" in formatter
+    assert "' MB'" not in formatter
+    assert "' GB'" not in formatter
+
+
+def test_size_scan_uses_existing_localized_status_detail_without_fake_progress():
+    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+    measurement = bootstrap[bootstrap.index("$installedFootprint = $null"):]
+    assert 'LogStatusDetail "Calculating installed size..."' in measurement
+    assert measurement.index('LogStatusDetail "Calculating installed size..."') < measurement.index(
+        "$installedFootprint = Measure-StemwerkInstalledFootprint"
+    )
+    assert "STEMWERK_STATUS progress=" not in measurement
+
+    localizer = _function_body(_text(), "LocalizeStatusDetail")
+    for label in (
+        "Calculating installed size...",
+        "Installatiegrootte wordt berekend...",
+        "Installierte Groesse wird berechnet...",
+    ):
+        assert label in localizer
 
 
 @pytest.mark.parametrize(
@@ -379,71 +429,45 @@ def test_generic_offline_payload_prose_removed_from_summary():
         "- Nutze STEMwerk: Setup, um die Runtime zu pruefen (Check only). Meldet das ein Problem, fuehre diesen STEMwerk-Installer erneut aus, um sie zu reparieren.",
     ],
 )
-def test_next_step_is_now_a_single_concise_line_per_language(needle):
-    """The old 3-bullet walkthrough (start REAPER and open the Actions menu /
-    ReaScript: Load... / this Check-only bullet) is trimmed to just this one
-    bullet -- the two dropped ones were generic app-discovery prose already
-    covered by the guide; this one is protected policy text (see
-    test_verbose_action_list_walkthrough_removed and the pre-existing,
-    unrelated test_installer_finished_page_no_longer_offers_check_or_repair_in_reaper
-    in test_2311_setup_ui_policy.py): only a successful install may tell the
-    user to run Check only and treat the external installer as the repair
-    path, so this exact wording must survive the trim."""
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    assert needle in body
+def test_protected_check_only_and_installer_repair_guidance_remains(needle):
+    assert needle in _function_body(_text(), "BuildFinishedSuccessSummaryText")
 
 
-def test_verbose_action_list_walkthrough_removed():
-    """Only the generic discovery bullets are dropped; the Check-only /
-    repair-via-installer bullet (asserted present above) is deliberately
-    kept -- it is pinned as policy text by an unrelated pre-existing test."""
+def test_success_outcome_is_short_and_versioned():
     body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    for forbidden in (
-        "Show action list",
-        "ReaScript: Load",
-        "check the Actions menu for STEMwerk",
-    ):
+    assert "STEMwerk setup completed." in body
+    assert "VersionTag" in body
+    for forbidden in ("What was installed:", "Installed locations:", "Show action list", "ReaScript: Load"):
         assert forbidden not in body
 
 
-# --- Finish page: state reader ---------------------------------------------------
-
-
-def test_read_bootstrap_value_is_a_generic_line_anchored_reader():
+def test_read_bootstrap_value_is_line_anchored_and_status_reader_is_unchanged():
     text = _text()
-    assert "function ReadBootstrapValue(const Key: string): string;" in text
-    body = _function_body(text, "ReadBootstrapValue")
-    # Line-start anchored (Copy(...,1,...) = Prefix), not a raw Pos() substring
-    # search -- so "BACKEND=" can never match inside a later, unrelated key.
-    assert "Copy(Lines[i], 1, Length(Prefix)) = Prefix" in body
-
-
-def test_read_bootstrap_status_is_untouched():
-    """ReadBootstrapStatus's exact shape is pinned by an existing regression
-    test (test_windows_installer_truthful_result_2313.py); this slice must add
-    a separate generic reader alongside it, not refactor it."""
-    text = _text()
+    reader = _function_body(text, "ReadBootstrapValue")
+    assert "Copy(Lines[i], 1, Length(Prefix)) = Prefix" in reader
+    assert "Result := Trim" in reader
     assert "Marker := 'STATUS=';" in _function_body(text, "ReadBootstrapStatus")
 
 
-# --- Regression: every new LText call is properly 3-way, failure text untouched -
+def test_all_finish_helpers_localize_every_lext_call():
+    text = _text()
+    names = (
+        "BuildFinishedSuccessSummaryText",
+        "BuildFinishedFailureSummaryText",
+        "FinishedScriptsStatusText",
+        "FinishedModelsStatusText",
+        "FinishedFfmpegStatusText",
+        "FinishedBackendStatusText",
+        "FormatApproxInstalledSize",
+    )
+    for name in names:
+        for en, nl, de in _lext_calls(_function_body(text, name)):
+            assert en.strip() and nl.strip() and de.strip()
 
 
-def test_every_lext_call_in_success_summary_is_fully_localized():
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    calls = _lext_calls(body)
-    # Lower than an earlier version of this test expected: trimming the
-    # cleanup explanation, generic offline-payload prose, and the 3-line
-    # Action-list walkthrough (see the "trimmed prose" tests above) removed
-    # several LText(...) calls along with the now-redundant text itself.
-    assert len(calls) >= 10, "expected at least the pre-existing plus the new LText(...) calls"
-    for en, nl, de in calls:
-        assert en.strip() and nl.strip() and de.strip()
-
-
-def test_failure_summary_still_makes_no_size_or_backend_claims():
+def test_failure_summary_makes_no_success_status_claims():
     body = _function_body(_text(), "BuildFinishedFailureSummaryText")
-    for forbidden in ("FormatApproxMB", "GetDirTreeSizeBytes", "Acceleration backend", "FFmpeg:"):
+    for forbidden in ("FormatApproxMB", "FormatApproxInstalledSize", "Acceleration", "FFmpeg"):
         assert forbidden not in body
 
 
@@ -451,210 +475,46 @@ def test_iss_still_never_mentions_the_offline_patch_installer():
     assert "STEMwerk_Offline_Patch" not in _text()
 
 
-# --- Finish page: corrected RunList geometry (proven by live diagnostics) --------
-#
-# Two earlier versions of the static-label fix were live-validation failures.
-# Temporary Log()-based instrumentation (BeforeLayout/AfterLayout/
-# VisibleDelayed, since removed) proved the actual root cause on real
-# hardware: RunList.Height is Inno's stock full-leftover-page-space default
-# (318px observed for 2 one-line items) and never changes on its own --
-# neither "trust RunList.Top" (v1) nor "trust RunList.Height" (v2) could ever
-# have worked, since the box itself was oversized by roughly 5x. This RunList
-# sizing logic is unchanged by the later move from FinishedLabel to
-# FinishedSummaryMemo -- only its anchor reference did.
-
-
-def test_layout_no_longer_merely_reads_runlist_top():
-    body = _function_body(_text(), "LayoutFinishedSummary")
-    assert "WizardForm.RunList.Top := RunListTop;" in body, (
-        "RunList's position must be SET by this procedure, not just read -- "
-        "reading its stock Top was the root cause of the live overlap"
-    )
-
-
-def test_runlist_is_pinned_to_a_stable_band_near_the_bottom_of_the_page():
-    body = _function_body(_text(), "LayoutFinishedSummary")
-    assert "WizardForm.FinishedPage.ClientHeight - WizardForm.RunList.Height - ScaleY(8)" in body
-
-
-def test_runlist_height_is_now_explicitly_computed_not_trusted_from_inno():
-    """BUG 2 root cause: Inno's stock RunList.Height (318px for 2 items, per
-    live diagnostic evidence) is NOT sized for its actual content -- it must
-    now be explicitly SET from a real per-row height, not left alone."""
-    body = _function_body(_text(), "LayoutFinishedSummary")
-    assert "WizardForm.RunList.Height := (RowHeight * WizardForm.RunList.Items.Count) + ScaleY(6);" in body
-
-
-def test_run_list_row_height_uses_font_metrics_not_the_stock_height_or_count():
-    """Pascal Script exposes no read-only 'actual rendered row height' on
-    TNewCheckListBox (confirmed against the Inno Setup 6.7.1 Pascal Script
-    class reference: only a settable MinItemHeight floor exists) -- so the
-    row height must come from the control's own live Font metrics, never
-    from dividing its stock Height by Items.Count (that division is exactly
-    the invalid 318/2 geometry this fix removes)."""
+def test_runlist_uses_compact_content_height_and_bottom_anchor():
     text = _text()
-    assert "function RunListRowHeight(List: TNewCheckListBox): Integer;" in text
-    body = _function_body(text, "RunListRowHeight")
-    assert "List.Font.Height" in body
-    assert "List.MinItemHeight" in body
-    assert "List.Height" not in body, "must not derive row height from the stock (invalid) Height"
-    assert "Items.Count" not in body, "must not derive row height by dividing by item count"
+    helper = _function_body(text, "RunListRowHeight")
+    layout = _function_body(text, "LayoutFinishedPage")
+    assert "List.Font.Height" in helper and "List.MinItemHeight" in helper
+    assert "List.Height" not in helper and "Items.Count" not in helper
+    assert "WizardForm.RunList.Height := (RunListRowHeight(WizardForm.RunList) * WizardForm.RunList.Items.Count) + ScaleY(6);" in layout
+    assert "WizardForm.FinishedPage.ClientHeight - WizardForm.RunList.Height - ScaleY(8)" in layout
+    assert "if RunListTop < y + ScaleY(4) then" in layout
+    assert "WizardForm.RunList.Visible := False;" in layout
 
 
-def test_zero_items_hides_runlist_and_gives_summary_the_full_remaining_space():
-    """The summary control must not assume a fixed number of RunList items --
-    handled defensively for 0 (hidden) as well as N > 0."""
-    body = _function_body(_text(), "LayoutFinishedSummary")
-    assert "if (WizardForm.RunList <> nil) and (WizardForm.RunList.Items.Count > 0) then" in body
-    idx_else = body.index("\n  end\n  else\n")
-    else_block = body[idx_else:]
-    assert "WizardForm.RunList.Visible := False;" in else_block
-    assert "WizardForm.FinishedPage.ClientHeight - FinishedSummaryMemo.Top - ScaleY(12);" in else_block
-
-
-def test_summary_height_is_derived_from_the_new_runlist_top_not_the_old_one():
-    body = _function_body(_text(), "LayoutFinishedSummary")
-    idx_set = body.index("WizardForm.RunList.Top := RunListTop;")
-    idx_desired = body.index("DesiredHeight := RunListTop - FinishedSummaryMemo.Top - ScaleY(8);")
-    assert idx_set < idx_desired, (
-        "the memo's height must be computed from the repositioned RunList.Top, "
-        "after it has been moved -- not from whatever Inno originally set it to"
-    )
-
-
-def test_desired_height_clamp_is_downward_only_never_forces_overlap():
-    """The earlier (broken) versions clamped DesiredHeight UP to a fixed
-    minimum (96sc), which is exactly what re-introduced overlap risk when
-    RunListTop sat close to the summary control's Top. The fix must only
-    floor at zero, never clamp upward past whatever RunListTop actually
-    allows."""
-    body = _function_body(_text(), "LayoutFinishedSummary")
-    assert "if DesiredHeight < 0 then" in body
-    assert "DesiredHeight := 0" in body
-    assert "ScaleY(96)" not in body, "must not reintroduce the old upward clamp"
-
-
-def test_geometry_formulas_cannot_produce_an_overlapping_region():
-    """Prove the two controls' vertical regions cannot overlap, algebraically,
-    for representative (non-negative) FinishedPage/RunList inputs -- not just
-    by trusting the source shape. RunListTop has one floor clamp (never above
-    FinishedLabel.Top, a degenerate-page-only guard -- see
-    test_runlist_top_has_a_degenerate_page_floor_clamp), and DesiredHeight is
-    floored at zero; neither can push FinishedLabel's bottom edge past
-    RunList.Top."""
-    for finished_label_top in (0, 40, 84, 120):
-        for client_height in (200, 300, 500, 515, 900):
-            for run_list_height in (0, 20, 46, 60, 120):
-                run_list_top = client_height - run_list_height - 8
-                if run_list_top < finished_label_top:
-                    run_list_top = finished_label_top
-                desired_height = run_list_top - finished_label_top - 8
-                if desired_height < 0:
-                    desired_height = 0
-                finished_label_bottom = finished_label_top + desired_height
-                assert finished_label_bottom <= run_list_top, (
-                    f"overlap: label bottom {finished_label_bottom} > RunList.Top {run_list_top} "
-                    f"(client_height={client_height}, run_list_height={run_list_height})"
-                )
-
-
-def test_runlist_top_has_a_degenerate_page_floor_clamp():
-    """On a pathologically short ClientHeight, RunListTop computed from
-    ClientHeight - RunList.Height - margin could fall below the summary
-    control's Top, which would overlap even at DesiredHeight=0 (since its
-    bottom edge is never above its own Top). This one clamp is necessary and
-    cannot itself cause overlap -- it raises RunListTop no higher than the
-    summary control's Top, never past it."""
-    body = _function_body(_text(), "LayoutFinishedSummary")
-    assert "if RunListTop < FinishedSummaryMemo.Top then" in body
-    assert "RunListTop := FinishedSummaryMemo.Top;" in body
-
-
-def test_finished_label_gains_materially_more_height_than_the_broken_128px_case():
-    """Live diagnostic evidence measured the OLD (broken) formula giving
-    FinishedLabel.Height=128 at ClientHeight=515, FinishedLabel.Top=84,
-    Items.Count=2. Prove the NEW formula gives a materially larger region at
-    those same inputs, for any plausible per-row height (a single checkbox
-    row is comfortably under 60px at any realistic DPI/font combination) --
-    the region is now handed to FinishedSummaryMemo, not FinishedLabel."""
-    client_height = 515
-    finished_label_top = 84
-    item_count = 2
-    for row_height in (10, 20, 30, 45, 60):
-        run_list_height = row_height * item_count + 6
-        run_list_top = client_height - run_list_height - 8
-        desired_height = run_list_top - finished_label_top - 8
-        assert desired_height > 250, (
-            f"expected materially more than the broken 128px, got {desired_height} "
-            f"for row_height={row_height}"
-        )
+def test_structured_layout_has_no_page_level_scroll_control():
+    text = _text()
+    layout = _function_body(text, "LayoutFinishedPage")
+    assert "ScrollBars" not in layout
+    assert "TNewMemo" not in layout
+    assert "for i := 0 to 3 do" in layout
+    assert "for i := 0 to 4 do" in layout
 
 
 @pytest.mark.parametrize("scale", [1.0, 1.25, 1.5])
-def test_layout_remains_valid_under_100_125_150_percent_scaling(scale):
-    """Static algebraic check (not a substitute for a live visual PASS at
-    each scale) that the formula stays overlap-free and leaves the summary
-    control a sane amount of space across representative DPI scale factors."""
+def test_normal_finish_regions_fit_the_standard_height(scale):
+    """Conservative model of the successful page at the retained 120% height.
+    This is a static guard, not a visual DPI certification."""
 
     def sc(px):
         return round(px * scale)
 
-    client_height = sc(515)
-    finished_label_top = sc(84)
-    for item_count in (0, 1, 2, 5):
-        if item_count > 0:
-            row_height = sc(14) + sc(8)  # font metric + padding, both DPI-scaled
-            run_list_height = row_height * item_count + sc(6)
-            run_list_top = client_height - run_list_height - sc(8)
-            desired_height = run_list_top - finished_label_top - sc(8)
-        else:
-            desired_height = client_height - finished_label_top - sc(12)
-            run_list_top = client_height  # RunList hidden; nothing to overlap
-        if desired_height < 0:
-            desired_height = 0
-        finished_label_bottom = finished_label_top + desired_height
-        assert finished_label_bottom <= run_list_top, (
-            f"overlap at scale={scale}, item_count={item_count}"
-        )
-        assert desired_height > 0, f"zero-height region at scale={scale}, item_count={item_count}"
-
-
-def test_summary_does_not_assume_content_always_fits_without_scrolling():
-    """The whole point of replacing the static label with a memo is to stop
-    assuming rendered content height <= available Height. This test exists
-    to prevent a future regression back to that assumption: the control must
-    be genuinely scrollable (ScrollBars=ssVertical, proven above), and
-    nothing in the layout may compute or clamp DesiredHeight against the
-    text's own required height (that would defeat the point -- overflow must
-    be reachable by scrolling, not pre-emptively sized around)."""
-    body = _function_body(_text(), "LayoutFinishedSummary")
-    assert "DrawText" not in body
-    assert "RequiredHeight" not in body
-    assert "TextHeight" not in body
-
-
-# --- Finish page: merged summary (no duplicate "installed" list) ---------------
-
-
-def test_installed_locations_heading_is_gone_merged_into_what_was_installed():
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    assert "Installed locations:" not in body, (
-        "this repeated the same three items 'What was installed:' already "
-        "named; live validation showed the duplication was what pushed the "
-        "actually-new size/FFmpeg/backend detail off the visible page"
-    )
-    assert "What was installed:" in body
-
-
-def test_each_installed_item_has_its_path_folded_directly_under_it():
-    body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
-    idx_scripts = body.index("LText('- REAPER scripts:'")
-    idx_scripts_line = body.index("ScriptsLine +", idx_scripts)
-    idx_runtime = body.index("LText('- STEMwerk runtime:'")
-    assert idx_scripts < idx_scripts_line < idx_runtime, (
-        "the scripts path/size must appear directly under the scripts bullet, "
-        "not in a separate later section"
-    )
+    # Normalized from the live 125% wizard: 515px page height and 96px
+    # content top become 412px and 77px at 100%.
+    page_h = sc(412)
+    content_top = sc(77)
+    outcome_h = sc(54)
+    status_h = sc(17) + 4 * sc(17) + sc(4)
+    paths_h = sc(17) + sc(2) + 4 * (sc(20) + sc(1))
+    content_bottom = content_top + outcome_h + sc(2) + status_h + paths_h
+    run_h = 2 * (sc(14) + sc(8)) + sc(6)
+    run_top = page_h - run_h - sc(8)
+    assert content_bottom + sc(4) <= run_top
 
 
 # --- Ready page: real canonical space figures, not Inno's `Space` parameter --
@@ -738,6 +598,13 @@ def test_ready_memo_disk_space_line_localized_in_all_three_languages():
         assert needle in body
     for forbidden in ("installed size", "Installed size", "total footprint", "Total footprint"):
         assert forbidden not in body
+    for footprint_key in (
+        "INSTALLED_SCRIPTS_BYTES",
+        "INSTALLED_RUNTIME_BYTES",
+        "INSTALLED_MODELS_BYTES",
+        "INSTALLED_TOTAL_BYTES",
+    ):
+        assert footprint_key not in body
 
 
 def test_insufficient_disk_space_actually_blocks_installation():

@@ -115,7 +115,10 @@ def test_finished_summary_dispatches_on_the_resolved_result():
 def test_success_finished_text_reports_success():
     body = _function_body(_text(), "BuildFinishedSuccessSummaryText")
     assert "STEMwerk setup completed." in body
-    assert "What was installed:" in body
+    assert "VersionTag" in body
+    text = _text()
+    assert "Installed components" in text
+    assert "FinishedPathsHeading" in text
 
 
 def test_failure_finished_text_reports_failure_and_points_to_the_log():

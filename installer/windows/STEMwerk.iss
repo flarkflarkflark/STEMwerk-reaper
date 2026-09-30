@@ -1,6 +1,9 @@
 #define MyAppName "STEMwerk"
 #define MyAppPublisher "flarkAUDIO <flarkaudio@pm.me>"
 #define MyAppURL "https://github.com/flarkflarkflark/STEMwerk"
+; Product tagline: a fixed product string (like the name itself), deliberately
+; not routed through LText, so it reads identically in EN/NL/DE.
+#define MyAppTagline "STEM separation for REAPER"
 
 ; Version comes from env in CI. Local builds fall back to the repo VERSION file.
 #define MyAppVersion GetEnv('STEMWERK_VERSION')
@@ -62,11 +65,22 @@ VersionInfoDescription={#MyAppName} {#MyAppVersion} build {#MyBuildDate}
 #if FileExists('..\assets\stemwerk.ico')
 SetupIconFile=..\assets\stemwerk.ico
 #endif
+; With WizardStyle "dynamic", the plain Wizard*ImageFile directives only cover
+; the light case: under Windows dark mode Inno uses the *DynamicDark variants
+; and falls back to its own built-in dark images if they are blank. The same
+; STEMwerk images are used for both (the large one is already a dark design).
 #if FileExists('..\assets\stemwerk-wizard.bmp')
 WizardImageFile=..\assets\stemwerk-wizard.bmp
+WizardImageFileDynamicDark=..\assets\stemwerk-wizard.bmp
 #endif
-#if FileExists('..\assets\stemwerk-wizard-small-logo.bmp')
-WizardSmallImageFile=..\assets\stemwerk-wizard-small-logo.bmp
+; Header logo: the square 512x512 app logo, not the old 55x58 bmp. Inno's
+; small-image area is square (58x58 at 100%, 77x77 at 125%), and the bmp had
+; solid white rows baked in (1 above, 2 below) plus a non-square shape, which
+; showed as white bands above and below the logo; upscaling 55px also blurred
+; it. The square PNG shrinks cleanly at every DPI.
+#if FileExists('..\assets\stemwerk.png')
+WizardSmallImageFile=..\assets\stemwerk.png
+WizardSmallImageFileDynamicDark=..\assets\stemwerk.png
 #endif
 DefaultDirName={userappdata}\REAPER\Scripts\STEMwerk-reaper
 DefaultGroupName=STEMwerk
@@ -75,8 +89,22 @@ OutputDir=dist
 OutputBaseFilename=STEMwerk-Setup-{#MyAppVersion}{#OutputSuffix}
 Compression=lzma
 SolidCompression=yes
-WizardStyle=classic
+; modern dynamic: Inno's own native look, light or dark following the Windows
+; app theme (read once at Setup startup). No custom skin: [Code] only colours
+; the brand letters and step bars, theme-aware via IsDarkInstallMode.
+WizardStyle=modern dynamic
+; Keep Inno's standard 120% size in both directions. The Finished page uses
+; compact status rows and single-line path fields, so it does not need the
+; earlier 150% width; long resolved paths remain selectable in their fields.
+WizardSizePercent=120,120
 PrivilegesRequired=lowest
+; cleanup_runtime is destructive (removes .venv/logs/cache): it must be OFF
+; whenever Setup starts unless chosen during that run. With the default
+; UsePreviousTasks=yes, Inno restores the previous run's task choices and a
+; once-chosen cleanup would come back pre-checked (and silently re-run on a
+; /SILENT reinstall). It is currently the only task, so this changes nothing
+; else.
+UsePreviousTasks=no
 RestartIfNeededByRun=no
 DisableWelcomePage=no
 LicenseFile=STEMwerk_License_Agreement.txt
@@ -170,12 +198,6 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -Fil
 
 [Code]
 var
-  WelcomeTitlePrefixLabel: TNewStaticText;
-  WelcomeTitleStemS: TNewStaticText;
-  WelcomeTitleStemT: TNewStaticText;
-  WelcomeTitleStemE: TNewStaticText;
-  WelcomeTitleStemM: TNewStaticText;
-  WelcomeTitleSuffixLabel: TNewStaticText;
   WelcomeInfoLabel: TNewStaticText;
   TasksBrandLabel: TNewStaticText;
   TasksInfoLabel: TNewStaticText;
@@ -188,9 +210,20 @@ var
   StatusStemE: TNewStaticText;
   StatusStemM: TNewStaticText;
   StatusSuffixLabel: TNewStaticText;
-  FinishedPrefixLabel: TNewStaticText;
-  FinishedBrandLabel: TNewStaticText;
-  FinishedSummaryMemo: TNewMemo;
+  FinishedOutcomeLabel: TNewStaticText;
+  FinishedComponentsHeading: TNewStaticText;
+  FinishedSystemHeading: TNewStaticText;
+  FinishedPathsHeading: TNewStaticText;
+  FinishedStatusNames: array[0..4] of TNewStaticText;
+  FinishedStatusValues: array[0..4] of TNewStaticText;
+  FinishedComponentSizes: array[0..2] of TNewStaticText;
+  FinishedTotalNameLabel: TNewStaticText;
+  FinishedTotalSizeLabel: TNewStaticText;
+  FinishedPathLabels: array[0..3] of TNewStaticText;
+  FinishedPathEdits: array[0..3] of TNewEdit;
+  FinishedOpenButtons: array[0..3] of TNewButton;
+  FinishedContentTop: Integer;
+  FinishedContentLeft: Integer;
   StatusDetailLabel: TNewStaticText;
   ProgressOverlayLabel: TNewStaticText;
   StepLabelS: TNewStaticText;
@@ -234,6 +267,33 @@ function KillTimer(hWnd, nIDEvent: LongInt): LongInt;
 function RGBColor(R, G, B: Byte): Integer;
 begin
   Result := Integer(R) or (Integer(G) shl 8) or (Integer(B) shl 16);
+end;
+
+// The S-T-E-M brand palette was designed for a dark background (it matches
+// the dark wizard bitmap): on the dark style every colour clears 3.7:1, but
+// on the light style T, M and the orange step-5 colour fall to 1.3-1.9:1
+// against white. Light mode therefore uses darker shades of the same hues
+// (all >= 4.8:1 on white); dark mode keeps the original palette.
+function BrandTextColor(DarkPaletteColor: Integer): Integer;
+begin
+  Result := DarkPaletteColor;
+  if IsDarkInstallMode then Exit;
+  if DarkPaletteColor = RGBColor(255, 100, 100) then Result := RGBColor(200, 50, 50)
+  else if DarkPaletteColor = RGBColor(100, 200, 255) then Result := RGBColor(0, 115, 180)
+  else if DarkPaletteColor = RGBColor(150, 100, 255) then Result := RGBColor(120, 70, 220)
+  else if DarkPaletteColor = RGBColor(100, 255, 150) then Result := RGBColor(20, 130, 60)
+  else if DarkPaletteColor = RGBColor(255, 180, 90) then Result := RGBColor(170, 95, 0);
+end;
+
+// Only brand-coloured text gets an explicit colour; everything else keeps the
+// style's native text colour. The built-in dark style normally overrides
+// script-assigned colours, so seFont is dropped from StyleElements for these
+// labels only. Under a high-contrast theme no colour is forced at all.
+procedure ApplyBrandTextColor(L: TNewStaticText; DarkPaletteColor: Integer);
+begin
+  if HighContrastActive then Exit;
+  L.StyleElements := L.StyleElements - [seFont];
+  L.Font.Color := BrandTextColor(DarkPaletteColor);
 end;
 
 function MemoVisibleLines(M: TNewMemo): Integer;
@@ -355,45 +415,6 @@ begin
   end;
 end;
 
-// Recursive tree size in bytes. Skips "_bundled": that subtree is offline
-// installer payload staged under {app} for bundled builds, not "REAPER
-// scripts", and its file count (built from the same wheel closure as the
-// runtime venvs) is exactly the kind of cost this function must not eat
-// silently -- measured directly on this machine's real STEMwerk install, the
-// two runtime venvs alone were 72,000+ files, 1-2 seconds each even under
-// .NET's optimized enumerator; the actual script tree is ~160 files, instant.
-// Called ONLY on {app} (with _bundled skipped) and on RuntimeBase\models --
-// both verified cheap. Never called on the full runtime base or on a venv.
-function GetDirTreeSizeBytes(const Dir: string): Int64;
-var
-  FindRec: TFindRec;
-  FullPath: string;
-begin
-  Result := 0;
-  if not DirExists(Dir) then
-    Exit;
-  if FindFirst(Dir + '\*', FindRec) then
-  begin
-    try
-      repeat
-        if (FindRec.Name = '.') or (FindRec.Name = '..') then
-          Continue;
-        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
-        begin
-          if FindRec.Name = '_bundled' then
-            Continue;
-          FullPath := Dir + '\' + FindRec.Name;
-          Result := Result + GetDirTreeSizeBytes(FullPath);
-        end
-        else
-          Result := Result + (Int64(FindRec.SizeHigh) shl 32) + Int64(FindRec.SizeLow);
-      until not FindNext(FindRec);
-    finally
-      FindClose(FindRec);
-    end;
-  end;
-end;
-
 procedure CleanupRuntimeArtifacts(RemoveModels: Boolean);
 var
   RuntimeBase: string;
@@ -450,15 +471,66 @@ begin
     Result := EnText;
 end;
 
-// MB-rounded, so "Approx." is an honest label rather than a false-precision
-// exact byte count -- not a hedge against measurement uncertainty (the scan
-// itself is exact for whatever the tree contains at the moment it runs).
-function FormatApproxMB(const Bytes: Int64): string;
+function FormatApproxInstalledSize(const Bytes: Int64): string;
+var
+  Hundredths: Int64;
+  WholePart: Int64;
+  FracPart: Int64;
+  FracStr: string;
 begin
-  if Bytes <= 0 then
-    Result := LText('Approx. 0 MB', 'Ong. 0 MB', 'Ca. 0 MB')
-  else
-    Result := LText('Approx. ', 'Ong. ', 'Ca. ') + IntToStr((Bytes + 524288) div 1048576) + ' MB';
+  // The divisors are binary, so the displayed units must be IEC units too.
+  // Keep small values readable as rounded KiB, normal components as rounded
+  // MiB, and multi-GiB trees at two decimal places.
+  if Bytes < 1048576 then
+  begin
+    if Bytes <= 0 then
+      Result := LText('Approx. 0 KiB', 'Ong. 0 KiB', 'Ca. 0 KiB')
+    else
+      Result := LText('Approx. ', 'Ong. ', 'Ca. ') +
+        IntToStr((Bytes + 512) div 1024) + ' KiB';
+    Exit;
+  end;
+  if Bytes < 1073741824 then
+  begin
+    Result := LText('Approx. ', 'Ong. ', 'Ca. ') +
+      IntToStr((Bytes + 524288) div 1048576) + ' MiB';
+    Exit;
+  end;
+
+  Hundredths := ((Bytes * 100) + 536870912) div 1073741824;
+  WholePart := Hundredths div 100;
+  FracPart := Hundredths mod 100;
+  FracStr := IntToStr(FracPart);
+  if Length(FracStr) < 2 then
+    FracStr := '0' + FracStr;
+  Result := LText('Approx. ', 'Ong. ', 'Ca. ') +
+    IntToStr(WholePart) + '.' + FracStr + ' GiB';
+end;
+
+function TryReadBootstrapBytes(const Key: string; var Bytes: Int64): Boolean;
+var
+  Value: string;
+begin
+  Result := False;
+  Bytes := 0;
+  Value := ReadBootstrapValue(Key);
+  if Value = '' then
+    Exit;
+  try
+    Bytes := StrToInt64(Value);
+    Result := Bytes >= 0;
+  except
+    Bytes := 0;
+  end;
+end;
+
+function FinishedMeasuredSizeText(const Key: string): string;
+var
+  Bytes: Int64;
+begin
+  Result := '';
+  if TryReadBootstrapBytes(Key, Bytes) then
+    Result := FormatApproxInstalledSize(Bytes);
 end;
 
 // Integer-only GB formatting (2 decimal places) so a MB figure from
@@ -519,110 +591,73 @@ begin
   end;
 end;
 
-function BuildFinishedSuccessSummaryText: string;
-var
-  ScriptsLine: string;
-  ModelsDir: string;
-  ModelsLine: string;
-  FfmpegPathValue: string;
-  FfmpegSourceValue: string;
-  FfmpegBlock: string;
-  BackendValue: string;
-  BackendReasonValue: string;
-  BackendBlock: string;
+// Finished-page data. The bootstrap measures the installed trees once during
+// the installation phase and writes non-overlapping byte counts to its state
+// file. The Finished page only reads those values; it never synchronously
+// scans the multi-GB runtime tree.
+function FinishedModelsDir: string;
 begin
-  // REAPER scripts: a small, fixed-shape tree (_bundled excluded) -- cheap to
-  // scan regardless of build flavor, verified instant on a real install.
-  ScriptsLine := '  ' + ExpandConstant('{app}');
-  if DirExists(ExpandConstant('{app}')) then
-    ScriptsLine := ScriptsLine + '  (' + FormatApproxMB(GetDirTreeSizeBytes(ExpandConstant('{app}'))) + ')';
-  ScriptsLine := ScriptsLine + #13#10;
+  Result := GetRuntimeBasePath + '\models';
+end;
 
-  // The runtime root itself (venvs included) is NOT scanned: measured on a
-  // real install, its two Python environments alone were 70,000+ files and
-  // several GB, which would make the Finished page visibly stall to size
-  // truthfully. Its path is still shown; no size is claimed for it, and no
-  // "total footprint" is presented since that would require the same
-  // expensive scan. models\ is scanned on its own -- verified cheap (a
-  // handful of checkpoint files) -- because it directly matters to the
-  // "downloaded models are kept" promise.
-  ModelsDir := GetRuntimeBasePath + '\models';
-  ModelsLine := '';
-  if DirExists(ModelsDir) then
-    ModelsLine :=
-      LText('- Models/cache:', '- Modellen/cache:', '- Modelle/Cache:') + #13#10 +
-      '  ' + ModelsDir + '  (' + FormatApproxMB(GetDirTreeSizeBytes(ModelsDir)) + ')' + #13#10;
+function FinishedScriptsStatusText: string;
+begin
+  Result := LText('Installed', 'Geinstalleerd', 'Installiert');
+end;
 
-  FfmpegSourceValue := ReadBootstrapValue('FFMPEG_SOURCE');
-  FfmpegPathValue := ReadBootstrapValue('FFMPEG_PATH');
-  FfmpegBlock := '';
-  if FfmpegSourceValue <> '' then
-  begin
-    FfmpegBlock := LText('FFmpeg: ', 'FFmpeg: ', 'FFmpeg: ');
-    if FfmpegSourceValue = 'bundled' then
-      FfmpegBlock := FfmpegBlock + LText('installed from the bundled offline payload', 'geinstalleerd vanuit de gebundelde offline payload', 'installiert aus der gebuendelten Offline-Payload')
-    else if FfmpegSourceValue = 'download' then
-      FfmpegBlock := FfmpegBlock + LText('downloaded during setup', 'gedownload tijdens setup', 'waehrend des Setups heruntergeladen')
-    else if FfmpegSourceValue = 'existing' then
-      FfmpegBlock := FfmpegBlock + LText('reused (already present on this system)', 'hergebruikt (al aanwezig op dit systeem)', 'wiederverwendet (bereits auf diesem System vorhanden)')
-    else
-      FfmpegBlock := FfmpegBlock + LText('not confirmed available', 'niet bevestigd beschikbaar', 'nicht bestaetigt verfuegbar');
-    FfmpegBlock := FfmpegBlock + #13#10;
-    if FfmpegPathValue <> '' then
-      FfmpegBlock := FfmpegBlock + '  ' + FfmpegPathValue + #13#10;
-    FfmpegBlock := FfmpegBlock + #13#10;
-  end;
+function FinishedModelsStatusText: string;
+begin
+  if DirExists(FinishedModelsDir) then
+    Result := LText('Available', 'Beschikbaar', 'Vorhanden')
+  else
+    Result := LText('Not present', 'Niet aanwezig', 'Nicht vorhanden');
+end;
 
+function FinishedFfmpegStatusText: string;
+var
+  Source: string;
+begin
+  Source := ReadBootstrapValue('FFMPEG_SOURCE');
+  if Source = 'bundled' then
+    Result := LText('Bundled', 'Meegeleverd', 'Mitgeliefert')
+  else if Source = 'download' then
+    Result := LText('Downloaded', 'Gedownload', 'Heruntergeladen')
+  else if Source = 'existing' then
+    Result := LText('Reused', 'Hergebruikt', 'Wiederverwendet')
+  else if Source <> '' then
+    Result := LText('Not confirmed', 'Niet bevestigd', 'Nicht bestaetigt')
+  else
+    Result := LText('Unknown', 'Onbekend', 'Unbekannt');
+end;
+
+function FinishedBackendStatusText: string;
+var
+  BackendValue: string;
+begin
   BackendValue := ReadBootstrapValue('BACKEND');
-  BackendReasonValue := ReadBootstrapValue('BACKEND_REASON');
-  BackendBlock := '';
-  if BackendValue <> '' then
-  begin
-    BackendBlock := LText('Acceleration backend: ', 'Acceleratie-backend: ', 'Beschleunigungs-Backend: ');
-    if BackendValue = 'directml' then
-      BackendBlock := BackendBlock + 'DirectML'
-    else if BackendValue = 'cuda' then
-      BackendBlock := BackendBlock + 'CUDA'
-    else if BackendValue = 'cpu' then
-      BackendBlock := BackendBlock + 'CPU'
-    else
-      BackendBlock := BackendBlock + BackendValue;
-    if BackendReasonValue <> '' then
-      BackendBlock := BackendBlock + ' (' + BackendReasonValue + ')';
-    BackendBlock := BackendBlock + #13#10 + #13#10;
-  end;
+  if BackendValue = 'directml' then
+    Result := 'DirectML'
+  else if BackendValue = 'cuda' then
+    Result := 'CUDA'
+  else if BackendValue = 'cpu' then
+    Result := 'CPU'
+  else if BackendValue <> '' then
+    Result := BackendValue
+  else
+    Result := LText('Unknown', 'Onbekend', 'Unbekannt');
+end;
 
-  // One list, not two: the previous "What was installed" (generic names) and
-  // "Installed locations" (paths) headings said the same three things twice.
-  // Live validation showed that duplication was what pushed the genuinely new
-  // information (sizes/FFmpeg/backend) far down the page, past the visible
-  // area. Merging them keeps "What was installed:" (the literal heading a
-  // regression test pins) as the single list, with each item's path/size
-  // folded directly under it.
-  //
-  // The generic "offline payload, if included" line, the cleanup-task
-  // explanation (already visible as the Task selection itself), and the
-  // three-line REAPER Action-list walkthrough were removed here: none of
-  // them are per-install facts, and live DrawText measurement proved the
-  // page's real content (paths/sizes/FFmpeg/backend/log) alone already
-  // exceeds the available height at 125% DPI in all three languages. This
-  // control now scrolls (see FinishedSummaryMemo), so the goal is a concise
-  // operational summary, not fitting more prose into a fixed box.
+// Success-path outcome text at the top of the Finished page. Components,
+// system status and paths are separate structured rows below it (see
+// LayoutFinishedPage), so this is only the outcome plus the one next step:
+// only a successful install may point at Check only, and repair stays with
+// this installer.
+function BuildFinishedSuccessSummaryText: string;
+begin
   Result :=
     LText('STEMwerk setup completed.', 'STEMwerk setup voltooid.', 'STEMwerk Setup abgeschlossen.') +
-    ' (' + VersionTag + ')' + #13#10 + #13#10 +
-    LText('What was installed:', 'Wat is geinstalleerd:', 'Was wurde installiert:') + #13#10 +
-    LText('- REAPER scripts:', '- REAPER-scripts:', '- REAPER-Skripte:') + #13#10 +
-    ScriptsLine +
-    LText('- STEMwerk runtime:', '- STEMwerk-runtime:', '- STEMwerk-Runtime:') + #13#10 +
-    '  ' + GetRuntimeBasePath + #13#10 +
-    ModelsLine + #13#10 +
-    FfmpegBlock +
-    BackendBlock +
-    LText('Next step:', 'Volgende stap:', 'Naechster Schritt:') + #13#10 +
-    LText('- Use STEMwerk: Setup to check the runtime (Check only). If it reports a problem, re-run this STEMwerk installer to repair it.', '- Gebruik STEMwerk: Setup om de runtime te controleren (Check only). Meldt dat een probleem, voer deze STEMwerk-installer opnieuw uit om te herstellen.', '- Nutze STEMwerk: Setup, um die Runtime zu pruefen (Check only). Meldet das ein Problem, fuehre diesen STEMwerk-Installer erneut aus, um sie zu reparieren.') + #13#10 + #13#10 +
-    LText('Setup log:', 'Setup-log:', 'Setup-Log:') + #13#10 +
-    '  ' + GetLogPath;
+    ' (' + VersionTag + ')' + #13#10 +
+    LText('- Use STEMwerk: Setup to check the runtime (Check only). If it reports a problem, re-run this STEMwerk installer to repair it.', '- Gebruik STEMwerk: Setup om de runtime te controleren (Check only). Meldt dat een probleem, voer deze STEMwerk-installer opnieuw uit om te herstellen.', '- Nutze STEMwerk: Setup, um die Runtime zu pruefen (Check only). Meldet das ein Problem, fuehre diesen STEMwerk-Installer erneut aus, um sie zu reparieren.');
 end;
 
 function BuildFinishedFailureSummaryText: string;
@@ -801,6 +836,11 @@ begin
       'Preparing Drum Kit separation runtime and offline models. This can take several minutes...',
       'Drum Kit-separatieruntime en offline modellen worden voorbereid. Dit kan enkele minuten duren...',
       'Drum-Kit-Separator-Runtime und Offline-Modelle werden vorbereitet. Das kann mehrere Minuten dauern...')
+  else if Detail = 'Calculating installed size...' then
+    Result := LText(
+      'Calculating installed size...',
+      'Installatiegrootte wordt berekend...',
+      'Installierte Groesse wird berechnet...')
   else if Detail = 'Installing separator runtime packages.' then
     Result := LText(
       'Installing separator runtime packages.',
@@ -926,12 +966,21 @@ begin
   if Active then
   begin
     L.Font.Style := [fsBold];
-    L.Font.Color := BaseColor;
+    ApplyBrandTextColor(L, BaseColor);
   end
   else
   begin
     L.Font.Style := [];
-    L.Font.Color := RGBColor(120, 120, 120);
+    // Deliberately dimmed "not yet / done" state, so it needs a colour that
+    // reads on both styles (>= 4.7:1), not the style's full text colour.
+    if not HighContrastActive then
+    begin
+      L.StyleElements := L.StyleElements - [seFont];
+      if IsDarkInstallMode then
+        L.Font.Color := RGBColor(150, 150, 150)
+      else
+        L.Font.Color := RGBColor(110, 110, 110);
+    end;
   end;
 end;
 
@@ -940,8 +989,16 @@ var
   TargetWidth: Integer;
 begin
   if (TrackPanel = nil) or (FillPanel = nil) then Exit;
-  TrackPanel.Color := RGBColor(232, 232, 232);
-  FillPanel.Color := FillColor;
+  // Painted bars, not text: seClient is dropped so the dark style keeps the
+  // colours; the empty track follows the style's lightness, and every fill
+  // stays >= 3.4:1 against its track on both styles.
+  TrackPanel.StyleElements := TrackPanel.StyleElements - [seClient];
+  FillPanel.StyleElements := FillPanel.StyleElements - [seClient];
+  if IsDarkInstallMode then
+    TrackPanel.Color := RGBColor(48, 48, 48)
+  else
+    TrackPanel.Color := RGBColor(232, 232, 232);
+  FillPanel.Color := BrandTextColor(FillColor);
   if (ActiveStep > 0) and (Step < ActiveStep) then
     TargetWidth := TrackPanel.Width
   else if Step = ActiveStep then
@@ -1106,6 +1163,75 @@ begin
   UpdateLogMemo;
 end;
 
+// Title hierarchy shared by the Welcome and Finished pages: the product name
+// with the brand's coloured S-T-E-M letters (the same colours the wizard
+// bitmap and the installing-page legend already use), returning the
+// wordmark's bottom edge so callers can stack the tagline beneath it.
+function CreateBrandWordmark(Parent: TWinControl; ALeft, ATop, AFontSize: Integer): Integer;
+var
+  Parts: array[0..4] of string;
+  Colors: array[0..4] of Integer;
+  L: TNewStaticText;
+  i, x: Integer;
+begin
+  Parts[0] := 'S'; Colors[0] := RGBColor(255, 100, 100);
+  Parts[1] := 'T'; Colors[1] := RGBColor(100, 200, 255);
+  Parts[2] := 'E'; Colors[2] := RGBColor(150, 100, 255);
+  Parts[3] := 'M'; Colors[3] := RGBColor(100, 255, 150);
+  Parts[4] := 'werk'; Colors[4] := 0;
+  x := ALeft;
+  Result := ATop;
+  for i := 0 to 4 do
+  begin
+    L := TNewStaticText.Create(WizardForm);
+    L.Parent := Parent;
+    L.AutoSize := True;
+    L.Font.Size := AFontSize;
+    L.Font.Style := [fsBold];
+    // "werk" keeps the style's own text colour (black on light, light on dark).
+    if i < 4 then
+      ApplyBrandTextColor(L, Colors[i]);
+    L.Caption := Parts[i];
+    L.Left := x;
+    L.Top := ATop;
+    x := L.Left + L.Width;
+    if L.Top + L.Height > Result then
+      Result := L.Top + L.Height;
+  end;
+end;
+
+function CreateTaglineLabel(Parent: TWinControl; ALeft, ATop: Integer): TNewStaticText;
+begin
+  Result := TNewStaticText.Create(WizardForm);
+  Result.Parent := Parent;
+  Result.AutoSize := True;
+  Result.Font.Size := 10;
+  Result.Caption := '{#MyAppTagline}';
+  Result.Left := ALeft;
+  Result.Top := ATop;
+end;
+
+// Finished-page text in the style's own colours (no fixed text colour).
+function CreateFinishedText(const ACaption: string; Bold: Boolean): TNewStaticText;
+begin
+  Result := TNewStaticText.Create(WizardForm);
+  Result.Parent := WizardForm.FinishedPage;
+  Result.AutoSize := True;
+  Result.Caption := ACaption;
+  if Bold then
+    Result.Font.Style := [fsBold];
+end;
+
+procedure FinishedOpenClick(Sender: TObject);
+var
+  i: Integer;
+  ErrorCode: Integer;
+begin
+  for i := 0 to 3 do
+    if Sender = FinishedOpenButtons[i] then
+      ShellExec('', FinishedPathEdits[i].Text, '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
+end;
+
 procedure InitializeWizard;
 var
   PageW: Integer;
@@ -1125,6 +1251,9 @@ var
   TasksWelcomeStemE: TNewStaticText;
   TasksWelcomeStemM: TNewStaticText;
   TasksWelcomeSuffixLabel: TNewStaticText;
+  TitleBottom: Integer;
+  Tagline: TNewStaticText;
+  i: Integer;
 begin
   WelcomeX := ScaleX(16);
   WelcomeTitleY := ScaleY(16);
@@ -1138,86 +1267,21 @@ begin
     WelcomeTitleY := WizardForm.WelcomeLabel1.Top;
     WizardForm.WelcomeLabel1.Visible := False;
 
-    WelcomeTitlePrefixLabel := TNewStaticText.Create(WizardForm);
-    WelcomeTitlePrefixLabel.Parent := WizardForm.WelcomePage;
-    WelcomeTitlePrefixLabel.AutoSize := True;
-    WelcomeTitlePrefixLabel.Font.Size := 15;
-    WelcomeTitlePrefixLabel.Font.Style := [fsBold];
-    WelcomeTitlePrefixLabel.Font.Color := RGBColor(20, 20, 20);
-    WelcomeTitlePrefixLabel.Caption := LText('Welcome to ', 'Welkom bij ', 'Willkommen bei ');
-    WelcomeTitlePrefixLabel.Left := WelcomeX;
-    WelcomeTitlePrefixLabel.Top := WelcomeTitleY;
-    x := WelcomeTitlePrefixLabel.Left + WelcomeTitlePrefixLabel.Width;
-
-    WelcomeTitleStemS := TNewStaticText.Create(WizardForm);
-    WelcomeTitleStemS.Parent := WizardForm.WelcomePage;
-    WelcomeTitleStemS.AutoSize := True;
-    WelcomeTitleStemS.Font.Size := 15;
-    WelcomeTitleStemS.Font.Style := [fsBold];
-    WelcomeTitleStemS.Font.Color := RGBColor(255, 100, 100);
-    WelcomeTitleStemS.Caption := 'S';
-    WelcomeTitleStemS.Left := x;
-    WelcomeTitleStemS.Top := WelcomeTitleY;
-    x := WelcomeTitleStemS.Left + WelcomeTitleStemS.Width;
-
-    WelcomeTitleStemT := TNewStaticText.Create(WizardForm);
-    WelcomeTitleStemT.Parent := WizardForm.WelcomePage;
-    WelcomeTitleStemT.AutoSize := True;
-    WelcomeTitleStemT.Font.Size := 15;
-    WelcomeTitleStemT.Font.Style := [fsBold];
-    WelcomeTitleStemT.Font.Color := RGBColor(100, 200, 255);
-    WelcomeTitleStemT.Caption := 'T';
-    WelcomeTitleStemT.Left := x;
-    WelcomeTitleStemT.Top := WelcomeTitleY;
-    x := WelcomeTitleStemT.Left + WelcomeTitleStemT.Width;
-
-    WelcomeTitleStemE := TNewStaticText.Create(WizardForm);
-    WelcomeTitleStemE.Parent := WizardForm.WelcomePage;
-    WelcomeTitleStemE.AutoSize := True;
-    WelcomeTitleStemE.Font.Size := 15;
-    WelcomeTitleStemE.Font.Style := [fsBold];
-    WelcomeTitleStemE.Font.Color := RGBColor(150, 100, 255);
-    WelcomeTitleStemE.Caption := 'E';
-    WelcomeTitleStemE.Left := x;
-    WelcomeTitleStemE.Top := WelcomeTitleY;
-    x := WelcomeTitleStemE.Left + WelcomeTitleStemE.Width;
-
-    WelcomeTitleStemM := TNewStaticText.Create(WizardForm);
-    WelcomeTitleStemM.Parent := WizardForm.WelcomePage;
-    WelcomeTitleStemM.AutoSize := True;
-    WelcomeTitleStemM.Font.Size := 15;
-    WelcomeTitleStemM.Font.Style := [fsBold];
-    WelcomeTitleStemM.Font.Color := RGBColor(100, 255, 150);
-    WelcomeTitleStemM.Caption := 'M';
-    WelcomeTitleStemM.Left := x;
-    WelcomeTitleStemM.Top := WelcomeTitleY;
-    x := WelcomeTitleStemM.Left + WelcomeTitleStemM.Width;
-
-    WelcomeTitleSuffixLabel := TNewStaticText.Create(WizardForm);
-    WelcomeTitleSuffixLabel.Parent := WizardForm.WelcomePage;
-    WelcomeTitleSuffixLabel.AutoSize := True;
-    WelcomeTitleSuffixLabel.Font.Size := 15;
-    WelcomeTitleSuffixLabel.Font.Style := [fsBold];
-    WelcomeTitleSuffixLabel.Font.Color := RGBColor(20, 20, 20);
-    WelcomeTitleSuffixLabel.Caption := 'werk SETUP';
-    WelcomeTitleSuffixLabel.Left := x;
-    WelcomeTitleSuffixLabel.Top := WelcomeTitleY;
-  end;
+    TitleBottom := CreateBrandWordmark(WizardForm.WelcomePage, WelcomeX, WelcomeTitleY, 15);
+    Tagline := CreateTaglineLabel(WizardForm.WelcomePage, WelcomeX, TitleBottom + ScaleY(2));
+    WelcomeY := Tagline.Top + Tagline.Height + ScaleY(14);
+  end
+  else
+    WelcomeY := WelcomeTitleY;
 
   if WizardForm.WelcomeLabel2 <> nil then
     WizardForm.WelcomeLabel2.Visible := False;
-
-  if WelcomeTitlePrefixLabel <> nil then
-    WelcomeY := WelcomeTitlePrefixLabel.Top + WelcomeTitlePrefixLabel.Height + ScaleY(8)
-  else
-    WelcomeY := WizardForm.WelcomeLabel1.Top + WizardForm.WelcomeLabel1.Height + ScaleY(8);
 
   WelcomeInfoLabel := TNewStaticText.Create(WizardForm);
   WelcomeInfoLabel.Parent := WizardForm.WelcomePage;
   WelcomeInfoLabel.AutoSize := False;
   WelcomeInfoLabel.WordWrap := True;
   WelcomeInfoLabel.Font.Size := 9;
-  WelcomeInfoLabel.Font.Color := RGBColor(80, 80, 80);
   WelcomeInfoLabel.Left := WelcomeX;
   WelcomeInfoLabel.Top := WelcomeY;
   WelcomeInfoLabel.Width := WizardForm.WelcomePage.ClientWidth - WelcomeX - ScaleX(10);
@@ -1262,7 +1326,6 @@ begin
     TasksWelcomeLabel.AutoSize := True;
     TasksWelcomeLabel.Font.Size := 14;
     TasksWelcomeLabel.Font.Style := [fsBold];
-    TasksWelcomeLabel.Font.Color := RGBColor(30, 30, 30);
     TasksWelcomeLabel.Caption := LText('Welcome to ', 'Welkom bij ', 'Willkommen beim ');
     TasksWelcomeLabel.Left := WizardForm.SelectTasksLabel.Left;
     TasksWelcomeLabel.Top := WizardForm.SelectTasksLabel.Top;
@@ -1273,7 +1336,7 @@ begin
     TasksWelcomeStemS.AutoSize := True;
     TasksWelcomeStemS.Font.Size := 14;
     TasksWelcomeStemS.Font.Style := [fsBold];
-    TasksWelcomeStemS.Font.Color := RGBColor(255, 100, 100);
+    ApplyBrandTextColor(TasksWelcomeStemS, RGBColor(255, 100, 100));
     TasksWelcomeStemS.Caption := 'S';
     TasksWelcomeStemS.Left := x;
     TasksWelcomeStemS.Top := TasksWelcomeLabel.Top;
@@ -1284,7 +1347,7 @@ begin
     TasksWelcomeStemT.AutoSize := True;
     TasksWelcomeStemT.Font.Size := 14;
     TasksWelcomeStemT.Font.Style := [fsBold];
-    TasksWelcomeStemT.Font.Color := RGBColor(100, 200, 255);
+    ApplyBrandTextColor(TasksWelcomeStemT, RGBColor(100, 200, 255));
     TasksWelcomeStemT.Caption := 'T';
     TasksWelcomeStemT.Left := x;
     TasksWelcomeStemT.Top := TasksWelcomeLabel.Top;
@@ -1295,7 +1358,7 @@ begin
     TasksWelcomeStemE.AutoSize := True;
     TasksWelcomeStemE.Font.Size := 14;
     TasksWelcomeStemE.Font.Style := [fsBold];
-    TasksWelcomeStemE.Font.Color := RGBColor(150, 100, 255);
+    ApplyBrandTextColor(TasksWelcomeStemE, RGBColor(150, 100, 255));
     TasksWelcomeStemE.Caption := 'E';
     TasksWelcomeStemE.Left := x;
     TasksWelcomeStemE.Top := TasksWelcomeLabel.Top;
@@ -1306,7 +1369,7 @@ begin
     TasksWelcomeStemM.AutoSize := True;
     TasksWelcomeStemM.Font.Size := 14;
     TasksWelcomeStemM.Font.Style := [fsBold];
-    TasksWelcomeStemM.Font.Color := RGBColor(100, 255, 150);
+    ApplyBrandTextColor(TasksWelcomeStemM, RGBColor(100, 255, 150));
     TasksWelcomeStemM.Caption := 'M';
     TasksWelcomeStemM.Left := x;
     TasksWelcomeStemM.Top := TasksWelcomeLabel.Top;
@@ -1317,7 +1380,6 @@ begin
     TasksWelcomeSuffixLabel.AutoSize := True;
     TasksWelcomeSuffixLabel.Font.Size := 14;
     TasksWelcomeSuffixLabel.Font.Style := [fsBold];
-    TasksWelcomeSuffixLabel.Font.Color := RGBColor(30, 30, 30);
     TasksWelcomeSuffixLabel.Caption := 'werk SETUP';
     TasksWelcomeSuffixLabel.Left := x;
     TasksWelcomeSuffixLabel.Top := TasksWelcomeLabel.Top;
@@ -1326,7 +1388,6 @@ begin
     TasksWelcomeSubLabel.Parent := WizardForm.SelectTasksPage;
     TasksWelcomeSubLabel.AutoSize := True;
     TasksWelcomeSubLabel.Font.Size := 9;
-    TasksWelcomeSubLabel.Font.Color := RGBColor(80, 80, 80);
     TasksWelcomeSubLabel.Caption := LText(
       'Choose cleanup options for old runtime files before continuing.',
       'Kies opschoonopties voor oude runtimebestanden voordat je doorgaat.',
@@ -1351,7 +1412,6 @@ begin
   TasksBrandLabel.AutoSize := True;
   TasksBrandLabel.Font.Size := 13;
   TasksBrandLabel.Font.Style := [fsBold];
-  TasksBrandLabel.Font.Color := RGBColor(35, 35, 35);
   TasksBrandLabel.Caption := LText('STEMwerk cleanup', 'STEMwerk opschonen', 'STEMwerk bereinigen');
   TasksBrandLabel.Left := TasksX;
   TasksBrandLabel.Top := TasksY;
@@ -1360,7 +1420,6 @@ begin
   TasksInfoLabel.Parent := WizardForm.SelectTasksPage;
   TasksInfoLabel.AutoSize := True;
   TasksInfoLabel.Font.Size := 8;
-  TasksInfoLabel.Font.Color := RGBColor(95, 95, 95);
   TasksInfoLabel.Caption := LText(
     'Safe default: leave this unchecked. Downloaded models are always kept by this installer.',
     'Veilige standaard: laat dit uitgevinkt. Gedownloade modellen blijven altijd behouden door deze installer.',
@@ -1384,7 +1443,6 @@ begin
   StatusPrefixLabel.AutoSize := True;
   StatusPrefixLabel.Font.Size := 12;
   StatusPrefixLabel.Font.Style := [fsBold];
-  StatusPrefixLabel.Font.Color := RGBColor(30, 30, 30);
   StatusPrefixLabel.Caption := 'Preparing ';
   StatusPrefixLabel.Left := WizardForm.StatusLabel.Left;
   StatusPrefixLabel.Top := y;
@@ -1395,7 +1453,7 @@ begin
   StatusStemS.AutoSize := True;
   StatusStemS.Font.Size := 12;
   StatusStemS.Font.Style := [fsBold];
-  StatusStemS.Font.Color := RGBColor(255, 100, 100);
+  ApplyBrandTextColor(StatusStemS, RGBColor(255, 100, 100));
   StatusStemS.Caption := 'S';
   StatusStemS.Left := x;
   StatusStemS.Top := y;
@@ -1406,7 +1464,7 @@ begin
   StatusStemT.AutoSize := True;
   StatusStemT.Font.Size := 12;
   StatusStemT.Font.Style := [fsBold];
-  StatusStemT.Font.Color := RGBColor(100, 200, 255);
+  ApplyBrandTextColor(StatusStemT, RGBColor(100, 200, 255));
   StatusStemT.Caption := 'T';
   StatusStemT.Left := x;
   StatusStemT.Top := y;
@@ -1417,7 +1475,7 @@ begin
   StatusStemE.AutoSize := True;
   StatusStemE.Font.Size := 12;
   StatusStemE.Font.Style := [fsBold];
-  StatusStemE.Font.Color := RGBColor(150, 100, 255);
+  ApplyBrandTextColor(StatusStemE, RGBColor(150, 100, 255));
   StatusStemE.Caption := 'E';
   StatusStemE.Left := x;
   StatusStemE.Top := y;
@@ -1428,7 +1486,7 @@ begin
   StatusStemM.AutoSize := True;
   StatusStemM.Font.Size := 12;
   StatusStemM.Font.Style := [fsBold];
-  StatusStemM.Font.Color := RGBColor(100, 255, 150);
+  ApplyBrandTextColor(StatusStemM, RGBColor(100, 255, 150));
   StatusStemM.Caption := 'M';
   StatusStemM.Left := x;
   StatusStemM.Top := y;
@@ -1438,7 +1496,6 @@ begin
   StatusSuffixLabel.Parent := WizardForm.InstallingPage;
   StatusSuffixLabel.AutoSize := True;
   StatusSuffixLabel.Font.Style := [fsBold];
-  StatusSuffixLabel.Font.Color := RGBColor(30, 30, 30);
   StatusSuffixLabel.Font.Size := 12;
   StatusSuffixLabel.Caption := 'werk runtime ' + VersionTag;
   StatusSuffixLabel.Left := x;
@@ -1449,11 +1506,10 @@ begin
   StatusDetailLabel.AutoSize := False;
   StatusDetailLabel.WordWrap := True;
   StatusDetailLabel.Font.Size := 9;
-  StatusDetailLabel.Font.Color := RGBColor(90, 90, 90);
   StatusDetailLabel.Caption := DefaultStatusDetailText;
   StatusDetailLabel.Left := WizardForm.StatusLabel.Left;
   StatusDetailLabel.Top := y + ScaleY(18);
-  StatusDetailLabel.Width := PageW - StatusDetailLabel.Left - ScaleX(112);
+  StatusDetailLabel.Width := PageW - StatusDetailLabel.Left - ScaleX(8);
   if StatusDetailLabel.Width < ScaleX(280) then
     StatusDetailLabel.Width := ScaleX(280);
   StatusDetailLabel.Height := ScaleY(72);
@@ -1481,7 +1537,6 @@ begin
   StepTrackS.ParentBackground := False;
   StepTrackS.BevelInner := bvNone;
   StepTrackS.BevelOuter := bvNone;
-  StepTrackS.Color := RGBColor(232, 232, 232);
 
   StepFillS := TPanel.Create(WizardForm);
   StepFillS.Parent := StepTrackS;
@@ -1515,7 +1570,6 @@ begin
   StepTrackT.ParentBackground := False;
   StepTrackT.BevelInner := bvNone;
   StepTrackT.BevelOuter := bvNone;
-  StepTrackT.Color := RGBColor(232, 232, 232);
 
   StepFillT := TPanel.Create(WizardForm);
   StepFillT.Parent := StepTrackT;
@@ -1549,7 +1603,6 @@ begin
   StepTrackE.ParentBackground := False;
   StepTrackE.BevelInner := bvNone;
   StepTrackE.BevelOuter := bvNone;
-  StepTrackE.Color := RGBColor(232, 232, 232);
 
   StepFillE := TPanel.Create(WizardForm);
   StepFillE.Parent := StepTrackE;
@@ -1583,7 +1636,6 @@ begin
   StepTrackM.ParentBackground := False;
   StepTrackM.BevelInner := bvNone;
   StepTrackM.BevelOuter := bvNone;
-  StepTrackM.Color := RGBColor(232, 232, 232);
 
   StepFillM := TPanel.Create(WizardForm);
   StepFillM.Parent := StepTrackM;
@@ -1617,7 +1669,6 @@ begin
   StepTrackW.ParentBackground := False;
   StepTrackW.BevelInner := bvNone;
   StepTrackW.BevelOuter := bvNone;
-  StepTrackW.Color := RGBColor(232, 232, 232);
 
   StepFillW := TPanel.Create(WizardForm);
   StepFillW.Parent := StepTrackW;
@@ -1651,7 +1702,6 @@ begin
   ProgressOverlayLabel.AutoSize := True;
   ProgressOverlayLabel.Font.Size := 9;
   ProgressOverlayLabel.Font.Style := [fsBold];
-  ProgressOverlayLabel.Font.Color := RGBColor(30, 30, 30);
   ProgressOverlayLabel.Caption := LText(
     'Extracting installer components...',
     'Installercomponenten worden uitgepakt...',
@@ -1686,45 +1736,83 @@ begin
   LastProgress := -1;
   LastStep := 0;
 
+  // The summary's own first line ("setup completed"/failure text, with the
+  // version) carries the outcome, so the heading is just the product
+  // identity -- it can no longer imply success on a failed bootstrap.
+  FinishedContentTop := WizardForm.FinishedLabel.Top;
+  // Finished only: the large bitmap is hidden and its column handed to the
+  // summary, since the wordmark + tagline already carry the branding and the
+  // summary's long paths need the width. Content moves to the same inset
+  // Inno uses for inner-page content. The Welcome bitmap stays.
+  FinishedContentLeft := WizardForm.FinishedLabel.Left;
+  if WizardForm.WizardBitmapImage2 <> nil then
+  begin
+    WizardForm.WizardBitmapImage2.Visible := False;
+    FinishedContentLeft := WizardForm.InnerNotebook.Left;
+  end;
   if WizardForm.FinishedHeadingLabel <> nil then
   begin
     WizardForm.FinishedHeadingLabel.Visible := False;
-    y := WizardForm.FinishedHeadingLabel.Top;
-    x := WizardForm.FinishedHeadingLabel.Left;
-
-    FinishedPrefixLabel := TNewStaticText.Create(WizardForm);
-    FinishedPrefixLabel.Parent := WizardForm.FinishedPage;
-    FinishedPrefixLabel.AutoSize := True;
-    FinishedPrefixLabel.Font.Size := 12;
-    FinishedPrefixLabel.Font.Style := [fsBold];
-    FinishedPrefixLabel.Font.Color := RGBColor(30, 30, 30);
-    FinishedPrefixLabel.Caption := LText('Completing the ', 'Afronden van ', 'Abschluss des ');
-    FinishedPrefixLabel.Left := x;
-    FinishedPrefixLabel.Top := y;
-    x := FinishedPrefixLabel.Left + FinishedPrefixLabel.Width;
-
-    FinishedBrandLabel := TNewStaticText.Create(WizardForm);
-    FinishedBrandLabel.Parent := WizardForm.FinishedPage;
-    FinishedBrandLabel.AutoSize := True;
-    FinishedBrandLabel.Font.Size := 12;
-    FinishedBrandLabel.Font.Style := [fsBold];
-    FinishedBrandLabel.Font.Color := RGBColor(30, 30, 30);
-    FinishedBrandLabel.Caption := LText('STEMwerk Setup Wizard', 'STEMwerk Setup Wizard', 'STEMwerk Setup-Assistent') + ' ' + VersionTag;
-    FinishedBrandLabel.Left := x;
-    FinishedBrandLabel.Top := y;
+    TitleBottom := CreateBrandWordmark(WizardForm.FinishedPage,
+      FinishedContentLeft, WizardForm.FinishedHeadingLabel.Top, 15);
+    Tagline := CreateTaglineLabel(WizardForm.FinishedPage,
+      FinishedContentLeft, TitleBottom + ScaleY(2));
+    // Inno reserves heading space above FinishedLabel for its own default
+    // heading; never let the summary start inside our (possibly taller)
+    // wordmark + tagline stack.
+    if Tagline.Top + Tagline.Height + ScaleY(12) > FinishedContentTop then
+      FinishedContentTop := Tagline.Top + Tagline.Height + ScaleY(12);
   end;
 
-  // Read-only, scrollable replacement for the plain FinishedLabel: live
-  // DrawText measurement proved the real summary content (resolved
-  // paths/sizes/FFmpeg/backend) can exceed the available page height at
-  // 125% DPI in all three languages, in a way no further static-label
-  // geometry tweak can fix. Position/size are set per-visit in
-  // LayoutFinishedSummary; this just creates the control once.
-  FinishedSummaryMemo := TNewMemo.Create(WizardForm);
-  FinishedSummaryMemo.Parent := WizardForm.FinishedPage;
-  FinishedSummaryMemo.ReadOnly := True;
-  FinishedSummaryMemo.ScrollBars := ssVertical;
-  FinishedSummaryMemo.WordWrap := True;
+  // Structured Finished page (outcome text, a two-column status block and one
+  // single-line read-only field per path) instead of one long summary text:
+  // live measurement showed a scrolling summary still overflowed by 5-7
+  // lines at every width Inno allows. Controls are created once here;
+  // captions/values and geometry are set on each visit (FillFinishedPage,
+  // LayoutFinishedPage).
+  FinishedOutcomeLabel := CreateFinishedText('', False);
+  FinishedOutcomeLabel.AutoSize := False;
+  FinishedOutcomeLabel.WordWrap := True;
+  FinishedComponentsHeading := CreateFinishedText(LText('Installed components', 'Geinstalleerde onderdelen', 'Installierte Komponenten'), True);
+  FinishedSystemHeading := CreateFinishedText(LText('System', 'Systeem', 'System'), True);
+  FinishedPathsHeading := CreateFinishedText(LText('Paths', 'Paden', 'Pfade'), True);
+  FinishedStatusNames[0] := CreateFinishedText(LText('REAPER scripts', 'REAPER-scripts', 'REAPER-Skripte'), False);
+  FinishedStatusNames[1] := CreateFinishedText(LText('STEMwerk runtime', 'STEMwerk-runtime', 'STEMwerk-Runtime'), False);
+  FinishedStatusNames[2] := CreateFinishedText(LText('Models/cache', 'Modellen/cache', 'Modelle/Cache'), False);
+  FinishedStatusNames[3] := CreateFinishedText('FFmpeg', False);
+  FinishedStatusNames[4] := CreateFinishedText(LText('Acceleration', 'Acceleratie', 'Beschleunigung'), False);
+  FinishedTotalNameLabel := CreateFinishedText(LText('Total STEMwerk', 'Totaal STEMwerk', 'STEMwerk gesamt'), True);
+  FinishedTotalSizeLabel := CreateFinishedText('', True);
+  FinishedPathLabels[0] := CreateFinishedText(LText('REAPER scripts', 'REAPER-scripts', 'REAPER-Skripte'), False);
+  FinishedPathLabels[1] := CreateFinishedText('Runtime', False);
+  FinishedPathLabels[2] := CreateFinishedText(LText('Models/cache', 'Modellen/cache', 'Modelle/Cache'), False);
+  FinishedPathLabels[3] := CreateFinishedText(LText('Setup log', 'Setup-log', 'Setup-Log'), False);
+  for i := 0 to 4 do
+  begin
+    FinishedStatusValues[i] := CreateFinishedText('', False);
+    FinishedStatusNames[i].AutoSize := False;
+    FinishedStatusValues[i].AutoSize := False;
+  end;
+  for i := 0 to 2 do
+  begin
+    FinishedComponentSizes[i] := CreateFinishedText('', False);
+    FinishedComponentSizes[i].AutoSize := False;
+  end;
+  FinishedTotalNameLabel.AutoSize := False;
+  FinishedTotalSizeLabel.AutoSize := False;
+  for i := 0 to 3 do
+  begin
+    FinishedPathLabels[i].AutoSize := False;
+
+    FinishedPathEdits[i] := TNewEdit.Create(WizardForm);
+    FinishedPathEdits[i].Parent := WizardForm.FinishedPage;
+    FinishedPathEdits[i].ReadOnly := True;
+
+    FinishedOpenButtons[i] := TNewButton.Create(WizardForm);
+    FinishedOpenButtons[i].Parent := WizardForm.FinishedPage;
+    FinishedOpenButtons[i].Caption := LText('Open', 'Open', 'Oeffnen');
+    FinishedOpenButtons[i].OnClick := @FinishedOpenClick;
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -1738,26 +1826,18 @@ begin
   Result := BootstrapSucceeded;
 end;
 
-// Two earlier versions used WizardForm.FinishedLabel (a plain static label)
-// for the detailed summary and only fought over its Height. Live DrawText
-// measurement (native DT_CALCRECT|DT_WORDBREAK against the real live font
-// and width) proved that approach has a hard ceiling: even with RunList
-// correctly compacted, the real content (resolved paths/sizes/FFmpeg/backend)
-// requires more vertical space than the page has, in all three languages
-// (measured: 400px needed vs 274px available in EN/DE, 500px vs 249px in
-// NL). No further label-geometry tweak can fix that -- a static label simply
-// cannot show more content than its Height allows.
-//
-// FinishedLabel is therefore hidden and replaced by FinishedSummaryMemo, a
-// read-only, scrollable TNewMemo (ReadOnly + ScrollBars=ssVertical): when
-// content fits, it looks like plain text; when it doesn't, every line is
-// still reachable by scrolling instead of being silently clipped.
+// The Finished page is a structured, non-scrolling layout: outcome text,
+// a two-column status block (success only), one single-line read-only field
+// per path with Open buttons, and the compact RunList at the bottom.
+// Earlier versions used one summary text (first a static label, then a
+// scrolling memo); live measurement showed that text overflowing the page by
+// 5-7 lines even in a widened wizard, so the details are rows now and long
+// paths live in their own fields.
 //
 // Pascal Script exposes no read-only "actual rendered row height" on
 // TNewCheckListBox (only the settable MinItemHeight floor), so RunList's
-// compact-height derivation (proven correct by live validation: 53px for 2
-// items at 125%) is unchanged -- only its anchor reference moved from
-// FinishedLabel to FinishedSummaryMemo.
+// compact height is derived from its font metrics and item count -- live
+// validation proved Inno's stock RunList.Height (318px for 2 items) is not.
 function RunListRowHeight(List: TNewCheckListBox): Integer;
 var
   FontHeight: Integer;
@@ -1770,55 +1850,139 @@ begin
     Result := List.MinItemHeight;
 end;
 
-procedure LayoutFinishedSummary;
-var
-  DesiredHeight: Integer;
-  RunListTop: Integer;
-  RowHeight: Integer;
+procedure FillFinishedPage;
 begin
-  if WizardForm.FinishedLabel = nil then Exit;
-  if FinishedSummaryMemo = nil then Exit;
+  FinishedOutcomeLabel.Caption := BuildFinishedSummaryText;
+  FinishedStatusValues[0].Caption := FinishedScriptsStatusText;
+  FinishedStatusValues[1].Caption := LText('Ready', 'Gereed', 'Bereit');
+  FinishedStatusValues[2].Caption := FinishedModelsStatusText;
+  FinishedStatusValues[3].Caption := FinishedFfmpegStatusText;
+  FinishedStatusValues[4].Caption := FinishedBackendStatusText;
+  FinishedComponentSizes[0].Caption := FinishedMeasuredSizeText('INSTALLED_SCRIPTS_BYTES');
+  FinishedComponentSizes[1].Caption := FinishedMeasuredSizeText('INSTALLED_RUNTIME_BYTES');
+  FinishedComponentSizes[2].Caption := FinishedMeasuredSizeText('INSTALLED_MODELS_BYTES');
+  FinishedTotalSizeLabel.Caption := FinishedMeasuredSizeText('INSTALLED_TOTAL_BYTES');
+  FinishedPathEdits[0].Text := ExpandConstant('{app}');
+  FinishedPathEdits[1].Text := GetRuntimeBasePath;
+  FinishedPathEdits[2].Text := FinishedModelsDir;
+  FinishedPathEdits[3].Text := GetLogPath;
+end;
 
+procedure LayoutFinishedPage;
+var
+  L, CW, y, i, Row, x: Integer;
+  ComponentW, SystemW, NameW, StatusW, SystemNameW: Integer;
+  RowH, Gap, FieldH, BtnW, LabelW, EditX, EditW: Integer;
+  RunListTop: Integer;
+begin
   WizardForm.FinishedLabel.Visible := False;
   WizardForm.FinishedLabel.Caption := '';
 
-  FinishedSummaryMemo.Left := WizardForm.FinishedLabel.Left;
-  FinishedSummaryMemo.Top := WizardForm.FinishedLabel.Top;
-  FinishedSummaryMemo.Width := WizardForm.FinishedPage.ClientWidth - FinishedSummaryMemo.Left - ScaleX(8);
+  L := FinishedContentLeft;
+  CW := WizardForm.FinishedPage.ClientWidth - (2 * L);
+  Gap := ScaleX(4);
+  RowH := ScaleY(17);
+  y := FinishedContentTop;
+
+  FinishedOutcomeLabel.Left := L;
+  FinishedOutcomeLabel.Top := y;
+  FinishedOutcomeLabel.Width := CW;
+  // TNewStaticText.AdjustHeight is present in RTTI (and therefore compiles)
+  // but raises "Could not call proc" in the live Inno 6.7.1 wizard. Reserve
+  // the compact wrapped-line height explicitly instead: three lines for the
+  // normal EN/NL/DE success outcome, four for the longer failure outcome.
+  if BootstrapSucceeded then
+    FinishedOutcomeLabel.Height := ScaleY(54)
+  else
+    FinishedOutcomeLabel.Height := ScaleY(84);
+  y := FinishedOutcomeLabel.Top + FinishedOutcomeLabel.Height + ScaleY(2);
+
+  // Component/system status is only truthful after a successful bootstrap;
+  // on failure the outcome text above already carries the failure details.
+  FinishedComponentsHeading.Visible := BootstrapSucceeded;
+  FinishedSystemHeading.Visible := BootstrapSucceeded;
+  for i := 0 to 4 do
+  begin
+    FinishedStatusNames[i].Visible := BootstrapSucceeded;
+    FinishedStatusValues[i].Visible := BootstrapSucceeded;
+  end;
+  for i := 0 to 2 do
+    FinishedComponentSizes[i].Visible := BootstrapSucceeded and
+      (FinishedComponentSizes[i].Caption <> '');
+  FinishedTotalNameLabel.Visible := BootstrapSucceeded and
+    (FinishedTotalSizeLabel.Caption <> '');
+  FinishedTotalSizeLabel.Visible := FinishedTotalNameLabel.Visible;
+  if BootstrapSucceeded then
+  begin
+    ComponentW := (CW * 55) div 100;
+    SystemW := CW - ComponentW;
+    NameW := (ComponentW * 39) div 100;
+    StatusW := (ComponentW * 26) div 100;
+    SystemNameW := (SystemW * 44) div 100;
+    FinishedComponentsHeading.Left := L;
+    FinishedComponentsHeading.Top := y;
+    FinishedSystemHeading.Left := L + ComponentW;
+    FinishedSystemHeading.Top := y;
+    y := y + FinishedComponentsHeading.Height + ScaleY(2);
+    for i := 0 to 2 do
+    begin
+      FinishedStatusNames[i].SetBounds(L, y + (i * RowH), NameW, RowH);
+      FinishedStatusValues[i].SetBounds(L + NameW, y + (i * RowH), StatusW, RowH);
+      FinishedComponentSizes[i].SetBounds(
+        L + NameW + StatusW + Gap, y + (i * RowH),
+        ComponentW - NameW - StatusW - (2 * Gap), RowH);
+    end;
+    for i := 3 to 4 do
+    begin
+      x := L + ComponentW;
+      Row := i - 3;
+      FinishedStatusNames[i].SetBounds(x, y + (Row * RowH), SystemNameW, RowH);
+      FinishedStatusValues[i].SetBounds(
+        x + SystemNameW, y + (Row * RowH), SystemW - SystemNameW - Gap, RowH);
+    end;
+    if FinishedTotalNameLabel.Visible then
+    begin
+      FinishedTotalNameLabel.SetBounds(L, y + (3 * RowH), NameW + StatusW, RowH);
+      FinishedTotalSizeLabel.SetBounds(
+        L + NameW + StatusW + Gap, y + (3 * RowH),
+        ComponentW - NameW - StatusW - (2 * Gap), RowH);
+      y := y + (4 * RowH) + ScaleY(4);
+    end;
+    if not FinishedTotalNameLabel.Visible then
+      y := y + (3 * RowH) + ScaleY(4);
+  end;
+
+  FinishedPathsHeading.Left := L;
+  FinishedPathsHeading.Top := y;
+  y := y + FinishedPathsHeading.Height + ScaleY(2);
+  FieldH := FinishedPathEdits[0].Height;
+  BtnW := ScaleX(64);
+  LabelW := ScaleX(96);
+  EditX := L + LabelW + Gap;
+  EditW := CW - LabelW - Gap - BtnW - Gap;
+  for i := 0 to 3 do
+  begin
+    FinishedPathLabels[i].SetBounds(L, y + ScaleY(3), LabelW, RowH);
+    FinishedPathEdits[i].SetBounds(EditX, y, EditW, FieldH);
+    FinishedOpenButtons[i].SetBounds(EditX + EditW + Gap, y, BtnW, FieldH);
+    y := y + FieldH + ScaleY(1);
+  end;
 
   if (WizardForm.RunList <> nil) and (WizardForm.RunList.Items.Count > 0) then
   begin
     WizardForm.RunList.Visible := True;
-    RowHeight := RunListRowHeight(WizardForm.RunList);
-    WizardForm.RunList.Height := (RowHeight * WizardForm.RunList.Items.Count) + ScaleY(6);
-    WizardForm.RunList.Left := FinishedSummaryMemo.Left;
-    WizardForm.RunList.Width := WizardForm.FinishedPage.ClientWidth - WizardForm.RunList.Left - ScaleX(8);
+    WizardForm.RunList.Height := (RunListRowHeight(WizardForm.RunList) * WizardForm.RunList.Items.Count) + ScaleY(6);
+    WizardForm.RunList.Left := L;
+    WizardForm.RunList.Width := CW;
     RunListTop := WizardForm.FinishedPage.ClientHeight - WizardForm.RunList.Height - ScaleY(8);
-    // Degenerate-page floor: RunList must never start above the summary
-    // control's own Top, or the summary's bottom edge (>= its Top even at
-    // Height=0) would exceed RunList.Top. Only reachable on a pathologically
-    // short ClientHeight; on any real Finished page RunList is compact
-    // enough now that this never engages.
-    if RunListTop < FinishedSummaryMemo.Top then
-      RunListTop := FinishedSummaryMemo.Top;
+    // Never above the last path row: the regions must not overlap even on
+    // a degenerate (too short) page.
+    if RunListTop < y + ScaleY(4) then
+      RunListTop := y + ScaleY(4);
     WizardForm.RunList.Top := RunListTop;
-    DesiredHeight := RunListTop - FinishedSummaryMemo.Top - ScaleY(8);
   end
-  else
-  begin
-    if WizardForm.RunList <> nil then
-      WizardForm.RunList.Visible := False;
-    DesiredHeight := WizardForm.FinishedPage.ClientHeight - FinishedSummaryMemo.Top - ScaleY(12);
-  end;
-
-  // Floor at zero only: unlike the earlier versions, this must never clamp
-  // DesiredHeight UPWARD, since RunListTop already accounts for the (now
-  // compact) RunList and any upward clamp could push the summary's bottom
-  // edge past it again.
-  if DesiredHeight < 0 then
-    DesiredHeight := 0;
-
-  FinishedSummaryMemo.Height := DesiredHeight;
+  else if WizardForm.RunList <> nil then
+    WizardForm.RunList.Visible := False;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -1848,10 +2012,10 @@ begin
     end;
     if CurPageID = wpFinished then
     begin
-      if (WizardForm.FinishedLabel <> nil) and (FinishedSummaryMemo <> nil) then
+      if (WizardForm.FinishedLabel <> nil) and (FinishedOutcomeLabel <> nil) then
       begin
-        LayoutFinishedSummary;
-        FinishedSummaryMemo.Lines.Text := BuildFinishedSummaryText;
+        FillFinishedPage;
+        LayoutFinishedPage;
       end;
     end;
   end;
