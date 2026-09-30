@@ -101,7 +101,7 @@ DRUMSEP_RUNTIME_CUDA_DIRNAME = ".venv-drumsep-cuda"
 DRUMSEP_RUNTIME_DIRECTML_DIRNAME = ".venv-drumsep-directml"
 DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
 DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
-DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 4
+DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 2  # ROCm/CUDA DrumSep stage 2: 4 concurrent jobs on one GPU stalls (see 2.3.1.3 Linux AMD release-gate finding); cap=2 is proven stable
 DKS_EXTRACT_STAGE2_BENCHMARK_CAPS = {1, 2, 4}
 BENCHMARK_CPU_CAPS = {1, 2, 4}
 BENCHMARK_MPS_CAP_MIN = 1

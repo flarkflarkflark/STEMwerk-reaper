@@ -1235,7 +1235,10 @@ def test_drumkit_stage2_cpu_default_stays_cap1_without_benchmark_override(monkey
     assert "lua_dks_extract_stage2_concurrency_cap=1" in captured.err
 
 
-def test_drumkit_stage2_gpu_default_policy_uses_cap4_without_benchmark_override(monkeypatch, tmp_path, capsys):
+def test_drumkit_stage2_gpu_default_policy_uses_cap2_without_benchmark_override(monkeypatch, tmp_path, capsys):
+    # Was cap=4 through 2.3.1.3; lowered to cap=2 after the release-gate found
+    # 4 concurrent stage-2 DrumSep jobs stalling on a single ROCm GPU (see
+    # test_linux_amd_kitsplit_stage2_rocm_cap.py for the full finding).
     module = _load_audio_separator_process_module()
     monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
     monkeypatch.delenv("STEMWERK_BENCH_CPU_CAP", raising=False)
@@ -1245,10 +1248,10 @@ def test_drumkit_stage2_gpu_default_policy_uses_cap4_without_benchmark_override(
         pass
     captured = capsys.readouterr()
     assert "bench_dks_stage2_cap_requested=unset" in captured.err
-    assert "bench_dks_stage2_cap_applied=4" in captured.err
+    assert "bench_dks_stage2_cap_applied=2" in captured.err
     assert "bench_dks_stage2_cap_ignored_reason=not_requested" in captured.err
-    assert "dks_extract_stage2_effective_cap=4" in captured.err
-    assert "lua_dks_extract_stage2_concurrency_cap=4" in captured.err
+    assert "dks_extract_stage2_effective_cap=2" in captured.err
+    assert "lua_dks_extract_stage2_concurrency_cap=2" in captured.err
 
 
 def test_normal_workflow_provenance_is_explicit_in_lua_summary_and_python_stderr():
@@ -2540,7 +2543,7 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert "bench_dks_stage2_cap_applied=" in script
     assert "bench_dks_stage2_cap_ignored_reason=" in script
     assert "dks_extract_stage2_effective_cap=" in script
-    assert "DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 4" in script
+    assert "DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 2" in script
     assert 'def _dks_extract_stage2_lock(output_root: Path, stage2_backend: str = ""):' in script
     assert "stage2_backend = _detect_dks_extract_stage2_backend(runtime_kind, runtime_info, drumsep_python)" in script
     assert "with _dks_extract_stage2_lock(output_root, stage2_backend):" in script
@@ -2576,7 +2579,7 @@ def test_drumkit_stage2_benchmark_cap_parser_accepts_only_allowed_values_and_res
 
     monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
     assert module._read_benchmark_dks_stage2_cap_request() == (None, "unset")
-    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "unset", 4, "not_requested")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "unset", 2, "not_requested")
 
     monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "2")
     assert module._read_benchmark_dks_stage2_cap_request() == (2, "2")
@@ -2589,7 +2592,7 @@ def test_drumkit_stage2_benchmark_cap_parser_accepts_only_allowed_values_and_res
 
     monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "8")
     assert module._read_benchmark_dks_stage2_cap_request() == (None, "8")
-    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "8", 4, "invalid_request")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "8", 2, "invalid_request")
 
     monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "1")
     assert module._read_benchmark_dks_stage2_cap_request() == (1, "1")
