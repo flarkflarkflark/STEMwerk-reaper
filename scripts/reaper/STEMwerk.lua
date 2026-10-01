@@ -20609,10 +20609,11 @@ function resolveGfx1031RocmOverrideEnv()
         return nil, "not_linux"
     end
     if multiTrackQueue and multiTrackQueue.gfx1031OverrideResolved then
-        return multiTrackQueue.gfx1031OverrideValue, multiTrackQueue.gfx1031OverrideSource
+        return multiTrackQueue.gfx1031OverrideValue, multiTrackQueue.gfx1031OverrideSource,
+            multiTrackQueue.gfx1031OverrideDetail
     end
 
-    local value, source = nil, "not_applicable"
+    local value, source, detail = nil, "not_applicable", nil
     if tostring(os.getenv("HSA_OVERRIDE_GFX_VERSION") or "") ~= "" then
         source = "user_environment"
     else
@@ -20647,45 +20648,180 @@ function resolveGfx1031RocmOverrideEnv()
                 return candidates
             end
 
+            -- "gfx1031", "gfx90a" or torch's "gfx90a:sramecc+:xnack-" -> base
+            -- name; anything else (ISA strings, generic targets) -> nil.
+            local function normalizeGfxArch(token)
+                token = tostring(token or "")
+                local base = token:match("^(gfx%x+)$") or token:match("^(gfx%x+):")
+                return base and base:lower() or nil
+            end
+
+            -- Architectures of the GPU agents in rocminfo output, taken from
+            -- each "Agent N" block's own first "Name:" line (later Name lines
+            -- are ISA entries) and its "Device Type:". Returns nil when there
+            -- is no agent block with GPU evidence, or when any GPU agent's
+            -- architecture cannot be read, so banners, errors or a stray
+            -- "gfx1031" elsewhere in the text never count as evidence.
+            local function parseRocmInfoGpuArchs(out)
+                local archs, unreadable = {}, false
+                local inAgent, agentName, deviceType = false, nil, nil
+                local function closeAgent()
+                    if not inAgent then return end
+                    local arch = normalizeGfxArch(agentName)
+                    if deviceType == "GPU" or (deviceType == nil and arch) then
+                        if arch then archs[#archs + 1] = arch else unreadable = true end
+                    end
+                end
+                for rawLine in (tostring(out) .. "\n"):gmatch("([^\n]*)\n") do
+                    local line = rawLine:gsub("\r$", "")
+                    if line:match("^%s*Agent %d+%s*$") then
+                        closeAgent()
+                        inAgent, agentName, deviceType = true, nil, nil
+                    elseif inAgent then
+                        if agentName == nil then agentName = line:match("^%s*Name:%s*(.-)%s*$") end
+                        if deviceType == nil then deviceType = line:match("^%s*Device Type:%s*(%u+)") end
+                    end
+                end
+                closeAgent()
+                if unreadable or #archs == 0 then return nil end
+                return archs
+            end
+
             -- Try each candidate location in turn (clean env, mirroring the
-            -- prior single-candidate probe) and report whether io.popen
-            -- ever actually ran rocminfo, so the caller can tell "checked
-            -- everywhere and it's genuinely not gfx1031" apart from "could
-            -- not run rocminfo anywhere" instead of conflating the two.
-            local function probeRocmInfoOutput()
-                local ranAtLeastOnce = false
+            -- prior single-candidate probe) until one yields parseable GPU
+            -- architectures. io.popen returns a handle even when the
+            -- executable does not exist, so only output proves rocminfo ran.
+            local function probeRocmInfoGpuArchs()
+                local sawOutput = false
                 for _, exe in ipairs(rocmInfoCandidates()) do
                     local probe = io.popen(
                         "env -u HSA_OVERRIDE_GFX_VERSION -u HIP_VISIBLE_DEVICES -u ROCR_VISIBLE_DEVICES"
                             .. " -u CUDA_VISIBLE_DEVICES " .. quoteArg(exe) .. " 2>/dev/null"
                     )
                     if probe then
-                        ranAtLeastOnce = true
                         local out = probe:read("*a") or ""
                         probe:close()
                         if out ~= "" then
-                            return out, true
+                            sawOutput = true
+                            local archs = parseRocmInfoGpuArchs(out)
+                            if archs then return archs, true end
                         end
                     end
                 end
-                return "", ranAtLeastOnce
+                return nil, sawOutput
             end
 
-            local out, probed = probeRocmInfoOutput()
-            if out ~= "" and out:lower():find("gfx1031", 1, true) then
-                value = "10.3.0"
-                source = "stemwerk_compatibility_rule"
-            elseif probed then
-                -- rocminfo actually ran (at bare PATH or one of the
-                -- absolute fallback locations) -- whatever it reported, or
-                -- its absence of gfx1031, is a real negative.
-                source = "rocm_backend_not_gfx1031"
+            -- HSA_OVERRIDE_GFX_VERSION retargets every ROCm device in the
+            -- worker process, so it is only safe when every identified GPU
+            -- is gfx1031.
+            local function classifyGpuArchs(archs)
+                if #archs == 0 then return "no_devices" end
+                local matches = 0
+                for _, arch in ipairs(archs) do
+                    if arch == "gfx1031" then matches = matches + 1 end
+                end
+                if matches == #archs then return "all_gfx1031" end
+                if matches > 0 then return "mixed_archs" end
+                return "non_gfx1031"
+            end
+
+            -- Distro ROCm packaging (e.g. Fedora) and the pip ROCm torch
+            -- wheels do not need a separate rocminfo binary, so ask the
+            -- managed runtime that will run the job (PYTHON_PATH) for the
+            -- real GPU architecture instead. Runs in its own short-lived
+            -- child (HIP is never initialized in REAPER's process), loads
+            -- no model, and is bounded by coreutils timeout when present.
+            -- Returns the per-device gfx base names, or nil plus a reason.
+            local function probeRuntimeGfxArchs()
+                local py = tostring(PYTHON_PATH or "")
+                if py == "" then return nil, "no_python_path" end
+                local pyHandle = io.open(py, "r")
+                if not pyHandle then return nil, "python_missing" end
+                pyHandle:close()
+                local code = table.concat({
+                    "import sys",
+                    "try:",
+                    "    import torch",
+                    "    hip = getattr(torch.version, 'hip', None) or ''",
+                    "    n = torch.cuda.device_count() if hip and torch.cuda.is_available() else 0",
+                    "    print('STEMWERK_GFX_ARCH_PROBE hip=%s count=%d' % (hip.replace(' ', '_') or 'none', n))",
+                    "    for i in range(n):",
+                    "        a = getattr(torch.cuda.get_device_properties(i), 'gcnArchName', '') or ''",
+                    "        print('STEMWERK_GFX_ARCH_DEVICE %d %s' % (i, a.replace(' ', '_') or 'unknown'))",
+                    "    print('STEMWERK_GFX_ARCH_PROBE_END')",
+                    "except Exception as exc:",
+                    "    print('STEMWERK_GFX_ARCH_PROBE_ERROR %s' % type(exc).__name__)",
+                    "    sys.exit(3)",
+                }, "\n")
+                local probe = io.popen(
+                    "if command -v timeout >/dev/null 2>&1; then set -- timeout -k 5 30; else set --; fi; "
+                        .. "\"$@\" env -u HSA_OVERRIDE_GFX_VERSION -u PYTHONPATH -u PYTHONHOME "
+                        .. quoteArg(py) .. " -c " .. quoteArg(code) .. " 2>/dev/null; "
+                        .. "echo STEMWERK_GFX_ARCH_PROBE_RC=$?"
+                )
+                if not probe then return nil, "spawn_failed" end
+                local out = probe:read("*a") or ""
+                probe:close()
+                local rc = out:match("STEMWERK_GFX_ARCH_PROBE_RC=(%d+)")
+                if rc ~= "0" then
+                    local err = out:match("STEMWERK_GFX_ARCH_PROBE_ERROR (%S+)")
+                    if rc == "124" or rc == "137" then
+                        return nil, "timeout_rc=" .. rc
+                    end
+                    return nil, "exit_rc=" .. tostring(rc or "none") .. (err and (",error=" .. err) or "")
+                end
+                local count = tonumber(out:match("STEMWERK_GFX_ARCH_PROBE hip=%S+ count=(%d+)") or "")
+                if not count or not out:find("STEMWERK_GFX_ARCH_PROBE_END", 1, true) then
+                    return nil, "malformed_output"
+                end
+                local archs = {}
+                for arch in out:gmatch("STEMWERK_GFX_ARCH_DEVICE %d+ ([^\r\n]*)") do
+                    local base = normalizeGfxArch(arch)
+                    if not base then return nil, "malformed_arch" end
+                    archs[#archs + 1] = base
+                end
+                if #archs ~= count then return nil, "malformed_device_count" end
+                return archs
+            end
+
+            local compatValue = "10.3.0"
+            local rocmArchs, rocmSawOutput = probeRocmInfoGpuArchs()
+            if rocmArchs then
+                local state = classifyGpuArchs(rocmArchs)
+                detail = "rocminfo=" .. state .. " archs=" .. table.concat(rocmArchs, ",")
+                if state == "all_gfx1031" then
+                    value = compatValue
+                    source = "stemwerk_compatibility_rule"
+                elseif state == "mixed_archs" then
+                    source = "mixed_gpu_archs_not_overridden"
+                else
+                    source = "rocm_backend_not_gfx1031"
+                end
             else
-                -- rocminfo could not be located/executed anywhere we
-                -- looked (bare PATH, ROCM_PATH, /opt/rocm, /opt/rocm-*):
-                -- this is a detection gap, not evidence the GPU isn't
-                -- gfx1031, and must not be conflated with a real negative.
-                source = "rocminfo_not_found"
+                -- rocminfo absent, silent, failing or without readable GPU
+                -- agents is inconclusive, not a negative.
+                detail = "rocminfo=" .. (rocmSawOutput and "no_arch_evidence" or "no_output")
+                local archs, reason = probeRuntimeGfxArchs()
+                if not archs then
+                    source = "runtime_probe_unavailable"
+                    detail = detail .. " runtime_probe=" .. tostring(reason)
+                else
+                    local state = classifyGpuArchs(archs)
+                    detail = detail .. " runtime_probe=" .. state .. " archs="
+                        .. (#archs > 0 and table.concat(archs, ",") or "none")
+                    if state == "all_gfx1031" then
+                        value = compatValue
+                        source = "stemwerk_compatibility_rule_runtime_probe"
+                    elseif state == "mixed_archs" then
+                        source = "mixed_gpu_archs_not_overridden"
+                    else
+                        source = "runtime_probe_not_gfx1031"
+                    end
+                end
+            end
+            if SW_LOG and type(SW_LOG.logExecResult) == "function" then
+                pcall(SW_LOG.logExecResult, "gfx1031_override: value=" .. tostring(value or "")
+                    .. " source=" .. tostring(source) .. " detail=" .. tostring(detail), nil, "")
             end
         end
     end
@@ -20694,8 +20830,9 @@ function resolveGfx1031RocmOverrideEnv()
         multiTrackQueue.gfx1031OverrideResolved = true
         multiTrackQueue.gfx1031OverrideValue = value
         multiTrackQueue.gfx1031OverrideSource = source
+        multiTrackQueue.gfx1031OverrideDetail = detail
     end
-    return value, source
+    return value, source, detail
 end
 
 -- Start a separation process for one job (no window, just background process)
@@ -20959,7 +21096,10 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         end
     else
         -- Unix: background sh launcher that writes pid.txt and done.txt.
-        local gfx1031OverrideValue, gfx1031OverrideSource = resolveGfx1031RocmOverrideEnv()
+        local gfx1031OverrideValue, gfx1031OverrideSource, gfx1031OverrideDetail = resolveGfx1031RocmOverrideEnv()
+        -- Negative ROCm outcomes are exported too, so a support bundle can
+        -- show which detection route ran and why no override was applied.
+        local gfx1031ExportSource = gfx1031OverrideSource ~= "not_linux" and gfx1031OverrideSource ~= "not_applicable"
         local launcherPath = job.trackDir .. PATH_SEP .. "run_bg.sh"
         local script = io.open(launcherPath, "w")
           if script then
@@ -21009,13 +21149,14 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
             script:write("  done\n")
             script:write("  export LD_LIBRARY_PATH\n")
             script:write("fi\n")
-            if gfx1031OverrideValue or gfx1031OverrideSource == "user_environment" then
+            if gfx1031OverrideValue or gfx1031ExportSource then
                 if gfx1031OverrideValue then
                     script:write("HSA_OVERRIDE_GFX_VERSION=" .. quoteArg(gfx1031OverrideValue) .. "\n")
                     script:write("export HSA_OVERRIDE_GFX_VERSION\n")
                 end
                 script:write("STEMWERK_GFX1031_OVERRIDE_SOURCE=" .. quoteArg(tostring(gfx1031OverrideSource or "")) .. "\n")
-                script:write("export STEMWERK_GFX1031_OVERRIDE_SOURCE\n")
+                script:write("STEMWERK_GFX1031_DETECTION_DETAIL=" .. quoteArg(tostring(gfx1031OverrideDetail or "")) .. "\n")
+                script:write("export STEMWERK_GFX1031_OVERRIDE_SOURCE STEMWERK_GFX1031_DETECTION_DETAIL\n")
             end
             script:write("(\n")
             script:write('  set -- "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE"\n')
@@ -21046,9 +21187,10 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
             if gfx1031OverrideValue then
                 gfx1031OverridePrefix = "HSA_OVERRIDE_GFX_VERSION=" .. quoteArg(gfx1031OverrideValue) .. " "
             end
-            if gfx1031OverrideValue or gfx1031OverrideSource == "user_environment" then
+            if gfx1031OverrideValue or gfx1031ExportSource then
                 gfx1031OverridePrefix = gfx1031OverridePrefix
                     .. "STEMWERK_GFX1031_OVERRIDE_SOURCE=" .. quoteArg(tostring(gfx1031OverrideSource or "")) .. " "
+                    .. "STEMWERK_GFX1031_DETECTION_DETAIL=" .. quoteArg(tostring(gfx1031OverrideDetail or "")) .. " "
             end
             local cmd = string.format(
                 gfx1031OverridePrefix .. 'STEMWERK_PROCESSING_MAY_DOWNLOAD=no STEMWERK_RUN_ID=%s STEMWERK_JOB_ID=%s STEMWERK_RUN_DIR_NAME=%s STEMWERK_RUN_STARTED_UTC=%s %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',

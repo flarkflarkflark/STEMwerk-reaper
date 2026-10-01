@@ -4507,6 +4507,17 @@ def main():
                 f"{os.environ.get('STEMWERK_GFX1031_OVERRIDE_SOURCE') or 'user_environment'}",
                 file=sys.stderr,
             )
+        elif os.environ.get("STEMWERK_GFX1031_OVERRIDE_SOURCE"):
+            print(
+                "STEMWERK_DIAG gfx1031_override_not_applied_source="
+                f"{os.environ.get('STEMWERK_GFX1031_OVERRIDE_SOURCE')}",
+                file=sys.stderr,
+            )
+        if os.environ.get("STEMWERK_GFX1031_DETECTION_DETAIL"):
+            print(
+                f"STEMWERK_DIAG gfx1031_detection_detail={os.environ.get('STEMWERK_GFX1031_DETECTION_DETAIL')}",
+                file=sys.stderr,
+            )
     ffmpeg_path, ffmpeg_wrapper, ffmpeg_path_prefix = _configure_ffmpeg_runtime()
     model_cache_dir = _configure_model_cache_runtime()
     if ffmpeg_path is not None:
