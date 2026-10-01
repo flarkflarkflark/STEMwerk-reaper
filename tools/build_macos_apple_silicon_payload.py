@@ -22,6 +22,7 @@ from pathlib import Path
 
 try:
     from tools.macos_ffmpeg import (
+        FFMPEG_DEPLOYMENT_TARGET,
         FFMPEG_LICENSE,
         FFMPEG_SOURCE_SHA256,
         FFMPEG_SOURCE_URL,
@@ -43,6 +44,7 @@ try:
     )
 except ModuleNotFoundError:  # Direct execution via ``python tools/...py``.
     from macos_ffmpeg import (  # type: ignore[no-redef]
+        FFMPEG_DEPLOYMENT_TARGET,
         FFMPEG_LICENSE,
         FFMPEG_SOURCE_SHA256,
         FFMPEG_SOURCE_URL,
@@ -387,6 +389,7 @@ def _build_native_libsamplerate(work_dir: Path) -> Path:
         "-dynamiclib",
         "-arch",
         "arm64",
+        f"-mmacosx-version-min={FFMPEG_DEPLOYMENT_TARGET}",
         "-O2",
         "-fPIC",
         f"-I{build_dir}",
@@ -419,7 +422,9 @@ def _build_native_libsamplerate(work_dir: Path) -> Path:
         str(source / "src" / "src_sinc.c"),
         str(source / "src" / "src_zoh.c"),
     ]
-    subprocess.run(cmd, check=True, env=command_env())
+    env = command_env()
+    env["MACOSX_DEPLOYMENT_TARGET"] = FFMPEG_DEPLOYMENT_TARGET
+    subprocess.run(cmd, check=True, env=env)
     assert_arm64_macho(output)
     return output
 
