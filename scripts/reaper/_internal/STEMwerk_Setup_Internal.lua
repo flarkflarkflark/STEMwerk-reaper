@@ -5496,6 +5496,13 @@ function linuxDrawStatus(state, logLines, pidAlive, pid)
     drawLinuxLogPanel(logX, logY, logW, logH, logLines, "Console wheel scrolls. Ctrl+wheel outside console zooms text. Use +/- or 0 for text size.")
 end
 
+-- Windows also reaches this shared final window (finalizeWindowsVerify ->
+-- showDeferredFinalWindow), but Windows repair is owned by the external
+-- installer, so in-REAPER Repair/Rebuild venv are offered on Linux/macOS only.
+function linuxFinalOffersInReaperRepair()
+    return OS ~= "Windows"
+end
+
 function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     local w, h = gfx.w, gfx.h
     gfx.set(0.03, 0.03, 0.04, 1)
@@ -5614,8 +5621,10 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     -- implication" requirement).
     local actionButtons = {}
     if presentation.state == "failed" then
-        actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair", style = "primary" }
-        actionButtons[#actionButtons + 1] = { label = "Rebuild venv", action = "rebuild_venv" }
+        if linuxFinalOffersInReaperRepair() then
+            actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair", style = "primary" }
+            actionButtons[#actionButtons + 1] = { label = "Rebuild venv", action = "rebuild_venv" }
+        end
         actionButtons[#actionButtons + 1] = { label = "Set FFmpeg Path...", action = "set_ffmpeg_path" }
     else
         actionButtons[#actionButtons + 1] = { label = "Open STEMwerk", action = "open_stemwerk", style = "primary" }
@@ -5723,8 +5732,9 @@ end
 -- and the deferred completion scroll reset, both inside linuxSetupTick
 -- below) actually apply on this OS? linuxSetupTick/LINUX_SETUP is shared
 -- code with no OS gate on startLinuxSetup itself -- it is used for both
--- Linux and macOS Setup windows, and never for Windows (which has its own
--- separate WINDOWS_SETUP/windowsSetupTick entirely). This behavior has no
+-- Linux and macOS Setup windows, and on Windows only as the Check-only
+-- final window (finalizeWindowsVerify -> showDeferredFinalWindow; see
+-- linuxFinalOffersInReaperRepair). This behavior has no
 -- macOS counterpart before 2.3.1.1, so it must stay Linux-only; macOS keeps
 -- its exact pre-2.3.1.1 scroll contract. Both actual gate sites below call
 -- this exact function (not a reimplementation of the same condition).
@@ -5993,6 +6003,11 @@ function linuxSetupTick()
                             runSetFfmpegPathAction()
                         end)
                         return
+                    elseif (b.action == "repair" or b.action == "rebuild_venv") and OS == "Windows" then
+                        -- Windows reaches this shared window via finalizeWindowsVerify; repair
+                        -- belongs to the external installer, so use its fail-closed guard and
+                        -- never fall through to startLinuxSetup (which clears state files).
+                        startWindowsSetup(LINUX_SETUP.runtime, LINUX_SETUP.separatorScript, "repair", true)
                     elseif b.action == "repair" then
                         local runtime = LINUX_SETUP.runtime
                         local separatorScript = LINUX_SETUP.separatorScript or (SCRIPT_DIR .. "audio_separator_process.py")
