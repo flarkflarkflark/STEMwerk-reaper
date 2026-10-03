@@ -1728,7 +1728,8 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
 
     if lowerLog:find("error_stage=stage2_runtime", 1, true)
         and (lowerLog:find("error_reason=drumsep_runtime_missing", 1, true)
-            or lowerLog:find("error_reason=drumsep_runtime_broken", 1, true)) then
+            or lowerLog:find("error_reason=drumsep_runtime_broken", 1, true)
+            or lowerLog:find("error_reason=drumsep_runtime_verify_timeout", 1, true)) then
         local reason = tostring(logSnippet or ""):match("error_reason=([^\r\n]+)") or "drumsep_runtime_missing"
         local detail = tostring(logSnippet or ""):match("detail=([^\r\n]+)") or ""
         local headline = reason == "drumsep_runtime_broken"
@@ -1741,6 +1742,12 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
             runtimeGuidance = runtimeGuidance .. "Optional GPU path: Setup/Repair Drum Kit Split ROCm runtime.\n"
         elseif OS == "Windows" then
             runtimeGuidance = "Re-run the STEMwerk installer to repair the Drum Kit Split runtime.\n"
+        end
+        if reason == "drumsep_runtime_verify_timeout" then
+            -- A slow cold start is not evidence of a broken runtime.
+            headline = "Drum Kit Split runtime check timed out."
+            runtimeGuidance = "The runtime did not finish its start-up check in time (common on a slow or busy first start).\n"
+                .. "Run the job again. Use Setup/Repair only if this keeps happening.\n"
         end
         local msg = headline .. "\n"
             .. runtimeGuidance
