@@ -722,6 +722,15 @@ def test_direct_demix_accepts_cpu_device_and_writes_outputs(tmp_path, monkeypatc
 
 def test_wrapper_helper_result_uses_runtime_and_requested_device_markers(tmp_path, monkeypatch):
     helper = _load_helper()
+    # This models a Linux/ROCm wrapper run (backend_runtime="rocm" below) and
+    # only exercises marker passthrough, not device forcing -- the fake
+    # Separator's torch_device is a fixed "cuda" stand-in that its load_model
+    # never reacts to. Pin the platform explicitly so it is not implicitly
+    # exercising the new Windows-only explicit-CPU device override added for
+    # the CUDA-as-CPU-host fix (see test_windows_nvidia_drumsep_cpu_via_cuda
+    # and test_windows_explicit_cpu_wrapper_forces_true_cpu_device for that
+    # coverage) merely because this suite happens to run on Windows.
+    monkeypatch.setattr(helper.sys, "platform", "linux")
 
     class FakeSeparator:
         def __init__(self, **kwargs):
@@ -770,6 +779,188 @@ def test_wrapper_helper_result_uses_runtime_and_requested_device_markers(tmp_pat
     assert payload["model_device"] == "cuda:0"
     assert payload["drumsep_mps_all_targets_route"] == ""
     assert payload["direct_demix_keys"] == []
+
+
+# --- Windows explicit CPU, wrapper route: real-hardware-proven override ----
+# Confirmed on a real Windows NVIDIA RTX 3060 machine with the installed
+# .venv-drumsep-cuda: Separator.__init__'s own setup_accelerated_inferencing_
+# device() auto-detection decides torch_device purely from
+# torch.cuda.is_available(), which can report True (and even let a real
+# tensor.to("cuda") succeed) despite CUDA_VISIBLE_DEVICES/
+# NVIDIA_VISIBLE_DEVICES being blanked for CPU isolation. Left unguarded,
+# an explicit --device cpu request silently separates on the GPU. This
+# mirrors the pre-existing managed_macos_wrapper override below -- extended
+# here to the general Windows wrapper route.
+
+
+def test_windows_explicit_cpu_wrapper_forces_true_cpu_device_despite_cuda_auto_detect(tmp_path, monkeypatch):
+    helper = _load_helper()
+    monkeypatch.setattr(helper.sys, "platform", "win32")
+    monkeypatch.setattr(helper.metadata, "version", lambda _name: "0.23.0")
+    captured = {}
+
+    class FakeSeparator:
+        def __init__(self, **kwargs):
+            self.output_dir = Path(kwargs["output_dir"])
+            # Simulates the real bug: audio_separator's own auto-detect
+            # decided CUDA even though --device cpu was requested.
+            self.torch_device = "cuda"
+            self.torch_device_cpu = "cpu"
+            self.onnx_execution_provider = ["CUDAExecutionProvider"]
+            self.model_instance = _FakeModel(_complete_sources(), "cuda:0")
+
+        def load_model(self, _model_name):
+            model_device = "cpu" if str(self.torch_device) == "cpu" else "cuda:0"
+            self.model_instance = _FakeModel(_complete_sources(), model_device)
+            captured["load_device"] = str(self.torch_device)
+            captured["onnx_provider"] = list(self.onnx_execution_provider)
+
+        def separate(self, _input_path):
+            outputs = []
+            for stem_name, filename in helper.REAPER_FILENAMES.items():
+                path = self.output_dir / filename
+                path.write_bytes(stem_name.encode("ascii"))
+                outputs.append(str(path))
+            return outputs
+
+    fake_package, fake_separator_module = _fake_audio_separator_package(FakeSeparator)
+    monkeypatch.setitem(sys.modules, "audio_separator", fake_package)
+    monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_separator_module)
+
+    result_json = tmp_path / "result.json"
+    args = SimpleNamespace(
+        input=str(tmp_path / "input.wav"),
+        output_dir=str(tmp_path / "out"),
+        model_dir=str(tmp_path / "models"),
+        model="MDX23C",
+        result_json=str(result_json),
+        log_file="",
+        route="wrapper",
+        device="cpu",
+        requested_device="cpu",
+        backend_runtime="cpu",
+    )
+
+    rc = helper.run(args)
+    payload = json.loads(result_json.read_text(encoding="utf-8"))
+
+    assert rc == 0
+    assert payload["ok"] is True
+    assert captured["load_device"] == "cpu", "the override must run before load_model, not after"
+    assert captured["onnx_provider"] == ["CPUExecutionProvider"]
+    assert payload["effective_device"] == "cpu"
+    assert payload["model_device"] == "cpu"
+    assert payload["actual_drum_outputs"] == payload["expected_drum_outputs"] == 6
+
+
+def test_windows_explicit_cuda_wrapper_is_not_forced_to_cpu(tmp_path, monkeypatch):
+    """The new Windows override is scoped to args.device == "cpu" only --
+    explicit CUDA on the same wrapper route must keep whatever device
+    Separator's own auto-detection (or later stages) decided."""
+    helper = _load_helper()
+    monkeypatch.setattr(helper.sys, "platform", "win32")
+    monkeypatch.setattr(helper.metadata, "version", lambda _name: "0.23.0")
+    monkeypatch.setattr(helper, "_probe_gpu_device", lambda _device: (True, "ok", {}))
+
+    class FakeSeparator:
+        def __init__(self, **kwargs):
+            self.output_dir = Path(kwargs["output_dir"])
+            self.torch_device = "cuda"
+            self.torch_device_cpu = "cpu"
+            self.onnx_execution_provider = ["CUDAExecutionProvider"]
+            self.model_instance = _FakeModel(_complete_sources(), "cuda:0")
+
+        def load_model(self, _model_name):
+            return None
+
+        def separate(self, _input_path):
+            outputs = []
+            for stem_name, filename in helper.REAPER_FILENAMES.items():
+                path = self.output_dir / filename
+                path.write_bytes(stem_name.encode("ascii"))
+                outputs.append(str(path))
+            return outputs
+
+    fake_package, fake_separator_module = _fake_audio_separator_package(FakeSeparator)
+    monkeypatch.setitem(sys.modules, "audio_separator", fake_package)
+    monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_separator_module)
+
+    result_json = tmp_path / "result.json"
+    args = SimpleNamespace(
+        input=str(tmp_path / "input.wav"),
+        output_dir=str(tmp_path / "out"),
+        model_dir=str(tmp_path / "models"),
+        model="MDX23C",
+        result_json=str(result_json),
+        log_file="",
+        route="wrapper",
+        device="cuda",
+        requested_device="cuda",
+        backend_runtime="cuda",
+    )
+
+    rc = helper.run(args)
+    payload = json.loads(result_json.read_text(encoding="utf-8"))
+
+    assert rc == 0
+    assert payload["ok"] is True
+    assert payload["effective_device"] == "cuda"
+    assert payload["model_device"] == "cuda:0"
+
+
+def test_macos_and_linux_explicit_cpu_wrapper_route_unaffected_by_windows_override(tmp_path, monkeypatch):
+    """The new override is gated on sys.platform == "win32" -- macOS and
+    Linux wrapper-route behavior for explicit CPU must be untouched."""
+    for plat in ("darwin", "linux"):
+        helper = _load_helper()
+        monkeypatch.setattr(helper.sys, "platform", plat)
+        monkeypatch.setattr(helper.metadata, "version", lambda _name: "0.23.0")
+
+        class FakeSeparator:
+            def __init__(self, **kwargs):
+                self.output_dir = Path(kwargs["output_dir"])
+                self.torch_device = "cuda"
+                self.torch_device_cpu = "cpu"
+                self.onnx_execution_provider = ["CUDAExecutionProvider"]
+                self.model_instance = _FakeModel(_complete_sources(), "cuda:0")
+
+            def load_model(self, _model_name):
+                return None
+
+            def separate(self, _input_path):
+                outputs = []
+                for stem_name, filename in helper.REAPER_FILENAMES.items():
+                    path = self.output_dir / filename
+                    path.write_bytes(stem_name.encode("ascii"))
+                    outputs.append(str(path))
+                return outputs
+
+        fake_package, fake_separator_module = _fake_audio_separator_package(FakeSeparator)
+        monkeypatch.setitem(sys.modules, "audio_separator", fake_package)
+        monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_separator_module)
+
+        result_json = tmp_path / f"result_{plat}.json"
+        args = SimpleNamespace(
+            input=str(tmp_path / "input.wav"),
+            output_dir=str(tmp_path / f"out_{plat}"),
+            model_dir=str(tmp_path / "models"),
+            model="MDX23C",
+            result_json=str(result_json),
+            log_file="",
+            route="wrapper",
+            device="cpu",
+            requested_device="cpu",
+            backend_runtime="cpu",
+        )
+
+        rc = helper.run(args)
+        payload = json.loads(result_json.read_text(encoding="utf-8"))
+
+        assert rc == 0
+        assert payload["ok"] is True
+        # Unaffected: the fake's torch_device ("cuda") passes straight
+        # through, exactly as before this change, on non-Windows platforms.
+        assert payload["effective_device"] == "cuda", f"platform={plat} must be unaffected by the Windows-only override"
 
 
 @pytest.mark.parametrize(

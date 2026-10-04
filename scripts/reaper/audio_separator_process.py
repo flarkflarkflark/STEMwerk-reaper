@@ -2714,6 +2714,43 @@ def _select_drumsep_runtime(
                 info["directml_cpu_python_attempts"] = directml_cpu_attempts
                 return selected_directml_cpu_python, "cpu", info
 
+        # No dedicated CPU DrumSep runtime (.venv-drumsep) exists or it is
+        # broken, and no DirectML runtime is present either. On Windows, a
+        # CUDA DrumSep runtime (.venv-drumsep-cuda), when present, is a fully
+        # CPU-capable Python environment in its own right: the DrumSep helper
+        # only enables GPU execution when --device cuda is passed -- for
+        # --device cpu it always takes the plain mdx_params/demucs_params/
+        # mdxc_params={"device": "cpu"} path, identical to a dedicated CPU
+        # venv, regardless of which venv hosts the interpreter. Probing it
+        # here with require_gpu=False only checks that its interpreter and
+        # required packages import cleanly, exactly like the cpu_candidates
+        # probe above -- it does not require CUDA/the GPU to be present or
+        # working. This mirrors the Linux ROCm-as-CPU and Windows
+        # DirectML-as-CPU fallbacks above: fall through to the next tier
+        # regardless of whether the preferred tier was "missing" or "broken".
+        # build_drumsep_subprocess_env additionally blanks CUDA_VISIBLE_DEVICES
+        # / NVIDIA_VISIBLE_DEVICES whenever backend=="cpu", so the CUDA-capable
+        # interpreter cannot see the GPU even though it is CUDA-capable.
+        cuda_cpu_detail = "missing"
+        cuda_cpu_attempts: List[Dict[str, Any]] = []
+        if _is_windows_runtime():
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_as_cpu_start", file=sys.stderr)
+            selected_cuda_cpu_python, cuda_cpu_detail, cuda_cpu_payload, cuda_cpu_attempts = _probe_drumsep_runtime_candidates(
+                cuda_candidates, require_gpu=False
+            )
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_as_cpu_end detail={cuda_cpu_detail}", file=sys.stderr)
+            if selected_cuda_cpu_python is not None:
+                info = dict(cuda_cpu_payload or {})
+                info["kind"] = "cpu"
+                info["detail"] = cuda_cpu_detail
+                info["fallback_reason"] = f"cpu_skipped:{cpu_detail};directml_skipped:{directml_cpu_detail}"
+                info["selection_policy"] = "explicit_cpu_via_cuda_runtime"
+                info["runtime_source_family"] = "cuda"
+                info["cpu_python_attempts"] = cpu_attempts
+                info["directml_cpu_python_attempts"] = directml_cpu_attempts
+                info["cuda_cpu_python_attempts"] = cuda_cpu_attempts
+                return selected_cuda_cpu_python, "cpu", info
+
         info = {
             "cpu_detail": cpu_detail,
             "cpu_python": str(cpu_python),
@@ -2722,11 +2759,16 @@ def _select_drumsep_runtime(
             "rocm_cpu_python_attempts": rocm_cpu_attempts,
             "directml_cpu_detail": directml_cpu_detail,
             "directml_cpu_python_attempts": directml_cpu_attempts,
+            "cuda_cpu_detail": cuda_cpu_detail,
+            "cuda_cpu_python_attempts": cuda_cpu_attempts,
             "selection_policy": "explicit_cpu",
         }
         reason = (
             "missing"
-            if cpu_detail == "missing" and rocm_cpu_detail == "missing" and directml_cpu_detail == "missing"
+            if cpu_detail == "missing"
+            and rocm_cpu_detail == "missing"
+            and directml_cpu_detail == "missing"
+            and cuda_cpu_detail == "missing"
             else "broken"
         )
         return None, reason, info

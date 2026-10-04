@@ -937,7 +937,34 @@ def run(args: argparse.Namespace) -> int:
             and sys.platform == "darwin"
             and args.device in {"cpu", "mps"}
         )
-        if args.route in {"mps-direct-demix", "direct-demix"} or managed_macos_wrapper:
+        # Windows explicit CPU, wrapper route: Separator.__init__ already ran
+        # its own setup_accelerated_inferencing_device() auto-detection
+        # above, which decides sep.torch_device purely from
+        # torch.cuda.is_available() -- independent of the mdx_params/
+        # demucs_params/mdxc_params device="cpu" kwargs already threaded
+        # through separator_kwargs. On a genuinely CUDA-only host this
+        # naturally agrees with the request. But when this interpreter is a
+        # CUDA-capable venv being used purely as a CPU host (see
+        # _select_drumsep_runtime's explicit_cpu_via_cuda_runtime tier),
+        # torch.cuda.is_available() can report True (and a real CUDA context
+        # can be created) even when CUDA_VISIBLE_DEVICES/
+        # NVIDIA_VISIBLE_DEVICES have been blanked for CPU isolation --
+        # confirmed on this exact venv/driver stack: device_count() and
+        # get_device_name(0) both correctly report no visible device, yet
+        # is_available() still returns True and a real tensor.to("cuda")
+        # still succeeds. Left unguarded, Separator would then silently
+        # separate on the GPU despite an explicit --device cpu request.
+        # Force the same authoritative override already applied for
+        # mps-direct-demix/direct-demix and the macOS managed wrapper above:
+        # this is idempotent (a no-op) whenever auto-detection already
+        # landed on CPU, and is the only way to guarantee true CPU execution
+        # otherwise.
+        windows_explicit_cpu_wrapper = (
+            args.route == "wrapper"
+            and sys.platform == "win32"
+            and args.device == "cpu"
+        )
+        if args.route in {"mps-direct-demix", "direct-demix"} or managed_macos_wrapper or windows_explicit_cpu_wrapper:
             _apply_separator_requested_device(sep, str(args.device or "cpu"))
         if directml_index is not None:
             _bind_separator_directml_adapter(sep, directml_index)
