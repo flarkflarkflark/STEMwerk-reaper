@@ -1,6 +1,6 @@
 # STEMwerk Windows Setup-handleiding
 
-Deze handleiding hoort bij de Windows-installer van STEMwerk 2.3.1.2.
+Deze handleiding hoort bij de Windows-installer van STEMwerk 2.3.1.3.
 
 ## Wat de installer probeert te doen
 

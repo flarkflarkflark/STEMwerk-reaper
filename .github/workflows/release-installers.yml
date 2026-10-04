@@ -20,7 +20,7 @@ on:
         description: "Full 40-hex commit SHA to build (BUILD mode), or to verify the release tag against (PUBLICATION mode). Never a branch/tag name."
         required: true
       tag:
-        description: "Release tag (e.g. v2.3.1.2). Must match VERSION; for publication it must already exist and resolve to source_commit."
+        description: "Release tag (e.g. v2.3.1.3). Must match VERSION; for publication it must already exist and resolve to source_commit."
         required: false
         default: ""
       upload_release_assets:
@@ -365,7 +365,7 @@ jobs:
             rsync curl
 
       # .deb/.rpm/Arch packaging is build-tooling only (installer/linux/build_deb.sh,
-      # build_rpm.sh, build_archpkg.sh); it is not part of the published 2.3.1.2
+      # build_rpm.sh, build_archpkg.sh); it is not part of the published 2.3.1.3
       # artifact matrix, so this workflow builds only the AppImage.
       - name: Build AppImage
         shell: bash

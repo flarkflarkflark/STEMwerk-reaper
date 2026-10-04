@@ -1,6 +1,6 @@
 # STEMwerk Windows-Setup-Anleitung
 
-Diese Anleitung gilt fuer den Windows-Installer von STEMwerk 2.3.1.2.
+Diese Anleitung gilt fuer den Windows-Installer von STEMwerk 2.3.1.3.
 
 ## Was der Installer versucht zu tun
 

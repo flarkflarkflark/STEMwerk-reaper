@@ -9,20 +9,20 @@ Split vocals, drums, bass, and more directly in your DAW for practical productio
 STEMwerk-reaper is a REAPER script package that runs high-quality stem separation on selected items or time selections and brings the results back into your project as new tracks or in-place takes. It uses a Python backend and keeps processing on your machine.
 
 ## Release status
-This README describes STEMwerk `2.3.1.2`, the current release.
+This README describes STEMwerk `2.3.1.3`, the current release.
 
-- `2.3.1.2` is the current release for the 2.3 line and is published as a tagged GitHub Release.
-- Its headline fix is Windows-focused: the Windows NVIDIA CUDA backend (Normal Stems and the separate Drum Kit Split CUDA runtime) now installs torch `2.7.1+cu128` (matched torchvision/torchaudio) instead of `2.4.1+cu121`, restoring support for Blackwell (RTX 50-series, sm_120) GPUs. Setup/Repair automatically detects and migrates a cu121 install from the previous `2.3.1.1` release; an already-correct cu128 install is left alone. Windows CPU and DirectML are unaffected.
-- It also carries cross-platform DrumSep/Kit Split correctness fixes validated on real hardware: UVR-equivalent MDXC reconstruction, corrected full-scale normalization, corrected macOS DrumSep routing, a Kit Split stem-mapping fix, and a version-neutral low-level amplification fix. See "What's new in `2.3.1.2`" below for details.
-- The current official macOS artifacts are `STEMwerk-2.3.1.2.pkg` and `STEMwerk-2.3.1.2-bundled-apple-silicon.pkg`. The bundled artifact is runtime-only and contains no models.
-- Previous release artifacts must not be treated as the current `2.3.1.2` macOS artifacts.
+- `2.3.1.3` is the current release for the 2.3 line and is published as a tagged GitHub Release.
+- It hardens Setup/Repair and DrumSep reliability: Windows repair dispatch stays outside REAPER, Linux gfx1031 overrides reach single-item workers, runtime verification allows slow healthy DrumSep startup, explicit CPU remains selected for Windows NVIDIA DrumSep/Kit Split, and the bundled Windows FFmpeg download uses its reproducible pinned release URL.
+- The previous `2.3.1.2` release added Windows NVIDIA Blackwell support and cross-platform DrumSep/Kit Split correctness fixes validated on real hardware; those fixes remain included in `2.3.1.3`.
+- The current official macOS artifacts are `STEMwerk-2.3.1.3.pkg` and `STEMwerk-2.3.1.3-bundled-apple-silicon.pkg`. The bundled artifact is runtime-only and contains no models.
+- Previous release artifacts must not be treated as the current `2.3.1.3` macOS artifacts.
 - `2.3.1.1` was a macOS Apple Silicon FFmpeg hotfix (pinned, self-contained Apple Silicon FFmpeg/ffprobe payload and fail-closed package audits); it is now the previous 2.3 release baseline.
 - `2.3.1.0` introduced macOS online Repair and moved required model installation into Setup/Repair.
 - `2.3.0.7` was a ReaPack distribution hotfix on top of `2.3.0.6` (Linux ReaPack fix for the missing managed diffq wheel).
 - `2.3.0.6` was a previous installer release before `2.3.1.0`.
 - `2.3.0.0` is the original historical 2.3 full-release baseline.
-- The ReaPack index declares `2.3.1.2`; the currently downloadable assets are on the published release page.
-- GitHub Release (current): <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.1.2>
+- The ReaPack index declares `2.3.1.3`; the currently downloadable assets are on the published release page.
+- GitHub Release (current): <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.1.3>
 - GitHub Release (previous scripts / ReaPack hotfix): <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.7>
 - GitHub Release (previous installer assets): <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.6>
 - ReaPack index: <https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml>
@@ -31,7 +31,15 @@ For full release notes, asset checksums, and current download details, use the p
 
 ![STEMwerk in action](docs/assets/stemwerk_fullscreen.gif)
 
-## What's new in 2.3.1.2
+## What's new in 2.3.1.3
+
+- Windows Setup/Repair and Rebuild requests launched from inside REAPER now hand off safely instead of attempting repair work in the REAPER process.
+- On Linux AMD gfx1031 systems, the selected ROCm architecture override now reaches single-item workers as well as multi-item processing.
+- DrumSep runtime verification now allows up to 120 seconds, avoiding false setup failures on slow but healthy startup.
+- An explicit CPU choice for Windows NVIDIA DrumSep and Kit Split is preserved end to end instead of being redirected back to CUDA.
+- The bundled Windows installer now downloads the pinned FFmpeg archive through the stable release-asset URL, restoring reproducible fresh builds.
+
+## Historical: what was new in 2.3.1.2
 Windows NVIDIA Blackwell (RTX 50-series) hotfix (issue #118):
 - The Windows CUDA backend now installs `torch==2.7.1+cu128` / `torchvision==0.22.1+cu128` / `torchaudio==2.7.1+cu128` (previously `2.4.1+cu121`), adding the compiled kernels Blackwell (sm_120) GPUs need. Validated on real Blackwell hardware and on this line's regression machine (RTX 3060, sm_86); Windows CPU and DirectML keep their existing, independently-pinned torch stacks.
 - The separate Drum Kit Split (DrumSep) CUDA runtime is migrated the same way, independently of Normal Stems.
@@ -142,35 +150,35 @@ Recommended free space:
 ### Recommended install path
 - Windows users: use the current Windows installer for both first-time installs and updates. ReaPack is not the recommended Windows install/update route.
 - macOS users: use the `.pkg` installer, or ReaPack for existing installs (ReaPack remains the preferred update path for scripts and actions).
-- Linux users: use ReaPack (preferred update path for scripts and actions) or the `STEMwerk-2.3.1.2-x86_64.AppImage` release asset.
+- Linux users: use ReaPack (preferred update path for scripts and actions) or the `STEMwerk-2.3.1.3-x86_64.AppImage` release asset.
 
 After install or update, use `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) when runtime verification or repair is needed, then launch `STEMwerk: Main` (`STEMwerk.lua`).
 
 Windows installer note: the installer copies the REAPER script payload to `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`, but REAPER action entries may still need to be registered from inside REAPER. If `STEMwerk:` actions are missing, open `Actions -> Show action list -> ReaScript: Add...`, load `STEMwerk_Setup_Toolbar.lua`, and cancel the toolbar prompt if you only need action registration.
 
-### GitHub release assets for 2.3.1.2
-`2.3.1.2` is published at the [current GitHub Release](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.1.2) with these five platform assets and the checksum manifest:
+### GitHub release assets for 2.3.1.3
+`2.3.1.3` is published at the [current GitHub Release](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.1.3) with these five platform assets and the checksum manifest:
 
 | File | Description |
 |---|---|
-| `STEMwerk-Setup-2.3.1.2.exe` | Windows standard installer |
-| `STEMwerk-Setup-2.3.1.2-bundled.exe` | Windows bundled installer |
-| `STEMwerk-2.3.1.2.pkg` | macOS installer |
-| `STEMwerk-2.3.1.2-bundled-apple-silicon.pkg` | macOS Apple Silicon bundled recovery installer |
-| `STEMwerk-2.3.1.2-x86_64.AppImage` | Linux AppImage |
-| `SHA256SUMS-2.3.1.2.txt` | SHA256 manifest |
+| `STEMwerk-Setup-2.3.1.3.exe` | Windows standard installer |
+| `STEMwerk-Setup-2.3.1.3-bundled.exe` | Windows bundled installer |
+| `STEMwerk-2.3.1.3.pkg` | macOS installer |
+| `STEMwerk-2.3.1.3-bundled-apple-silicon.pkg` | macOS Apple Silicon bundled recovery installer |
+| `STEMwerk-2.3.1.3-x86_64.AppImage` | Linux AppImage |
+| `SHA256SUMS-2.3.1.3.txt` | SHA256 manifest |
 
-Linux `.deb`, `.rpm` and Arch packages are not part of the published `2.3.1.2` asset set; the AppImage is the Linux release asset.
+Linux `.deb`, `.rpm` and Arch packages are not part of the published `2.3.1.3` asset set; the AppImage is the Linux release asset.
 
 ### Historical 2.3.1.0 / 2.3.1.1 artifact evidence
-The repository retains the previous `2.3.1.0` and `2.3.1.1` cross-platform artifact names and checksum inventory as historical release evidence. They are not the current `2.3.1.2` release assets.
+The repository retains the previous `2.3.1.0`, `2.3.1.1`, and `2.3.1.2` cross-platform artifact names and checksum inventory as historical release evidence. They are not the current `2.3.1.3` release assets.
 
 GitHub also provides automatic source archives (`.zip` / `.tar.gz`) on the release page, but those are not the recommended end-user downloads.
 
 ### Large offline allmodels installers (separate / optional)
-These large offline/full installers deliberately remain on the `2.3.0.0` line and are not rebuilt for hotfix releases. They remain available separately for users who specifically want the larger offline allmodels installers with bundled runtime/model payloads. They are not part of the current `2.3.1.2` main-artifact matrix; the current bundled Apple Silicon package is runtime-only and contains no models.
+These large offline/full installers deliberately remain on the `2.3.0.0` line and are not rebuilt for hotfix releases. They remain available separately for users who specifically want the larger offline allmodels installers with bundled runtime/model payloads. They are not part of the current `2.3.1.3` main-artifact matrix; the current bundled Apple Silicon package is runtime-only and contains no models.
 
-The large Windows offline allmodels installers remain at [`2.3.0.0`](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/2.3.0.0) as optional historical downloads. They are not current `2.3.1.2` release assets.
+The large Windows offline allmodels installers remain at [`2.3.0.0`](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/2.3.0.0) as optional historical downloads. They are not current `2.3.1.3` release assets.
 
 | File | Platform | Download |
 |---|---|---|
@@ -210,7 +218,7 @@ STEMwerk processes audio locally. It only connects to network services when requ
 ### Recommended
 1. Windows: use the current Windows installer release asset.
 2. macOS: use the current `.pkg` installer or install through ReaPack.
-3. Linux: use ReaPack or the current `STEMwerk-2.3.1.2-x86_64.AppImage` release asset.
+3. Linux: use ReaPack or the current `STEMwerk-2.3.1.3-x86_64.AppImage` release asset.
 4. In REAPER, run `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) when prompted or when runtime verification or repair is needed.
 5. Start the main UI with `STEMwerk: Main` (`STEMwerk.lua`).
 
@@ -246,10 +254,10 @@ After installing or updating via ReaPack, run `STEMwerk: Setup` once.
 > **Windows note**: ReaPack is not the recommended Windows install or update route. Use the current Windows installer for both first-time installs and updates.
 
 ## Windows Notes
-- The current stable Windows target is `2.3.1.2`.
+- The current stable Windows target is `2.3.1.3`.
 - The small Windows patch-only path is retired.
-- Existing Windows users should uninstall older STEMwerk versions first, then install the full online or bundled `2.3.1.2` installer.
-- NVIDIA users on an existing Windows install: running the `2.3.1.2` installer (Repair) automatically detects and migrates a CUDA runtime from the previous `2.3.1.1` release; no manual steps are required.
+- Existing Windows users should uninstall older STEMwerk versions first, then install the full online or bundled `2.3.1.3` installer.
+- NVIDIA users on an existing Windows install: running the `2.3.1.3` installer (Repair) automatically detects and migrates a CUDA runtime from the previous `2.3.1.1` release; no manual steps are required.
 - After install, run `STEMwerk-SETUP.lua` once to verify paths and runtime state.
 - If setup still reports missing runtime or bootstrap pieces, rerun the installer first, then rerun `STEMwerk-SETUP.lua`.
 
