@@ -5540,22 +5540,66 @@ def test_windows_fetch_runtime_assets_declares_pinned_checksums_and_immutable_ff
     script = Path("installer/windows/fetch_runtime_assets.sh").read_text(encoding="utf-8")
     ps1 = Path("installer/windows/fetch_runtime_assets.ps1").read_text(encoding="utf-8")
 
-    assert 'PYTHON_SHA256="fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in script
-    assert 'FFMPEG_SHA256="fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9"' in script
-    assert "gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip\"" not in script
-    assert (
-        'FFMPEG_URL="https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"'
-        in script
+    expected_version = "9.0.1"
+    expected_archive = f"ffmpeg-{expected_version}-essentials_build.zip"
+    expected_url = (
+        "https://github.com/GyanD/codexffmpeg/releases/download/"
+        f"{expected_version}/{expected_archive}"
     )
+    expected_sha256 = "fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9"
+    stale_url = (
+        "https://www.gyan.dev/ffmpeg/builds/packages/"
+        "ffmpeg-9.0.1-essentials_build.zip"
+    )
+
+    shell_url = re.search(r'^FFMPEG_URL="([^"]+)"$', script, re.MULTILINE)
+    shell_sha256 = re.search(r'^FFMPEG_SHA256="([0-9a-f]{64})"$', script, re.MULTILINE)
+    shell_file = re.search(r'^FFMPEG_FILE="([^"]+)"$', script, re.MULTILINE)
+    powershell_url = re.search(r'^\$ffmpegUrl = "([^"]+)"$', ps1, re.MULTILINE)
+    powershell_sha256 = re.search(r'^\$ffmpegSha256 = "([0-9a-f]{64})"$', ps1, re.MULTILINE)
+    powershell_file = re.search(r'^\$ffmpegFile = "([^"]+)"$', ps1, re.MULTILINE)
+
+    assert all(
+        match is not None
+        for match in (
+            shell_url,
+            shell_sha256,
+            shell_file,
+            powershell_url,
+            powershell_sha256,
+            powershell_file,
+        )
+    )
+
+    assert 'PYTHON_SHA256="fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in script
+    assert shell_url.group(1) == powershell_url.group(1) == expected_url
+    assert shell_sha256.group(1) == powershell_sha256.group(1) == expected_sha256
+    assert shell_file.group(1) == powershell_file.group(1) == "ffmpeg-release-essentials.zip"
+    assert expected_url.endswith(f"/download/{expected_version}/{expected_archive}")
+    assert stale_url not in script
+    assert stale_url not in ps1
+    assert "gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip\"" not in script
     assert "verify_sha256" in script
+    assert 'download_if_missing "$FFMPEG_URL" "$FFMPEG_DIR/$FFMPEG_FILE" "$FFMPEG_SHA256"' in script
 
     assert '$pythonSha256 = "fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in ps1
-    assert '$ffmpegSha256 = "fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9"' in ps1
-    assert (
-        '$ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"'
-        in ps1
-    )
     assert "Verify-Sha256" in ps1
+    assert "Download-IfMissing $ffmpegUrl (Join-Path $ffmpegDir $ffmpegFile) $ffmpegSha256" in ps1
+
+
+def test_windows_bundled_ffmpeg_archive_contract_requires_ffmpeg_and_ffprobe():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(
+        encoding="utf-8-sig"
+    )
+
+    archive_validator = bootstrap[
+        bootstrap.index("function TestFfmpegArchive") : bootstrap.index(
+            "function GetFfmpegDownloadFailure"
+        )
+    ]
+    assert '$_ -like "*/bin/ffmpeg.exe"' in archive_validator
+    assert '$_ -like "*/bin/ffprobe.exe"' in archive_validator
+    assert "return ($hasFfmpeg -and $hasFfprobe)" in archive_validator
 
 
 def test_windows_fetch_runtime_assets_accepts_bytes_matching_expected_checksum(tmp_path):
