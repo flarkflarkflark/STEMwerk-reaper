@@ -285,12 +285,13 @@ def test_single_item_and_user_sequential_are_unchanged(tmp_path, adapter_class):
 @pytest.mark.parametrize(
     "route, adapter_class",
     [
-        ("normal", "discrete"),
+        # normal + discrete and dks_extract + discrete are both deliberately
+        # excluded: an explicitly-selected named discrete adapter now matches
+        # the cap Auto already used for the identical execution (see
+        # test_normal_discrete_directml_matches_auto_parallel_cap below and
+        # test_windows_dks_extract_directml_discrete_cap).
         ("normal", "integrated"),
         ("normal", "unknown"),
-        # dks_extract + discrete is deliberately excluded: Kit Split stage 1 on a
-        # named discrete adapter now matches the cap Auto already used for the
-        # identical execution (see test_windows_dks_extract_directml_discrete_cap).
         ("dks_extract", "integrated"),
         ("dks_extract", "unknown"),
     ],
@@ -298,6 +299,31 @@ def test_single_item_and_user_sequential_are_unchanged(tmp_path, adapter_class):
 def test_normal_and_kit_split_directml_stay_on_stability_cap(tmp_path, route, adapter_class):
     out = _policy(tmp_path, route=route, backend="directml", directmlAdapterClass=adapter_class, requestedParallel=True, jobCount=2)
     assert (out["cap"], out["sequential"], out["reason"]) == ("1", "true", "directml_multi_track")
+
+
+@pytest.mark.parametrize(
+    "job_count, cap",
+    [(2, "2"), (4, "4"), (6, "4")],
+)
+def test_normal_discrete_directml_matches_auto_parallel_cap(tmp_path, job_count, cap):
+    """Explicit Normal Stems selection of a named discrete DirectML adapter
+    (e.g. an AMD RX 9070) must resolve to the same parallel cap Auto already
+    uses for that adapter via the generic GPU branch, not the generic
+    single-adapter stability fallback. Mirrors the existing dks_extract
+    discrete-adapter carve-out one block above."""
+    out = _policy(
+        tmp_path,
+        route="normal",
+        backend="directml",
+        directmlAdapterClass="discrete",
+        requestedParallel=True,
+        jobCount=job_count,
+    )
+    assert (out["cap"], out["sequential"], out["reason"]) == (
+        cap,
+        "false",
+        "scheduler_normal_directml_discrete_cap4",
+    )
 
 
 @pytest.mark.parametrize(

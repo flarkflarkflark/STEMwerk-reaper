@@ -202,10 +202,11 @@ def test_direct_kit_long_workload_variant_is_untouched(tmp_path):
     assert (cap, sequential, reason) == ("2", "false", "scheduler_dks_direct_directml_long_cap4")
 
 
-@pytest.mark.parametrize("adapter_class", ["discrete", "integrated", "unknown", ""])
+@pytest.mark.parametrize("adapter_class", ["integrated", "unknown", ""])
 def test_normal_stems_directml_remains_cap_one(tmp_path, adapter_class):
-    """Deliberately NOT fixed in this slice: Normal Stems explicit DirectML keeps
-    the stability cap even for a discrete adapter."""
+    """Integrated/unknown DirectML adapters keep the stability cap for Normal
+    Stems. A named discrete adapter no longer does -- see
+    test_normal_stems_discrete_directml_matches_auto_parallel_cap below."""
     cap, sequential, reason = _policy(
         tmp_path,
         route="normal",
@@ -215,6 +216,22 @@ def test_normal_stems_directml_remains_cap_one(tmp_path, adapter_class):
         jobCount=2,
     )
     assert (cap, sequential, reason) == ("1", "true", "directml_multi_track")
+
+
+def test_normal_stems_discrete_directml_matches_auto_parallel_cap(tmp_path):
+    """Explicit Normal Stems selection of a named discrete adapter (e.g. RX
+    9070) must resolve to the same parallel cap Auto already uses for that
+    adapter via the generic GPU branch -- selecting the identical adapter
+    explicitly must not be slower than Auto for identical execution."""
+    cap, sequential, reason = _policy(
+        tmp_path,
+        route="normal",
+        backend="directml",
+        directmlAdapterClass="discrete",
+        requestedParallel=True,
+        jobCount=2,
+    )
+    assert (cap, sequential, reason) == ("2", "false", "scheduler_normal_directml_discrete_cap4")
 
 
 @pytest.mark.parametrize("adapter_class", ["discrete", "integrated", "unknown"])

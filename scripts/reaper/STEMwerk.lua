@@ -1124,7 +1124,17 @@ function normalizeUserFacingDeviceLabel(name)
 end
 
 function formatUserFacingProcessingDeviceLabel(...)
-    local candidates = { ... }
+    -- Normalize every slot to a real (possibly empty) string before building
+    -- the table: a bare nil in an early slot (e.g. a caller's stage1Runtime
+    -- that was never set) would otherwise make ipairs() stop before it ever
+    -- reaches a later slot carrying real evidence (e.g. effectiveDevice or
+    -- deviceName).
+    local argCount = select("#", ...)
+    local rawArgs = { ... }
+    local candidates = {}
+    for i = 1, argCount do
+        candidates[i] = tostring(rawArgs[i] or "")
+    end
     local sawCudaToken = false
     local sawNvidiaCuda = false
     local sawAmdRocmLike = false
@@ -9391,7 +9401,18 @@ function sanitizeUserFacingMethodLabel(candidate)
 end
 
 function preferredRuntimeSelection(runtimeSelected, stage2Runtime, stage1Runtime, backendRuntime, fallbackDevice)
-    local candidates = { runtimeSelected, stage2Runtime, stage1Runtime, backendRuntime, fallbackDevice }
+    -- Every slot must be a real (possibly empty) string, never a bare nil: a
+    -- nil in an early slot makes ipairs() stop before it ever reaches a later
+    -- slot that does carry real evidence (e.g. backendRuntime="directml"
+    -- behind a nil runtimeSelected, which is the normal shape of a Normal
+    -- Stems run -- info.runtimeSelected is never populated for that route).
+    local candidates = {
+        tostring(runtimeSelected or ""),
+        tostring(stage2Runtime or ""),
+        tostring(stage1Runtime or ""),
+        tostring(backendRuntime or ""),
+        tostring(fallbackDevice or ""),
+    }
     for _, candidate in ipairs(candidates) do
         local lower = tostring(candidate or ""):lower()
         if lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true) then
@@ -19242,6 +19263,18 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
             policy.sequentialMode = false
             policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_GPU_MAX_PARALLEL)
             policy.reason = "scheduler_dks_extract_stage1_directml_discrete_cap4"
+        elseif route == "normal" and opts.directmlAdapterClass == "discrete" then
+            -- Normal Stems is ordinary separation (no DrumSep helper involved),
+            -- and Auto already runs it in parallel on this very adapter through
+            -- the generic GPU branch below (Auto is classified as backend "gpu",
+            -- never "directml", so it never reaches this function at all).
+            -- Selecting the same resolved discrete adapter explicitly must not
+            -- be slower for identical execution. Integrated/unknown adapters
+            -- (e.g. 780M) are not covered by this branch and keep the
+            -- conservative sequential fallback below.
+            policy.sequentialMode = false
+            policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_GPU_MAX_PARALLEL)
+            policy.reason = "scheduler_normal_directml_discrete_cap4"
         else
             policy.sequentialMode = true
             policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL
