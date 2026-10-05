@@ -117,7 +117,6 @@ end
 -- --- 1: Intel macOS Setup actions: no actionable "Drum Kit Split runtime" ---
 
 loadTargetWithPlatform("OSX64", "x86_64")
-local intelLoadBaseline = #messageBoxCalls
 local intelRuntime = mkFixtureRuntime("intel-choices")
 local intelChoices = buildMenuChoices(intelRuntime, {})
 local intelIds = idsOf(intelChoices)
@@ -165,30 +164,79 @@ record("intel-macos-step5-is-forced-out-of-active-completed-palette", forceNeutr
 record("intel-macos-steps-1-through-4-are-unaffected", not forceNeutral[1] and not forceNeutral[2] and not forceNeutral[3] and not forceNeutral[4], "")
 
 -- --- 4: Direct Drum Kit setup dispatch on Intel macOS: clean, no mutation ---
+--
+-- The guard message must reuse the existing drumsep_intel_mac_unsupported_title/
+-- _body keys (the same ones the main STEMwerk.lua GUI's showIntelMacDksPolicyBlock
+-- already uses for this identical policy) via setupText(), not a separate
+-- raw English string -- and EN/NL/DE must all resolve through languages.lua,
+-- not a hand-written duplicate. These are the authoritative strings as
+-- committed in scripts/reaper/i18n/languages.lua.
+local EXPECTED_TITLE = {
+    en = "Drum Kit Split unavailable on Intel Mac",
+    nl = "Drum Kit Split niet beschikbaar op Intel Mac",
+    de = "Drum Kit Split auf Intel Mac nicht verfügbar",
+}
+local EXPECTED_BODY = {
+    en = "Drum Kit Split is not enabled on Intel Mac in this release. Normal CPU stem separation is available. For Drum Kit Split, use Apple Silicon or a supported GPU/accelerated platform.",
+    nl = "Drum Kit Split is in deze release niet ingeschakeld op Intel Mac. Normale CPU-stems zijn beschikbaar. Gebruik voor Drum Kit Split Apple Silicon of een ondersteund GPU/versneld platform.",
+    de = "Drum Kit Split ist in dieser Version auf Intel Macs nicht aktiviert. Normale CPU-Stems sind verfügbar. Verwende für Drum Kit Split Apple Silicon oder eine unterstützte GPU-/beschleunigte Plattform.",
+}
+-- The previous (pre-correction) raw custom English body this slice replaces.
+local OLD_RAW_CUSTOM_BODY = "Drum Kit Split is not available on Intel Mac in this release."
 
-local dispatchRuntime = mkFixtureRuntime("intel-dispatch")
-startLinuxSetup(dispatchRuntime, "/does/not/matter.py", "drumsep-runtime")
-local bootstrapEnvPath = dispatchRuntime.runtimeState .. SEP .. "bootstrap.env"
-local drumsepEnvPath = dispatchRuntime.runtimeState .. SEP .. "drumsep_runtime.env"
 local function fileExistsPlain(path)
     local f = io.open(path, "r")
     if f then f:close(); return true end
     return false
 end
-record("intel-macos-direct-dispatch-writes-no-state-file", not fileExistsPlain(bootstrapEnvPath) and not fileExistsPlain(drumsepEnvPath), "")
-record(
-    "intel-macos-direct-dispatch-shows-a-message",
-    #messageBoxCalls == intelLoadBaseline + 1,
-    "messageBoxCalls=" .. #messageBoxCalls .. " baseline=" .. intelLoadBaseline
-)
-if #messageBoxCalls == intelLoadBaseline + 1 then
+
+local function testDispatchBlockedInLanguage(langCode)
+    setLanguage(langCode)
+    local runtime = mkFixtureRuntime("intel-dispatch-" .. langCode)
+    local before = #messageBoxCalls
+    startLinuxSetup(runtime, "/does/not/matter.py", "drumsep-runtime")
     record(
-        "intel-macos-direct-dispatch-message-says-unsupported-not-an-error",
-        tostring(messageBoxCalls[#messageBoxCalls].text):find("not available", 1, true) ~= nil,
-        tostring(messageBoxCalls[#messageBoxCalls].text)
+        "intel-macos-direct-dispatch-writes-no-state-file-" .. langCode,
+        not fileExistsPlain(runtime.runtimeState .. SEP .. "bootstrap.env")
+            and not fileExistsPlain(runtime.runtimeState .. SEP .. "drumsep_runtime.env"),
+        ""
     )
+    record(
+        "intel-macos-direct-dispatch-shows-exactly-one-message-" .. langCode,
+        #messageBoxCalls == before + 1,
+        "messageBoxCalls=" .. #messageBoxCalls .. " before=" .. before
+    )
+    if #messageBoxCalls == before + 1 then
+        local call = messageBoxCalls[#messageBoxCalls]
+        record(
+            "intel-macos-dispatch-title-is-in-the-title-slot-" .. langCode,
+            call.title == EXPECTED_TITLE[langCode],
+            "title=" .. tostring(call.title)
+        )
+        record(
+            "intel-macos-dispatch-body-is-in-the-text-slot-" .. langCode,
+            call.text == EXPECTED_BODY[langCode],
+            "text=" .. tostring(call.text)
+        )
+        record(
+            "intel-macos-dispatch-body-is-not-the-old-raw-custom-english-text-" .. langCode,
+            not tostring(call.text):find(OLD_RAW_CUSTOM_BODY, 1, true),
+            tostring(call.text)
+        )
+    end
 end
 
+loadTargetWithPlatform("OSX64", "x86_64")
+testDispatchBlockedInLanguage("en")
+testDispatchBlockedInLanguage("nl")
+testDispatchBlockedInLanguage("de")
+
+-- drumsep-rocm-runtime dispatch is also blocked (English, the default).
+-- SETTINGS is a plain global that survives across dofile() reloads within
+-- this one process (production uses `SETTINGS = SETTINGS or {...}`), so the
+-- "de" selected by the last language scenario above would otherwise leak in.
+loadTargetWithPlatform("OSX64", "x86_64")
+setLanguage("en")
 local dispatchRuntime2 = mkFixtureRuntime("intel-dispatch-rocm")
 local beforeRocmDispatch = #messageBoxCalls
 startLinuxSetup(dispatchRuntime2, "/does/not/matter.py", "drumsep-rocm-runtime")
@@ -199,6 +247,14 @@ record(
         and #messageBoxCalls == beforeRocmDispatch + 1,
     ""
 )
+if #messageBoxCalls == beforeRocmDispatch + 1 then
+    record(
+        "intel-macos-rocm-dispatch-also-uses-the-localized-keys",
+        messageBoxCalls[#messageBoxCalls].title == EXPECTED_TITLE.en
+            and messageBoxCalls[#messageBoxCalls].text == EXPECTED_BODY.en,
+        ""
+    )
+end
 
 -- --- 5: Apple Silicon macOS: Drum Kit actions remain available -----------
 

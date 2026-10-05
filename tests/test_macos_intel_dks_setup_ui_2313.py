@@ -24,6 +24,14 @@ surfaces above. Check-only/Repair diagnostic reporting already correctly said
 "unsupported on Intel macOS" via resolveDrumsepPolicyState/DKS_SUPPORTED (now
 consolidated to call the same new helper) and is unchanged by this slice.
 
+Follow-up i18n correction: the direct-dispatch guard's message originally used
+a raw, hand-written English string instead of the existing
+drumsep_intel_mac_unsupported_title/_body keys the main STEMwerk.lua GUI's
+showIntelMacDksPolicyBlock() already uses for this identical policy. It now
+calls setupText(key, fallback) -- the same STEMwerk_I18N.lua/languages.lua
+dictionary -- so EN/NL/DE all resolve through the existing translations
+instead of a Setup-only duplicate.
+
 Real production logic execution: tests/support/run_macos_intel_dks_setup_ui_headless.lua
 dofile()s the actual STEMwerk_Setup_Internal.lua and exercises the real
 choices-list/legend-model/dispatch functions -- not a reimplementation, not a
@@ -66,11 +74,25 @@ def test_intel_macos_drum_kit_setup_ui_headless() -> None:
         "PASS intel-macos-step5-color-is-neutral-grey-not-the-warning-amber",
         "PASS intel-macos-step5-is-forced-out-of-active-completed-palette",
         "PASS intel-macos-steps-1-through-4-are-unaffected",
-        # 4) Direct Drum Kit setup dispatch on Intel macOS: clean, no mutation.
-        "PASS intel-macos-direct-dispatch-writes-no-state-file",
-        "PASS intel-macos-direct-dispatch-shows-a-message",
-        "PASS intel-macos-direct-dispatch-message-says-unsupported-not-an-error",
+        # 4) Direct Drum Kit setup dispatch on Intel macOS: clean, no mutation,
+        #    and the message reuses the existing localized keys in EN/NL/DE.
+        "PASS intel-macos-direct-dispatch-writes-no-state-file-en",
+        "PASS intel-macos-direct-dispatch-shows-exactly-one-message-en",
+        "PASS intel-macos-dispatch-title-is-in-the-title-slot-en",
+        "PASS intel-macos-dispatch-body-is-in-the-text-slot-en",
+        "PASS intel-macos-dispatch-body-is-not-the-old-raw-custom-english-text-en",
+        "PASS intel-macos-direct-dispatch-writes-no-state-file-nl",
+        "PASS intel-macos-direct-dispatch-shows-exactly-one-message-nl",
+        "PASS intel-macos-dispatch-title-is-in-the-title-slot-nl",
+        "PASS intel-macos-dispatch-body-is-in-the-text-slot-nl",
+        "PASS intel-macos-dispatch-body-is-not-the-old-raw-custom-english-text-nl",
+        "PASS intel-macos-direct-dispatch-writes-no-state-file-de",
+        "PASS intel-macos-direct-dispatch-shows-exactly-one-message-de",
+        "PASS intel-macos-dispatch-title-is-in-the-title-slot-de",
+        "PASS intel-macos-dispatch-body-is-in-the-text-slot-de",
+        "PASS intel-macos-dispatch-body-is-not-the-old-raw-custom-english-text-de",
         "PASS intel-macos-direct-dispatch-also-blocks-drumsep-rocm-runtime",
+        "PASS intel-macos-rocm-dispatch-also-uses-the-localized-keys",
         # 5) Apple Silicon macOS: Drum Kit actions remain available.
         "PASS apple-silicon-is-not-flagged-unsupported",
         "PASS apple-silicon-setup-actions-still-offer-drumsep-runtime",
@@ -98,6 +120,22 @@ def test_isIntelMacDksUnsupported_is_the_single_definition_reused_everywhere() -
         "expected the shared helper to be called from resolveDrumsepPolicyState, "
         "buildSetupMenuChoices, drawLinuxStepLegend, and startLinuxSetup's guard"
     )
+
+
+def test_direct_dispatch_guard_reuses_the_existing_localized_keys() -> None:
+    """The i18n correction: no new keys, no raw custom English string, and
+    the same (title, text, type) msgBox argument order already proven from
+    every other call site in this file."""
+    text = SETUP_INTERNAL.read_text(encoding="utf-8")
+    guard = text[text.index('mode == "drumsep-runtime" or mode == "drumsep-rocm-runtime") and isIntelMacDksUnsupported()') :]
+    guard = guard[: guard.index("local isDrumsepRuntime")]
+    assert 'setupText("drumsep_intel_mac_unsupported_title", "Drum Kit Split unavailable on Intel Mac")' in guard
+    assert 'setupText(' in guard and "drumsep_intel_mac_unsupported_body" in guard
+    assert "msgBox(title, body, 0)" in guard
+    assert '"STEMwerk Setup"' not in guard, (
+        "msgBox must no longer be called with a hardcoded literal title in this guard"
+    )
+    assert guard.count("setupText(") >= 2, "expected at least one setupText() call for the title and one for the body"
 
 
 def test_check_only_diagnostic_wording_is_unchanged() -> None:

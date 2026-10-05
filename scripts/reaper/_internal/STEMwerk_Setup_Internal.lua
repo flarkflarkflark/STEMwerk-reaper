@@ -7123,12 +7123,17 @@ startLinuxSetup = function(runtime, separatorScript, mode)
     -- Fail/return cleanly before touching any state file, log, or process;
     -- never attempt to create or repair a DrumSep runtime here.
     if (mode == "drumsep-runtime" or mode == "drumsep-rocm-runtime") and isIntelMacDksUnsupported() then
-        msgBox(
-            "STEMwerk Setup",
-            "Drum Kit Split is not available on Intel Mac in this release.\n\n"
-                .. "Normal CPU stem separation, including the normal six-stem mode, remains available.",
-            0
+        -- Reuse the same localized keys the main STEMwerk.lua GUI already
+        -- uses for this identical policy (showIntelMacDksPolicyBlock) instead
+        -- of a separate English-only message: setupText() resolves through
+        -- the same STEMwerk_I18N.lua/languages.lua dictionary, so EN/NL/DE
+        -- all come from the existing translations, not a new Setup-only copy.
+        local title = setupText("drumsep_intel_mac_unsupported_title", "Drum Kit Split unavailable on Intel Mac")
+        local body = setupText(
+            "drumsep_intel_mac_unsupported_body",
+            "Drum Kit Split is not available on Intel Mac in this release. Normal CPU stem separation, including the normal six-stem mode, remains available."
         )
+        msgBox(title, body, 0)
         return
     end
     local isDrumsepRuntime = mode == "drumsep-runtime"
