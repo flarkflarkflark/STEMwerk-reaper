@@ -2032,6 +2032,17 @@ local function buildVerifyOnlyState(runtime, state, capState, readyState)
     return out, readyHealthy, staleFailedVerification
 end
 
+-- Hardware-level fact, independent of any runtime/profile/backend state:
+-- Intel macOS never supports Drum Kit Split. Mirrors intelMacDksPolicyBlocked()
+-- in the main STEMwerk.lua processing GUI, which already correctly hides
+-- Direct Kit/Kit Split controls there -- Setup runs as its own separate
+-- REAPER script/process and cannot call that function directly, so this is
+-- the one Setup-side definition every Setup UI surface below reuses, rather
+-- than each re-deriving (or forgetting to derive) the same OS/MAC_ARCH fact.
+function isIntelMacDksUnsupported()
+    return OS == "macOS" and MAC_ARCH == "x86_64"
+end
+
 function resolveDrumsepPolicyState(readyState, profile, backend)
     readyState = readyState or {}
     local drumsepStatus = trim(readyState.DRUMSEP_STATUS or "")
@@ -2042,8 +2053,7 @@ function resolveDrumsepPolicyState(readyState, profile, backend)
     local modelStatus = trim(readyState.DRUMSEP_READY_MODEL_STATUS or "")
     local mainRuntimeStatus = trim(readyState.MAIN_RUNTIME_STATUS or "")
 
-    if drumsepStatus == "" and OS == "macOS"
-        and MAC_ARCH == "x86_64"
+    if drumsepStatus == "" and isIntelMacDksUnsupported()
         and profile == "mac-cpu"
         and backend == "cpu"
         and (readyDetail == "unsupported_mac_intel" or runtimeStatus == "skipped" or modelStatus == "skipped")
@@ -5339,7 +5349,18 @@ function refreshSetupMenuChoiceLabels(menu)
     end
 end
 
-local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
+-- Global (not local) and pure/side-effect-free so the exact step labels,
+-- colors, and which steps may ever render as active/completed are
+-- independently, headlessly testable -- same rationale as
+-- buildSetupMenuChoices above. The real bootstrap script's step 5 ("Preparing
+-- Drum Kit runtime") actually re-verifies the shared main runtime on every
+-- platform, not a separate DrumSep install, but still presents it as a
+-- Drum-Kit-branded phase; on Intel macOS, where Drum Kit Split is
+-- unsupported, that reads as an active installable/repairable DKS phase, so
+-- it is relabeled neutral and forced out of the active/completed palette
+-- regardless of the real STEP_INDEX reported by bootstrap.
+function linuxStepLegendModel(intelMacUnsupported)
+    intelMacUnsupported = intelMacUnsupported and true or false
     local labels = {
         "1. Runtime",
         "2. Python + venv",
@@ -5354,6 +5375,17 @@ local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
         { 100, 255, 100 },
         { 255, 196, 80 },
     }
+    local forceNeutral = { false, false, false, false, false }
+    if intelMacUnsupported then
+        labels[5] = "5. Drum Kit runtime - Unsupported on Intel Mac"
+        colors[5] = { 130, 130, 136 }
+        forceNeutral[5] = true
+    end
+    return labels, colors, forceNeutral
+end
+
+local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
+    local labels, colors, forceNeutral = linuxStepLegendModel(isIntelMacDksUnsupported())
     -- Step 1 ("Runtime") is the only step with a resolved pass/fail/not_proven
     -- state once a Check-only final result exists (deriveLinuxFinalPresentation).
     -- Unlike steps 2-5 (pure setup progress), it must never render the fixed
@@ -5377,8 +5409,8 @@ local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
     for i = 1, total do
         local colX = x + ((i - 1) * (colW + gap))
         local c = colors[i]
-        local isCompleted = done or i < currentStep
-        local isActive = (not done) and i == currentStep
+        local isCompleted = (not forceNeutral[i]) and (done or i < currentStep)
+        local isActive = (not forceNeutral[i]) and (not done) and i == currentStep
         if isCompleted or isActive then
             gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 1)
             gfx.setfont(1, "Arial Bold", linuxFontSize(13))
@@ -7085,6 +7117,20 @@ startLinuxSetup = function(runtime, separatorScript, mode)
     if mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime" and mode ~= "ready-to-go-verify" then
         mode = "repair"
     end
+    -- Defense in depth: Drum Kit Split is unsupported on Intel macOS even if
+    -- this mode is somehow dispatched directly (bypassing the Setup action
+    -- screen, which already omits the choice -- see buildSetupMenuChoices).
+    -- Fail/return cleanly before touching any state file, log, or process;
+    -- never attempt to create or repair a DrumSep runtime here.
+    if (mode == "drumsep-runtime" or mode == "drumsep-rocm-runtime") and isIntelMacDksUnsupported() then
+        msgBox(
+            "STEMwerk Setup",
+            "Drum Kit Split is not available on Intel Mac in this release.\n\n"
+                .. "Normal CPU stem separation, including the normal six-stem mode, remains available.",
+            0
+        )
+        return
+    end
     local isDrumsepRuntime = mode == "drumsep-runtime"
     local isDrumsepRocmRuntime = mode == "drumsep-rocm-runtime"
     local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or "bootstrap.env")
@@ -8228,7 +8274,12 @@ function buildSetupMenuChoices(runtime, state)
         if drumsepRuntimeLabelCapability == "rocm" then
             drumsepRuntimeLabelCapability = "cpu"
         end
-        choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 }, linuxGpuCapability = drumsepRuntimeLabelCapability }
+        -- Drum Kit Split is unsupported on Intel macOS (Apple Silicon macOS
+        -- and all Linux architectures are unaffected): do not offer an
+        -- install/repair action for a runtime that can never be used here.
+        if not isIntelMacDksUnsupported() then
+            choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 }, linuxGpuCapability = drumsepRuntimeLabelCapability }
+        end
         if OS == "Linux" and machineCapability == "rocm" then
             choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
         end
