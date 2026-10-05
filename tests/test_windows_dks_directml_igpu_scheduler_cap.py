@@ -389,9 +389,15 @@ def test_call_site_classifies_the_run_device_and_logs_it():
     text = STEMWERK_LUA.read_text(encoding="utf-8")
     call = text[text.index("local directmlSchedulerAdapterId, directmlSchedulerAdapterName, directmlSchedulerAdapterClass") :]
     call = call[: call.index("longWorkload = _sep.schedulerHasLongWorkload")]
-    assert 'if schedulerBackend == "directml" then' in call
+    assert 'if schedulerBackend == "directml"' in call
+    # Normal Stems Auto is classified generic "gpu" (classifySchedulerBackend
+    # cannot see which concrete device Auto will resolve to), so the adapter
+    # must also be resolved for route == "normal" + backend == "gpu", or Auto
+    # never learns whether it landed on a discrete or integrated adapter.
+    assert 'or (schedulerRoute == "normal" and schedulerBackend == "gpu")' in call
     assert "_sep.resolveDirectmlSchedulerAdapter(effectiveRunDevice(), RUNTIME_DEVICES or DEVICES)" in call
     assert "directmlAdapterClass = directmlSchedulerAdapterClass," in call
+    assert "directmlSchedulerAdapterId = directmlSchedulerAdapterId," in call
     for key in (
         "scheduler_policy_directml_adapter=",
         "scheduler_policy_directml_adapter_name=",

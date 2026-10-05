@@ -197,6 +197,86 @@ def test_explicit_discrete_directml_is_not_forced_sequential_solely_for_being_ex
     assert cap != "1"
 
 
+# --- Auto must learn the resolved adapter's identity too ---------------------
+#
+# classifySchedulerBackend has no way to know which backend Auto will resolve
+# to -- it only ever sees the literal requested device string ("auto") -- so
+# Auto is always classified generic "gpu". Without the adapter resolution
+# also running for Auto, the policy below has no way to distinguish an
+# Auto-resolved integrated DirectML adapter (e.g. 780M on an integrated-only
+# Windows machine) from a discrete one or a CUDA/ROCm GPU, and applied the
+# permissive generic GPU cap to all three alike. These tests simulate the
+# real call site end to end (classifySchedulerBackend -> conditional
+# resolveDirectmlSchedulerAdapter -> resolveSchedulerConcurrencyPolicy) using
+# the real, unmodified production functions.
+
+
+def _normal_auto_resolved(tmp_path: Path, runtime_devices: list[dict], job_count: int = 2) -> tuple[str, str, str, str]:
+    devices_lua = "{" + ", ".join(
+        '{ id = "%s", name = "%s", fullName = "%s" }' % (d["id"], d["name"], d["name"]) for d in runtime_devices
+    ) + "}"
+    out = _run_lua(
+        tmp_path,
+        "local requestedDevice = 'auto'\n"
+        f"local runtimeDevices = {devices_lua}\n"
+        "local schedulerBackend = _sep.classifySchedulerBackend(requestedDevice, true)\n"
+        "local adapterId, adapterName, adapterClass = '', '', ''\n"
+        "if schedulerBackend == 'directml' or schedulerBackend == 'gpu' then\n"
+        "    adapterId, adapterName = _sep.resolveDirectmlSchedulerAdapter(requestedDevice, runtimeDevices)\n"
+        "    adapterClass = _sep.classifyDirectmlSchedulerAdapter(adapterName)\n"
+        "end\n"
+        "local p = _sep.resolveSchedulerConcurrencyPolicy({\n"
+        "    route = 'normal', backend = schedulerBackend, directmlAdapterClass = adapterClass,\n"
+        "    directmlSchedulerAdapterId = adapterId, requestedParallel = true,\n"
+        f"    jobCount = {job_count}, cpuCount = 16, ramGiB = 64,\n"
+        "})\n"
+        "io.write('cap=', tostring(p.cap), '\\n', 'sequential=', tostring(p.sequentialMode), '\\n',"
+        " 'reason=', tostring(p.reason), '\\n', 'backend=', tostring(p.backend), '\\n')",
+    )
+    return out["cap"], out["sequential"], out["reason"], out["backend"]
+
+
+_DISCRETE_AND_INTEGRATED = [
+    {"id": "directml:0", "name": "AMD Radeon RX 9070"},
+    {"id": "directml:1", "name": "AMD Radeon(TM) 780M Graphics"},
+]
+_INTEGRATED_ONLY = [{"id": "directml:0", "name": "AMD Radeon(TM) 780M Graphics"}]
+
+
+@pytest.mark.parametrize("job_count, cap", [(2, "2"), (4, "4"), (6, "4")])
+def test_auto_resolved_discrete_directml_matches_explicit_discrete_policy(tmp_path, job_count, cap):
+    """Auto resolving to index 0 on a machine with a discrete RX 9070 present
+    must land on the same cap/sequential policy as explicitly selecting it."""
+    auto_cap, auto_seq, _auto_reason, _auto_backend = _normal_auto_resolved(
+        tmp_path, _DISCRETE_AND_INTEGRATED, job_count
+    )
+    explicit_cap, explicit_seq, _reason, _backend = _normal_explicit_directml(tmp_path, "discrete", job_count)
+    assert (auto_cap, auto_seq) == (cap, "false")
+    assert (auto_cap, auto_seq) == (explicit_cap, explicit_seq)
+
+
+def test_auto_resolved_integrated_directml_matches_explicit_integrated_policy(tmp_path):
+    """Auto's only choice on an integrated-only Windows machine (no discrete
+    GPU at all) is the 780M-class adapter at directml:0. It must land on the
+    same conservative sequential/cap1 policy as explicitly selecting it --
+    before this fix it silently kept the permissive generic GPU cap instead."""
+    auto_cap, auto_seq, auto_reason, _auto_backend = _normal_auto_resolved(tmp_path, _INTEGRATED_ONLY, job_count=2)
+    explicit_cap, explicit_seq, explicit_reason, _backend = _normal_explicit_directml(tmp_path, "integrated", job_count=2)
+    assert (auto_cap, auto_seq, auto_reason) == ("1", "true", "directml_multi_track")
+    assert (auto_cap, auto_seq, auto_reason) == (explicit_cap, explicit_seq, explicit_reason)
+
+
+def test_auto_on_a_pure_cuda_machine_is_unaffected(tmp_path):
+    """A machine with no registered DirectML adapter at all (pure CUDA) must
+    stay on the generic GPU parallel cap -- the widened adapter-resolution
+    call harmlessly resolves to an empty adapter id and never engages the new
+    DirectML-specific branch."""
+    cap, sequential, reason, backend = _normal_auto_resolved(
+        tmp_path, [{"id": "cuda:0", "name": "NVIDIA GeForce RTX 4070"}], job_count=2
+    )
+    assert (cap, sequential, reason, backend) == ("2", "false", "scheduler_normal_gpu_cap4", "gpu")
+
+
 # --- 5: integrated (780M) intentionally stays conservative --------------------
 
 

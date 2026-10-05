@@ -19359,7 +19359,21 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     -- is managed separately in audio_separator_process.py.
     if backend == "gpu" then
         policy.sequentialMode = false
-        if route == "dks_extract" and OS == "Windows" and tostring(opts.drumsepStage2SchedulerBackend or "") == "cuda" then
+        if route == "normal" and tostring(opts.directmlSchedulerAdapterId or "") ~= ""
+            and opts.directmlAdapterClass ~= "discrete"
+        then
+            -- Auto resolved onto a registered DirectML adapter that is not a
+            -- named discrete GPU (integrated, e.g. 780M, or an unrecognised
+            -- name). The generic cross-backend GPU parallel cap assumes
+            -- CUDA/ROCm safety margins that do not hold for DirectML; apply
+            -- the same stability policy an explicit selection of this exact
+            -- resolved adapter already gets just above, so the policy is
+            -- keyed on the effective device, not on whether it was chosen by
+            -- Auto or by name.
+            policy.sequentialMode = true
+            policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL
+            policy.reason = "directml_multi_track"
+        elseif route == "dks_extract" and OS == "Windows" and tostring(opts.drumsepStage2SchedulerBackend or "") == "cuda" then
             policy.cap = math.min(jobCount, 2)
             policy.reason = "scheduler_dks_extract_stage1_windows_cuda_cap2"
         else
@@ -20354,7 +20368,19 @@ _sep.runSingleTrackSeparation = function(trackList)
         ))
     end
     local directmlSchedulerAdapterId, directmlSchedulerAdapterName, directmlSchedulerAdapterClass = "", "", ""
-    if schedulerBackend == "directml" then
+    if schedulerBackend == "directml"
+        -- Auto is classified generic "gpu" (classifySchedulerBackend has no
+        -- way to know which backend Auto will resolve to), so without this,
+        -- Normal Stems Auto never learns the resolved adapter's identity at
+        -- all and the policy below cannot tell an Auto-resolved integrated
+        -- DirectML adapter from an Auto-resolved discrete one or a CUDA/ROCm
+        -- GPU. resolveDirectmlSchedulerAdapter harmlessly returns "" when
+        -- this system has no registered DirectML adapter (a CUDA/ROCm Auto
+        -- run), so widening this is safe. Scoped to route == "normal" only:
+        -- DKS/Kit Split Auto scheduling is unrelated to this slice and must
+        -- stay byte-for-byte unchanged.
+        or (schedulerRoute == "normal" and schedulerBackend == "gpu")
+    then
         directmlSchedulerAdapterId, directmlSchedulerAdapterName =
             _sep.resolveDirectmlSchedulerAdapter(effectiveRunDevice(), RUNTIME_DEVICES or DEVICES)
         directmlSchedulerAdapterClass = _sep.classifyDirectmlSchedulerAdapter(directmlSchedulerAdapterName)
@@ -20364,6 +20390,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         stage = schedulerStage,
         backend = schedulerBackend,
         directmlAdapterClass = directmlSchedulerAdapterClass,
+        directmlSchedulerAdapterId = directmlSchedulerAdapterId,
         drumsepSchedulerBackend = drumsepSchedulerBackend,
         drumsepStage2SchedulerBackend = drumsepStage2SchedulerBackend,
         requestedDevice = effectiveRunDevice(),
