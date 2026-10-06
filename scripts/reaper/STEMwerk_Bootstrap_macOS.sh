@@ -186,6 +186,23 @@ bundled_stemwerk_core_wheel() {
   return 1
 }
 
+managed_stemwerk_core_wheel() {
+  [ -n "${MANAGED_WHEELS_DIR:-}" ] && [ -d "${MANAGED_WHEELS_DIR}" ] || return 1
+  _managed_core_wheel=""
+  _managed_core_wheel_count=0
+  for _wheel in "${MANAGED_WHEELS_DIR}"/stemwerk_core-*.whl; do
+    [ -f "${_wheel}" ] || continue
+    _managed_core_wheel="${_wheel}"
+    _managed_core_wheel_count=$((_managed_core_wheel_count + 1))
+  done
+  if [ "${_managed_core_wheel_count}" -gt 1 ]; then
+    log "Managed stemwerk-core wheel selection is ambiguous in ${MANAGED_WHEELS_DIR}"
+    return 2
+  fi
+  [ "${_managed_core_wheel_count}" -eq 1 ] || return 1
+  printf "%s\n" "${_managed_core_wheel}"
+}
+
 bundled_models_dir() {
   [ -d "${BUNDLED_PAYLOAD_DIR}/models" ] || return 1
   printf "%s\n" "${BUNDLED_PAYLOAD_DIR}/models"
@@ -1346,11 +1363,38 @@ resolve_core_target() {
     log "Required: pyproject.toml, src/stemwerk_core/__init__.py, src/stemwerk_core/separator.py"
   fi
 
-  CORE_BUNDLE_DIR="${STEMWERK_CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"
+  if [ -n "${STEMWERK_CORE_BUNDLE_DIR:-}" ]; then
+    CORE_BUNDLE_DIR="${STEMWERK_CORE_BUNDLE_DIR}"
+    if [ -d "${CORE_BUNDLE_DIR}" ]; then
+      if is_core_source_bundle "${CORE_BUNDLE_DIR}"; then
+        CORE_TARGET="${CORE_BUNDLE_DIR}"
+        CORE_TARGET_DESC="STEMWERK_CORE_BUNDLE_DIR source"
+        CORE_SUPPORTS_EXTRAS=1
+        return 0
+      fi
+      log "Configured stemwerk-core source is incomplete: ${CORE_BUNDLE_DIR}"
+      log "Required: pyproject.toml, src/stemwerk_core/__init__.py, src/stemwerk_core/separator.py"
+    fi
+    return 1
+  fi
+
+  _managed_core_wheel=""
+  _managed_core_wheel_rc=0
+  _managed_core_wheel="$(managed_stemwerk_core_wheel)" || _managed_core_wheel_rc=$?
+  if [ "${_managed_core_wheel_rc}" -eq 2 ]; then
+    return 1
+  fi
+  if [ -n "${_managed_core_wheel}" ]; then
+    CORE_TARGET="${_managed_core_wheel}"
+    CORE_TARGET_DESC="managed wheel"
+    return 0
+  fi
+
+  CORE_BUNDLE_DIR="${BUNDLED_CORE_DIR}"
   if [ -d "${CORE_BUNDLE_DIR}" ]; then
     if is_core_source_bundle "${CORE_BUNDLE_DIR}"; then
       CORE_TARGET="${CORE_BUNDLE_DIR}"
-      CORE_TARGET_DESC="bundled source"
+      CORE_TARGET_DESC="vendored source"
       CORE_SUPPORTS_EXTRAS=1
       return 0
     fi
