@@ -651,15 +651,16 @@ def test_linux_setup_reports_five_top_level_steps_when_ready_runtime_runs():
     assert '"5. Drum Kit runtime"' in setup_internal
 
 
-def test_macos_setup_reports_five_top_level_steps_for_reapack_bootstrap():
+def test_macos_setup_reports_four_intel_steps_and_five_apple_silicon_steps():
     bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
-    assert 'STEP_TOTAL="5"' in bootstrap
+    assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then\n  STEP_TOTAL="4"\nelse\n  STEP_TOTAL="5"\nfi' in bootstrap
     assert 'set_progress "1" "${STEP_TOTAL}" "Preparing runtime"' in bootstrap
     assert 'set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"' in bootstrap
     assert 'set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"' in bootstrap
     assert 'set_progress "4" "${STEP_TOTAL}" "Checking FFmpeg"' in bootstrap
     assert 'set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"' in bootstrap
+    assert 'if [ "${MAC_ARCH}" != "x86_64" ]; then\n  set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"\nfi' in bootstrap
     assert 'set_progress "4" "${STEP_TOTAL}" "Finalizing setup"' not in bootstrap
 
 
@@ -7477,7 +7478,7 @@ def test_darwin_wheelhouse_sha256_identity():
         "scripts/reaper/vendor/wheels/darwin-arm64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_arm64.whl": "bf65321f2360e0be40bc6441e299531aec547eb0024382182c179206e37d29db",
         "scripts/reaper/vendor/wheels/darwin-arm64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_arm64.whl": "adb4c3e63fae815e6856e6a75d24d09e47f614d478316dc4cad479301d685531",
         "scripts/reaper/vendor/wheels/darwin-arm64-cp312/stemwerk_core-0.1.1-py3-none-any.whl": "e4555cd9179a5927c0121b140e3f98c36bfd6d4a5bb7b7d25a1786be7250a981",
-        "scripts/reaper/vendor/wheels/darwin-x86_64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_x86_64.whl": "d06a8ccdf3048d76442a680dd89fd0932837cd56b62a9d0564f7584bf57a9a68",
+        "scripts/reaper/vendor/wheels/darwin-x86_64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_x86_64.whl": "51a41e40354aa306a810fb8120ca2483acf01fd9b407d01a0a52e9cba749b257",
         "scripts/reaper/vendor/wheels/darwin-x86_64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_x86_64.whl": "3d5bcd3b72cf45b9d447cd8b5903b3b62b32fe9405384d9388eecb197a4a78f6",
         "scripts/reaper/vendor/wheels/darwin-x86_64-cp312/stemwerk_core-0.1.1-py3-none-any.whl": "e4555cd9179a5927c0121b140e3f98c36bfd6d4a5bb7b7d25a1786be7250a981",
     }

@@ -36,7 +36,7 @@ SAMPLERATE_WHEEL_URL="https://files.pythonhosted.org/packages/0c/3c/4c1aa376332d
 SAMPLERATE_WHEEL_SHA256="f55e5c9d0a8ba3c82a53b7d9c34a2d145439c61166a7f310efaec88f2781b8f8"
 
 # Verwachte output-hashes (PROVENANCE.md is leidend; dit is de ingebouwde eindcontrole).
-EXPECT_DIFFQ_SHA256="d06a8ccdf3048d76442a680dd89fd0932837cd56b62a9d0564f7584bf57a9a68"
+EXPECT_DIFFQ_SHA256="51a41e40354aa306a810fb8120ca2483acf01fd9b407d01a0a52e9cba749b257"
 EXPECT_SAMPLERATE_SHA256="3d5bcd3b72cf45b9d447cd8b5903b3b62b32fe9405384d9388eecb197a4a78f6"
 
 # Gepinde build-toolchain (zelfde lijn als de 2.3.0.6-payload: cython 3.2.8, setuptools 83).
@@ -128,7 +128,7 @@ fetch "${DIFFQ_SDIST_URL}" "${WORK}/diffq-${DIFFQ_VERSION}.tar.gz" "${DIFFQ_SDIS
 mkdir -p "${WORK}/src" && tar -xzf "${WORK}/diffq-${DIFFQ_VERSION}.tar.gz" -C "${WORK}/src"
 ( cd "${WORK}" && \
   TMPDIR="${WORK}" ARCHFLAGS="-arch x86_64" MACOSX_DEPLOYMENT_TARGET=11.0 \
-  LDFLAGS="-Wl,-no_uuid -Wl,-S" \
+  LDFLAGS="-Wl,-S" \
   "${BENV}" -m pip wheel --no-deps --no-build-isolation \
     -w "${WORK}/built" "${WORK}/src/diffq-${DIFFQ_VERSION}" )
 
@@ -142,6 +142,10 @@ retag_wheel "${BUILT_DIFFQ}" \
 ( cd "${WORK}" && unzip -o -q "${WORK}"/final/diffq-*.whl -d inspect )
 SO="$(find "${WORK}/inspect" -name '*.so' | head -1)"
 file "${SO}" | grep -q "x86_64" || { echo "FOUT: diffq .so is geen x86_64" >&2; exit 1; }
+otool -l "${SO}" | grep -q "LC_UUID" || {
+  echo "FOUT: diffq .so mist verplichte LC_UUID load command" >&2
+  exit 1
+}
 
 # --- 2) samplerate: PyPI-wheel retaggen naar macosx_11_0_x86_64 ----------------
 fetch "${SAMPLERATE_WHEEL_URL}" "${WORK}/samplerate-${SAMPLERATE_VERSION}-py2.py3-none-any.whl" "${SAMPLERATE_WHEEL_SHA256}"

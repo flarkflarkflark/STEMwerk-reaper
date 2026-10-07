@@ -5136,11 +5136,15 @@ drawLinuxScrollbar = function(rect, totalLines, visibleLines)
     gfx.rect(x + 2, thumbY + 2, w - 4, math.max(8, thumbH - 4), 1)
 end
 
+local function defaultSetupStepTotal()
+    return isIntelMacDksUnsupported() and 4 or 5
+end
+
 local function linuxCurrentStep(state)
     local idx = tonumber(trim(state.STEP_INDEX or ""))
     local total = tonumber(trim(state.STEP_TOTAL or ""))
     if not total or total < 1 then
-        total = 5
+        total = defaultSetupStepTotal()
     end
     if idx and idx >= 1 and idx <= total then
         if LINUX_SETUP and LINUX_SETUP.lastStepIndex and idx < LINUX_SETUP.lastStepIndex then
@@ -5221,7 +5225,7 @@ local function linuxProgressPercent(state, logLines)
     local activeFill = linuxActiveStepFill(state, logLines or {})
     local total = tonumber(trim(state.STEP_TOTAL or ""))
     if not total or total < 1 then
-        total = 5
+        total = defaultSetupStepTotal()
     end
     local segment = 100 / total
     local completed = (idx - 1) * segment
@@ -5352,13 +5356,9 @@ end
 -- Global (not local) and pure/side-effect-free so the exact step labels,
 -- colors, and which steps may ever render as active/completed are
 -- independently, headlessly testable -- same rationale as
--- buildSetupMenuChoices above. The real bootstrap script's step 5 ("Preparing
--- Drum Kit runtime") actually re-verifies the shared main runtime on every
--- platform, not a separate DrumSep install, but still presents it as a
--- Drum-Kit-branded phase; on Intel macOS, where Drum Kit Split is
--- unsupported, that reads as an active installable/repairable DKS phase, so
--- it is relabeled neutral and forced out of the active/completed palette
--- regardless of the real STEP_INDEX reported by bootstrap.
+-- buildSetupMenuChoices above. Intel macOS has no Drum Kit runtime phase, so
+-- its legend has four rows. Apple Silicon and Linux retain the five-step DKS
+-- capable presentation.
 function linuxStepLegendModel(intelMacUnsupported)
     intelMacUnsupported = intelMacUnsupported and true or false
     local labels = {
@@ -5377,9 +5377,9 @@ function linuxStepLegendModel(intelMacUnsupported)
     }
     local forceNeutral = { false, false, false, false, false }
     if intelMacUnsupported then
-        labels[5] = "5. Drum Kit runtime - Unsupported on Intel Mac"
-        colors[5] = { 130, 130, 136 }
-        forceNeutral[5] = true
+        labels[5] = nil
+        colors[5] = nil
+        forceNeutral[5] = nil
     end
     return labels, colors, forceNeutral
 end
@@ -5398,7 +5398,7 @@ local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
     end
     local total = tonumber(trim(state.STEP_TOTAL or ""))
     if not total or total < 1 then
-        total = 5
+        total = defaultSetupStepTotal()
     end
     local currentStep = linuxCurrentStep(state)
     local done = trim(state.STATUS or "") == "ok"
@@ -5626,7 +5626,7 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     end
     if finalSuccess then
         finalState.STATUS = "ok"
-        finalState.STEP_INDEX = trim(finalState.STEP_TOTAL or "") ~= "" and tostring(finalState.STEP_TOTAL) or "5"
+        finalState.STEP_INDEX = trim(finalState.STEP_TOTAL or "") ~= "" and tostring(finalState.STEP_TOTAL) or tostring(defaultSetupStepTotal())
     end
 
     -- Runtime step segment must reflect the same runtimeKind used for the

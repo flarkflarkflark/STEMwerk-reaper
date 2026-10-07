@@ -10,10 +10,8 @@ main GUI) still:
   - offered an actionable "Drum Kit Split runtime" install/repair action and
     a "DrumKit CPU" Modes legend entry on Intel macOS (buildSetupMenuChoices
     gated only on OS ~= "Windows", with no Intel-macOS carve-out);
-  - presented step 5 of the progress/final legend as an active, warning-amber
-    "Drum Kit runtime" phase on Intel macOS, even though that step actually
-    re-verifies the shared main runtime on every platform, not a separate
-    DrumSep install;
+  - presented a fifth progress/final row for Drum Kit on Intel macOS even
+    though that platform has no DrumSep setup phase;
   - had no defense-in-depth guard if "drumsep-runtime"/"drumsep-rocm-runtime"
     setup dispatch was somehow invoked directly on Intel macOS.
 
@@ -68,11 +66,10 @@ def test_intel_macos_drum_kit_setup_ui_headless() -> None:
         "PASS intel-macos-setup-actions-keep-unrelated-mutating-actions",
         # 2) Intel macOS Modes legend: no actionable DrumKit CPU.
         "PASS intel-macos-modes-legend-has-no-drumkit-cpu-producing-choice",
-        # 3) Intel macOS Setup/Repair/Check presentation: no active phase.
-        "PASS intel-macos-step5-label-says-unsupported",
-        "PASS intel-macos-step5-label-still-mentions-drum-kit-for-context",
-        "PASS intel-macos-step5-color-is-neutral-grey-not-the-warning-amber",
-        "PASS intel-macos-step5-is-forced-out-of-active-completed-palette",
+        # 3) Intel macOS Setup/Repair/Check presentation: exactly four rows.
+        "PASS intel-macos-step-legend-has-exactly-four-rows",
+        "PASS intel-macos-step-legend-has-no-drum-kit-row",
+        "PASS intel-macos-step-legend-has-no-unsupported-row",
         "PASS intel-macos-steps-1-through-4-are-unaffected",
         # 4) Direct Drum Kit setup dispatch on Intel macOS: clean, no mutation,
         #    and the message reuses the existing localized keys in EN/NL/DE.

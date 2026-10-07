@@ -149,18 +149,20 @@ record(
     "intel choices=" .. table.concat(intelIds, ",")
 )
 
--- --- 3: Intel macOS progress/final presentation: step 5 is unsupported, never active/actionable ---
+-- --- 3: Intel macOS progress/final presentation: exactly four rows, no DKS row ---
 
 local labels, colors, forceNeutral = linuxStepLegendModel(true)
-record("intel-macos-step5-label-says-unsupported", tostring(labels[5]):find("Unsupported", 1, true) ~= nil, labels[5])
-record("intel-macos-step5-label-still-mentions-drum-kit-for-context", tostring(labels[5]):find("Drum Kit", 1, true) ~= nil, labels[5])
 record(
-    "intel-macos-step5-color-is-neutral-grey-not-the-warning-amber",
-    colors[5][1] < 180 and colors[5][2] < 180 and colors[5][3] < 180
-        and math.abs(colors[5][1] - colors[5][2]) <= 10 and math.abs(colors[5][2] - colors[5][3]) <= 10,
-    "color=" .. table.concat(colors[5], ",")
+    "intel-macos-step-legend-has-exactly-four-rows",
+    #labels == 4 and #colors == 4 and #forceNeutral == 4,
+    "counts=" .. tostring(#labels) .. "," .. tostring(#colors) .. "," .. tostring(#forceNeutral)
 )
-record("intel-macos-step5-is-forced-out-of-active-completed-palette", forceNeutral[5] == true, tostring(forceNeutral[5]))
+record("intel-macos-step-legend-has-no-drum-kit-row", labels[5] == nil, tostring(labels[5]))
+local intelHasUnsupportedRow = false
+for _, label in ipairs(labels) do
+    if tostring(label):find("Unsupported", 1, true) then intelHasUnsupportedRow = true end
+end
+record("intel-macos-step-legend-has-no-unsupported-row", not intelHasUnsupportedRow, "")
 record("intel-macos-steps-1-through-4-are-unaffected", not forceNeutral[1] and not forceNeutral[2] and not forceNeutral[3] and not forceNeutral[4], "")
 
 -- --- 4: Direct Drum Kit setup dispatch on Intel macOS: clean, no mutation ---
