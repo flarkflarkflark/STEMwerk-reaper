@@ -13,10 +13,11 @@
 --
 -- This dofile()s the real production script exactly like the other
 -- tests/support/run_*_headless.lua harnesses -- not a reimplementation.
--- Because `OS` is computed once per load from reaper.GetOS(), and MAC_ARCH is
--- a plain global the production code reads but never sets, each scenario
--- re-dofiles the target after changing both, so every assertion runs against
--- the real, freshly-loaded production code for that OS/arch.
+-- Because `OS` and MAC_ARCH are computed once per load, each scenario
+-- re-dofiles the target after changing the reported platform.  The primary
+-- Intel regression scenario deliberately does NOT inject MAC_ARCH: it stubs
+-- `uname -m` instead, so it exercises the same architecture-discovery route
+-- as a fresh real Setup process.
 
 local SEP = package.config:sub(1, 1)
 local IS_WINDOWS = SEP == "\\"
@@ -79,6 +80,70 @@ local function loadTargetWithPlatform(reportedOS, macArch)
     assertf(type(refreshSetupMenuChoiceLabels) == "function", "refreshSetupMenuChoiceLabels was not exposed as a global function")
     assertf(type(linuxStepLegendModel) == "function", "linuxStepLegendModel was not exposed as a global function")
     assertf(type(startLinuxSetup) == "function", "startLinuxSetup was not exposed as a global function")
+    assertf(type(startExistingRuntimeSetupMenu) == "function", "startExistingRuntimeSetupMenu was not exposed as a global function")
+end
+
+local function loadTargetWithDetectedMacArch(reportedOS, detectedArch)
+    local originalPopen = io.popen
+    io.popen = function(command, mode)
+        if command == "uname -m 2>/dev/null" then
+            return {
+                read = function(_self, _format) return detectedArch end,
+                close = function() return true end,
+            }
+        end
+        return originalPopen(command, mode)
+    end
+    local ok, err = pcall(loadTargetWithPlatform, reportedOS, nil)
+    io.popen = originalPopen
+    assertf(ok, "failed to load production architecture route for " .. tostring(detectedArch) .. ": " .. tostring(err))
+end
+
+local renderedText = {}
+local function installGfxCapture()
+    renderedText = {}
+    gfx = {
+        w = 1120,
+        h = 760,
+        x = 0,
+        y = 0,
+        texth = 14,
+        mouse_x = -100,
+        mouse_y = -100,
+        mouse_cap = 0,
+        mouse_wheel = 0,
+        init = function(_title, w, h)
+            gfx.w = w
+            gfx.h = h
+        end,
+        set = function() end,
+        rect = function() end,
+        setfont = function(_slot, _name, size)
+            gfx.texth = tonumber(size) or 14
+        end,
+        measurestr = function(text)
+            return #tostring(text or "") * 7
+        end,
+        drawstr = function(text)
+            renderedText[#renderedText + 1] = tostring(text or "")
+        end,
+        getchar = function() return 0 end,
+        update = function() end,
+        quit = function() end,
+    }
+end
+
+local function writeTextFile(path, content)
+    local f = assert(io.open(path, "w"))
+    f:write(content)
+    f:close()
+end
+
+local function renderedContains(needle)
+    for _, text in ipairs(renderedText) do
+        if text:find(needle, 1, true) then return true end
+    end
+    return false
 end
 
 local function idsOf(choices)
@@ -113,6 +178,52 @@ local results = {}
 local function record(name, ok, detail)
     results[#results + 1] = { name = name, ok = ok, detail = detail }
 end
+
+-- --- 0: Fresh production load + healthy existing runtime screen -----------
+
+loadTargetWithDetectedMacArch("OSX64", "x86_64")
+local freshIntelRuntime = mkFixtureRuntime("fresh-intel-healthy-existing")
+writeTextFile(
+    freshIntelRuntime.runtimeState .. SEP .. "bootstrap.env",
+    "STATUS=ok\nSTEMWERK_SETUP_VERSION=2.3.1.3\nPROFILE=mac-cpu\nBACKEND=cpu\n"
+)
+installGfxCapture()
+local freshIntelChoices = startExistingRuntimeSetupMenu(freshIntelRuntime, "/fixture/audio_separator_process.py")
+local freshIntelIds = idsOf(freshIntelChoices)
+existingRuntimeSetupMenuTick()
+local expectedFreshIntelIds = table.concat({
+    "verify", "support-bundle", "open-logs", "open-runtime", "repair",
+    "rebuild-venv", "delete-models", "delete-runtime", "cancel",
+}, ",")
+record(
+    "fresh-intel-production-load-detects-x86_64-without-global-injection",
+    MAC_ARCH == "x86_64",
+    "MAC_ARCH=" .. tostring(MAC_ARCH)
+)
+record(
+    "fresh-intel-healthy-existing-runtime-has-exact-action-grid",
+    table.concat(freshIntelIds, ",") == expectedFreshIntelIds,
+    "choices=" .. table.concat(freshIntelIds, ",")
+)
+record(
+    "fresh-intel-healthy-existing-runtime-renders-real-screen",
+    renderedContains("Existing runtime found. Choose what to do:") and renderedContains("Modes"),
+    table.concat(renderedText, " | ")
+)
+record(
+    "fresh-intel-healthy-existing-runtime-renders-no-dks-action-or-mode",
+    not renderedContains("Drum Kit Split runtime") and not renderedContains("DrumKit CPU"),
+    table.concat(renderedText, " | ")
+)
+record(
+    "fresh-intel-healthy-existing-runtime-keeps-normal-actions",
+    renderedContains("Check only") and renderedContains("Save Support Bundle")
+        and renderedContains("Open logs folder") and renderedContains("Open runtime folder")
+        and renderedContains("Repair") and renderedContains("Rebuild venv")
+        and renderedContains("Delete models") and renderedContains("Delete runtime")
+        and renderedContains("Cancel"),
+    table.concat(renderedText, " | ")
+)
 
 -- --- 1: Intel macOS Setup actions: no actionable "Drum Kit Split runtime" ---
 
@@ -260,7 +371,8 @@ end
 
 -- --- 5: Apple Silicon macOS: Drum Kit actions remain available -----------
 
-loadTargetWithPlatform("OSX64", "arm64")
+loadTargetWithDetectedMacArch("OSX64", "arm64")
+record("apple-silicon-production-load-detects-arm64", MAC_ARCH == "arm64", "MAC_ARCH=" .. tostring(MAC_ARCH))
 record("apple-silicon-is-not-flagged-unsupported", isIntelMacDksUnsupported() == false, "")
 local armRuntime = mkFixtureRuntime("arm64-choices")
 local armChoices = buildMenuChoices(armRuntime, {})

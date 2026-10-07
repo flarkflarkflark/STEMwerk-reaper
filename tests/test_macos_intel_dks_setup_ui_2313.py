@@ -61,6 +61,13 @@ def test_intel_macos_drum_kit_setup_ui_headless() -> None:
     )
     assert result.returncode == 0, f"headless Intel-macOS DKS Setup UI harness failed:\n{result.stdout}\n{result.stderr}"
     for marker in (
+        # 0) Fresh production entry: architecture is discovered by Setup
+        # itself, then the real healthy-existing-runtime screen is rendered.
+        "PASS fresh-intel-production-load-detects-x86_64-without-global-injection",
+        "PASS fresh-intel-healthy-existing-runtime-has-exact-action-grid",
+        "PASS fresh-intel-healthy-existing-runtime-renders-real-screen",
+        "PASS fresh-intel-healthy-existing-runtime-renders-no-dks-action-or-mode",
+        "PASS fresh-intel-healthy-existing-runtime-keeps-normal-actions",
         # 1) Intel macOS Setup actions: no actionable Drum Kit Split runtime.
         "PASS intel-macos-setup-actions-have-no-drumsep-runtime-choice",
         "PASS intel-macos-setup-actions-keep-unrelated-mutating-actions",
@@ -91,6 +98,7 @@ def test_intel_macos_drum_kit_setup_ui_headless() -> None:
         "PASS intel-macos-direct-dispatch-also-blocks-drumsep-rocm-runtime",
         "PASS intel-macos-rocm-dispatch-also-uses-the-localized-keys",
         # 5) Apple Silicon macOS: Drum Kit actions remain available.
+        "PASS apple-silicon-production-load-detects-arm64",
         "PASS apple-silicon-is-not-flagged-unsupported",
         "PASS apple-silicon-setup-actions-still-offer-drumsep-runtime",
         "PASS apple-silicon-step5-label-is-the-original-unchanged-label",

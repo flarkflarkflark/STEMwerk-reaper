@@ -110,6 +110,21 @@ local function getScriptDir()
 end
 
 local RAW_SCRIPT_DIR = getScriptDir()
+-- Setup runs in its own ReaScript process, so it cannot rely on STEMwerk.lua
+-- having populated an architecture global first.  Resolve the host fact via
+-- the existing shared system helper; isIntelMacDksUnsupported() remains the
+-- single product-policy predicate used by every Setup UI/dispatch surface.
+do
+    if OS == "macOS" and tostring(MAC_ARCH or "") == "" then
+        local systemOk, systemModule = pcall(dofile, RAW_SCRIPT_DIR .. "STEMwerk_System.lua")
+        if systemOk and type(systemModule) == "table" and type(systemModule.getArch) == "function" then
+            local archOk, detectedArch = pcall(systemModule.getArch)
+            if archOk then
+                MAC_ARCH = tostring(detectedArch or "")
+            end
+        end
+    end
+end
 local PATH_HELPER = nil
 local linuxEnvPrefix
 local appendLogLine
