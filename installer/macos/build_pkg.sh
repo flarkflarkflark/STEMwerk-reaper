@@ -10,6 +10,7 @@ PAYLOAD_AUDITOR="$ROOT_DIR/installer/macos/audit_payload.py"
 PACKAGE_AUDITOR="$ROOT_DIR/installer/macos/audit_pkg.py"
 DISTRIBUTION_FILE="$ROOT_DIR/installer/macos/Distribution.xml"
 BRANDING_ASSET="$ROOT_DIR/installer/assets/stemwerk.png"
+BRANDING_RENDERER="$ROOT_DIR/installer/macos/render_installer_logo.py"
 
 VERSION="${STEMWERK_VERSION:-}"
 PKG_ID="com.flarkaudio.stemwerk"
@@ -75,11 +76,13 @@ OUTPUT_PKG="$OUT_DIR/STEMwerk-$VERSION$OUTPUT_SUFFIX.pkg"
 BUILD_DIR="$ROOT_DIR/installer/macos/build/$VARIANT"
 COMPONENT_PKG="$BUILD_DIR/STEMwerk-component.pkg"
 INSTALLER_RESOURCES="$BUILD_DIR/installer-resources"
+BRANDING_RESIZE="$BUILD_DIR/stemwerk-installer-128.png"
 PAYLOAD_INVENTORY="$ROOT_DIR/installer/macos/build/$VARIANT/payload-inventory.json"
 PACKAGE_AUDIT_REPORT="$ROOT_DIR/installer/macos/build/$VARIANT/final-package-audit.json"
 PACKAGE_REPACK_DIR=""
 
 cleanup() {
+  rm -f "$BRANDING_RESIZE"
   if [[ -n "$PACKAGE_REPACK_DIR" && -d "$PACKAGE_REPACK_DIR" ]]; then
     rm -rf "$PACKAGE_REPACK_DIR"
   fi
@@ -111,15 +114,20 @@ repack_pkg_without_appledouble() {
 }
 
 rm -rf "$STAGE" "$INSTALLER_RESOURCES"
-rm -f "$COMPONENT_PKG"
+rm -f "$COMPONENT_PKG" "$BRANDING_RESIZE"
 mkdir -p "$OUT_DIR" "$STAGE/Users/Shared/STEMwerk-reaper" "$INSTALLER_RESOURCES"
 
 # Installer.app branding is a product-archive resource, not payload content.
 # Derive a compact presentation copy from the canonical repository logo so
 # the Installer background is branded without placing a 512px image behind
-# the package text. Both package variants use this shared resource path.
-cp -p "$BRANDING_ASSET" "$INSTALLER_RESOURCES/stemwerk.png"
-sips -Z 128 "$INSTALLER_RESOURCES/stemwerk.png" >/dev/null
+# the package text. First retain the established sips resize exactly, then
+# change only alpha bytes outside a deterministic rounded mask. Both package
+# variants use this shared resource path.
+sips -Z 128 "$BRANDING_ASSET" --out "$BRANDING_RESIZE" >/dev/null
+python3 "$BRANDING_RENDERER" \
+  "$BRANDING_RESIZE" \
+  "$INSTALLER_RESOURCES/stemwerk.png"
+rm -f "$BRANDING_RESIZE"
 
 PAYLOAD_ROOT="$STAGE/Users/Shared/STEMwerk-reaper"
 awk -F '\t' '
