@@ -6417,8 +6417,8 @@ def test_macos_build_script_excludes_appledouble_sidecars_and_repacks_clean_payl
     assert "repack_pkg_without_appledouble()" in script
     assert 'mkbom "$STAGE" "$PACKAGE_REPACK_DIR/Bom"' in script
     assert "find . -print | cpio -o --format odc --owner 0:80" in script
-    assert 'xar -xf "$OUTPUT_PKG"' in script
-    assert 'xar --compression none -cf "$OUTPUT_PKG" Bom Payload Scripts PackageInfo' in script
+    assert 'xar -xf "$COMPONENT_PKG"' in script
+    assert 'xar --compression none -cf "$COMPONENT_PKG" Bom Payload Scripts PackageInfo' in script
     assert script.index('remove_appledouble_sidecars "$STAGE"') < script.index("pkgbuild \\")
     assert script.index("pkgbuild \\") < script.index("repack_pkg_without_appledouble\n")
 
