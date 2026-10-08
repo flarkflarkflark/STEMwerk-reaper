@@ -68,6 +68,31 @@ def test_intel_macos_drum_kit_setup_ui_headless() -> None:
         "PASS fresh-intel-healthy-existing-runtime-renders-real-screen",
         "PASS fresh-intel-healthy-existing-runtime-renders-no-dks-action-or-mode",
         "PASS fresh-intel-healthy-existing-runtime-keeps-normal-actions",
+        # 0b) Shared renderer polish is exercised through the real draw path:
+        #     localized text, aligned cards, practical sizes, and zoom.
+        "PASS intel-default-layout-renders-complete-aligned-card-text-en",
+        "PASS intel-default-layout-renders-localized-header-and-modes-en",
+        "PASS intel-default-layout-has-nine-uniform-nonoverlapping-cards-en",
+        "PASS intel-default-layout-renders-complete-aligned-card-text-nl",
+        "PASS intel-default-layout-renders-localized-header-and-modes-nl",
+        "PASS intel-default-layout-has-nine-uniform-nonoverlapping-cards-nl",
+        "PASS intel-default-layout-renders-complete-aligned-card-text-de",
+        "PASS intel-default-layout-renders-localized-header-and-modes-de",
+        "PASS intel-default-layout-has-nine-uniform-nonoverlapping-cards-de",
+        "PASS intel-minimum-viewport-keeps-uniform-nonoverlapping-action-grid",
+        "PASS intel-larger-viewport-keeps-uniform-nonoverlapping-action-grid",
+        "PASS intel-minimum-viewport-at-160pct-keeps-action-grid-in-bounds",
+        "PASS intel-minimum-viewport-at-80pct-keeps-action-grid-in-bounds",
+        "PASS intel-minimum-viewport-at-260pct-uses-compact-grid-in-bounds",
+        "PASS intel-localized-layout-complete-valid-utf8-en-100%",
+        "PASS intel-localized-layout-complete-valid-utf8-en-260%",
+        "PASS intel-localized-layout-complete-valid-utf8-en-300%",
+        "PASS intel-localized-layout-complete-valid-utf8-nl-100%",
+        "PASS intel-localized-layout-complete-valid-utf8-nl-260%",
+        "PASS intel-localized-layout-complete-valid-utf8-nl-300%",
+        "PASS intel-localized-layout-complete-valid-utf8-de-100%",
+        "PASS intel-localized-layout-complete-valid-utf8-de-260%",
+        "PASS intel-localized-layout-complete-valid-utf8-de-300%",
         # 1) Intel macOS Setup actions: no actionable Drum Kit Split runtime.
         "PASS intel-macos-setup-actions-have-no-drumsep-runtime-choice",
         "PASS intel-macos-setup-actions-keep-unrelated-mutating-actions",
@@ -101,6 +126,10 @@ def test_intel_macos_drum_kit_setup_ui_headless() -> None:
         "PASS apple-silicon-production-load-detects-arm64",
         "PASS apple-silicon-is-not-flagged-unsupported",
         "PASS apple-silicon-setup-actions-still-offer-drumsep-runtime",
+        "PASS apple-silicon-existing-runtime-ui-keeps-dks-card-and-mode",
+        "PASS apple-silicon-existing-runtime-ui-keeps-uniform-nonoverlapping-grid",
+        "PASS apple-silicon-modes-complete-260%",
+        "PASS apple-silicon-modes-complete-300%",
         "PASS apple-silicon-step5-label-is-the-original-unchanged-label",
         "PASS apple-silicon-step5-is-not-forced-neutral",
         "PASS apple-silicon-direct-dispatch-is-not-blocked-by-the-intel-guard",
@@ -108,10 +137,18 @@ def test_intel_macos_drum_kit_setup_ui_headless() -> None:
         # 6) Linux x86_64: unaffected.
         "PASS linux-x86_64-is-not-flagged-unsupported-by-the-macos-guard",
         "PASS linux-x86_64-setup-actions-still-offer-drumsep-runtime",
+        "PASS linux-existing-runtime-ui-keeps-dks-card-and-mode",
+        "PASS linux-existing-runtime-ui-keeps-uniform-nonoverlapping-grid",
+        "PASS linux-modes-complete-260%",
+        "PASS linux-modes-complete-300%",
         "PASS linux-x86_64-step5-label-is-the-original-unchanged-label",
         "PASS linux-x86_64-step5-is-not-forced-neutral",
         # Sanity: the guard is OS-gated, not just arch-gated.
         "PASS windows-is-not-flagged-unsupported-by-the-macos-guard-even-with-x86_64-arch",
+        "PASS windows-existing-runtime-ui-keeps-read-only-policy",
+        "PASS windows-existing-runtime-ui-keeps-uniform-nonoverlapping-grid",
+        "PASS windows-modes-complete-260%",
+        "PASS windows-modes-complete-300%",
     ):
         assert marker in result.stdout, f"missing expected marker: {marker}\n{result.stdout}"
 
@@ -150,3 +187,39 @@ def test_check_only_diagnostic_wording_is_unchanged() -> None:
     text = SETUP_INTERNAL.read_text(encoding="utf-8")
     assert 'drumsepStatus = "unsupported_mac_intel"' in text
     assert 'dksSupported = drumsepStatus == "unsupported_mac_intel" and "false" or "true"' in text
+
+
+def test_polished_card_grid_uses_identical_draw_and_hit_test_geometry() -> None:
+    """The centered grid origin is presentation-only: clicks must resolve
+    against the exact same card rectangles that are drawn."""
+    text = SETUP_INTERNAL.read_text(encoding="utf-8")
+    body = text[text.index("function existingRuntimeSetupMenuTick()") :]
+    body = body[: body.index("\nend")]
+    bx_line = "local bx = layout.gridX + col * (layout.btnW + btnGapX)"
+    assert body.count(bx_line) == 2, "draw and click routes must share the centered grid origin"
+    assert "local bx = bodyX + col * (layout.btnW + btnGapX)" not in body
+
+    # Action dispatch remains byte-identical in meaning after the geometry
+    # slice: the selected IDs still reach the same existing callbacks.
+    assert 'if chosen == "verify" then' in body
+    assert "verifyExistingSetup(runtime, separatorScript)" in body
+    assert 'elseif chosen == "repair" or chosen == "rebuild-venv"' in body
+    assert "startLinuxSetup(runtime, separatorScript, chosen)" in body
+    assert 'elseif chosen == "support-bundle" then' in body
+    assert "runSupportBundleAction()" in body
+    assert 'elseif chosen == "cancel" then' in body
+
+
+def test_polished_card_content_reserves_shared_title_and_subtitle_blocks() -> None:
+    """All cards reserve the same title/subtitle blocks, so one wrapped
+    translation cannot move another card's title or subtitle baseline."""
+    text = SETUP_INTERNAL.read_text(encoding="utf-8")
+    body = text[text.index("function existingRuntimeSetupMenuTick()") :]
+    body = body[: body.index("\nend")]
+    assert "local titleByChoice = {}" in body
+    assert "local titleMaxLines = 1" in body
+    assert "local labelBlockH = titleMaxLines * labelH" in body
+    assert "local subtitleBlock = withSubs and (subMaxLines * subH) or 0" in body
+    assert "local subY = contentY + layout.labelBlockH + layout.innerGap" in body
+    assert "if bodyW < 700 then cols = 2 end" in body
+    assert "or scale >= 2.8" not in body

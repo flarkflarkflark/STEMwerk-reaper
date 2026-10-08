@@ -7971,7 +7971,13 @@ def test_linux_setup_existing_runtime_view_uses_compact_top_right_mode_summary()
     assert 'gfx.drawstr(setupText("setup_modes_title", "Modes"))' in setup_script
     assert 'local summaryLabel = compactModeSummaryLabel(c)' in setup_script
     assert 'summaryLabel .. " · " .. tostring(c.sub or "")' not in setup_script
-    assert 'ellipsizeToWidth(summaryLabel, summaryInnerW - 22' in setup_script
+    assert 'local legendCols = 1' in setup_script
+    assert 'legendCols = 4' in setup_script
+    assert 'legendCols = 2' in setup_script
+    assert 'local legendGridRows = math.ceil(#summaryRows / legendCols)' in setup_script
+    assert 'for i = 1, #summaryRows do' in setup_script
+    assert 'local maxRowsThatFit' not in setup_script
+    assert 'local shown = math.min(#summaryRows, maxRowsThatFit)' not in setup_script
     assert 'local headerBottom = math.max(y, midPanelY + midPanelH)' in setup_script
     assert 'layout.btnY = math.max(layout.btnY, headerBottom + headerGap)' in setup_script
     assert 'setup_summary_drumkit_rocm = "DrumKit ROCm"' in langs
