@@ -330,6 +330,7 @@ print("runtimeSelected=" .. tostring(info.runtimeSelected or ""))
 
 def test_progress_state_is_wired_from_the_same_parser_output():
     src = MAIN_LUA.read_text(encoding="utf-8")
-    assert "local info = parseRuntimeMetadataFromLogFile(progressState.logFile, 400)" in src
+    assert "local info = parseRuntimeMetadataFromLogFile(progressState.logFile, force and 0 or 400)" in src
+    assert "refreshProgressRuntimeMetadataFromLogFile(false)" in src
     assert "progressState._runtimeSelected = info.runtimeSelected or progressState._runtimeSelected" in src
     assert "progressState._backendRuntime = info.backendRuntime or progressState._backendRuntime" in src

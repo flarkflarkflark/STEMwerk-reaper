@@ -15241,6 +15241,40 @@ function parseRuntimeMetadataFromLogFile(logFile, maxLines)
     return info
 end
 
+-- Keep the live polling path and the completion path on one parser/mapping.
+-- A forced refresh reads the complete current-job log after DONE, including
+-- metadata emitted after the progress poller's 400-line window.
+function refreshProgressRuntimeMetadataFromLogFile(force)
+    if not progressState.logFile or progressState.logFile == "" then return false end
+    local now = os.clock()
+    if not force and progressState._deviceInfoLastAt and (now - progressState._deviceInfoLastAt) <= 0.5 then
+        return false
+    end
+
+    progressState._deviceInfoLastAt = now
+    local info = parseRuntimeMetadataFromLogFile(progressState.logFile, force and 0 or 400)
+    progressState._deviceId = info.devId or progressState._deviceId
+    progressState._deviceName = info.devName or progressState._deviceName
+    progressState._runtimeSelected = info.runtimeSelected or progressState._runtimeSelected
+    progressState._normalizedDeviceRequest = info.normalizedRequest or progressState._normalizedDeviceRequest
+    progressState._backendRuntime = info.backendRuntime or progressState._backendRuntime
+    progressState._effectiveDevice = info.effectiveDevice or progressState._effectiveDevice
+    progressState._runtimeGpuCapable = info.gpuCapable or progressState._runtimeGpuCapable
+    progressState._runtimeDeviceNames = info.runtimeDeviceNames or progressState._runtimeDeviceNames
+    progressState._stage1Runtime = info.stage1Runtime or progressState._stage1Runtime
+    progressState._stage1Device = info.stage1Device or progressState._stage1Device
+    progressState._stage2Runtime = info.stage2Runtime or progressState._stage2Runtime
+    progressState._stage2Device = info.stage2Device or progressState._stage2Device
+    progressState._drumsepRuntimeSelectionPolicy = info.drumsepRuntimeSelectionPolicy or progressState._drumsepRuntimeSelectionPolicy
+    progressState._drumsepSubprocessEnvProfile = info.drumsepSubprocessEnvProfile or progressState._drumsepSubprocessEnvProfile
+    progressState._drumsepHelperDeviceArg = info.drumsepHelperDeviceArg or progressState._drumsepHelperDeviceArg
+    progressState._drumsepRuntimeFallbackReason = info.drumsepRuntimeFallbackReason or progressState._drumsepRuntimeFallbackReason
+    progressState._drumsepSchedulerBackend = info.drumsepSchedulerBackend or progressState._drumsepSchedulerBackend
+    progressState._drumsepSchedulerPolicy = info.drumsepSchedulerPolicy or progressState._drumsepSchedulerPolicy
+    progressState._drumsepSchedulerUsesCpuFallback = info.drumsepSchedulerUsesCpuFallback or progressState._drumsepSchedulerUsesCpuFallback
+    return true
+end
+
 isDrumKitWorkflowActive = function()
     return safeDrumKitWorkflowActive()
 end
@@ -16210,29 +16244,7 @@ function drawProgressWindow()
 
     -- Best-effort: parse actual selected device id/name from the separation log (so UI never lies).
     -- We update at most ~2x/sec to keep it cheap.
-    if progressState.logFile and (not progressState._deviceInfoLastAt or (os.clock() - progressState._deviceInfoLastAt) > 0.5) then
-        progressState._deviceInfoLastAt = os.clock()
-        local info = parseRuntimeMetadataFromLogFile(progressState.logFile, 400)
-        progressState._deviceId = info.devId or progressState._deviceId
-        progressState._deviceName = info.devName or progressState._deviceName
-        progressState._runtimeSelected = info.runtimeSelected or progressState._runtimeSelected
-        progressState._normalizedDeviceRequest = info.normalizedRequest or progressState._normalizedDeviceRequest
-        progressState._backendRuntime = info.backendRuntime or progressState._backendRuntime
-        progressState._effectiveDevice = info.effectiveDevice or progressState._effectiveDevice
-        progressState._runtimeGpuCapable = info.gpuCapable or progressState._runtimeGpuCapable
-        progressState._runtimeDeviceNames = info.runtimeDeviceNames or progressState._runtimeDeviceNames
-        progressState._stage1Runtime = info.stage1Runtime or progressState._stage1Runtime
-        progressState._stage1Device = info.stage1Device or progressState._stage1Device
-        progressState._stage2Runtime = info.stage2Runtime or progressState._stage2Runtime
-        progressState._stage2Device = info.stage2Device or progressState._stage2Device
-        progressState._drumsepRuntimeSelectionPolicy = info.drumsepRuntimeSelectionPolicy or progressState._drumsepRuntimeSelectionPolicy
-        progressState._drumsepSubprocessEnvProfile = info.drumsepSubprocessEnvProfile or progressState._drumsepSubprocessEnvProfile
-        progressState._drumsepHelperDeviceArg = info.drumsepHelperDeviceArg or progressState._drumsepHelperDeviceArg
-        progressState._drumsepRuntimeFallbackReason = info.drumsepRuntimeFallbackReason or progressState._drumsepRuntimeFallbackReason
-        progressState._drumsepSchedulerBackend = info.drumsepSchedulerBackend or progressState._drumsepSchedulerBackend
-        progressState._drumsepSchedulerPolicy = info.drumsepSchedulerPolicy or progressState._drumsepSchedulerPolicy
-        progressState._drumsepSchedulerUsesCpuFallback = info.drumsepSchedulerUsesCpuFallback or progressState._drumsepSchedulerUsesCpuFallback
-    end
+    refreshProgressRuntimeMetadataFromLogFile(false)
 
     -- === THEME TOGGLE (top right) ===
     local iconScale = 0.66
@@ -18271,6 +18283,7 @@ end
 -- Process stems after separation completes (called from progress UI)
 function processStemsResult(stems)
     SW_LOG.logExecResult("timing:finalize_start single", nil, "")
+    refreshProgressRuntimeMetadataFromLogFile(true)
     local count
     local mainItem
     local resultMsg

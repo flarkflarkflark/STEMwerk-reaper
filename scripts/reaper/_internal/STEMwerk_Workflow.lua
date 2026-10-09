@@ -423,6 +423,9 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
     C.progressState._deviceName = nil
     C.progressState._runtimeSelected = nil
     C.progressState._normalizedDeviceRequest = nil
+    C.progressState._backendRuntime = nil
+    C.progressState._effectiveDevice = nil
+    C.progressState._drumsepHelperDeviceArg = nil
     C.progressState._runtimeGpuCapable = nil
     C.progressState._runtimeDeviceNames = nil
     C.progressState._stage1Runtime = nil

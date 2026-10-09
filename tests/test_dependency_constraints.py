@@ -6793,6 +6793,9 @@ def test_single_track_workflow_uses_run_snapshot_device_and_resets_progress_devi
     assert "C.progressState._deviceName = nil" in workflow_script
     assert "C.progressState._runtimeSelected = nil" in workflow_script
     assert "C.progressState._normalizedDeviceRequest = nil" in workflow_script
+    assert "C.progressState._backendRuntime = nil" in workflow_script
+    assert "C.progressState._effectiveDevice = nil" in workflow_script
+    assert "C.progressState._drumsepHelperDeviceArg = nil" in workflow_script
     assert "C.progressState._runtimeGpuCapable = nil" in workflow_script
     assert "C.progressState._runtimeDeviceNames = nil" in workflow_script
     assert "C.progressState._stage1Runtime = nil" in workflow_script
