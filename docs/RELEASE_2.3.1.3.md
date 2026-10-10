@@ -12,8 +12,7 @@ validation.
 - **Windows Repair/Rebuild dispatch safety.** Repair and rebuild requests
   launched from inside REAPER hand off to the external setup path instead of
   running repair work in the REAPER process.
-- **Linux gfx1031 single-item propagation.** The selected ROCm architecture
-  override now reaches single-item workers as well as multi-item runs.
+- **Linux AMD Radeon RX 6700-series (Navi 22 / `gfx1031`) single-item propagation.** The ROCm compatibility override now reaches single-item workers as well as multi-item runs. This workaround does not make `gfx1031` an officially supported ROCm target.
 - **DrumSep verification window.** Runtime verification allows up to 120
   seconds, preventing false setup failures when a healthy DrumSep runtime is
   slow to start.
@@ -53,6 +52,23 @@ There is no separate Intel macOS package in this matrix. Linux `.deb`, `.rpm`,
 and Arch packages remain build tooling rather than published release assets.
 The retired Windows update-patch installer and the historical offline
 allmodels installers are also outside this release matrix.
+
+### GPU compatibility and tested hardware (2.3.1.3)
+
+STEMwerk supports CPU processing on the platforms listed below. GPU acceleration depends on the operating system, driver, installed runtime and selected separation method. **This is a tested-hardware reference, not an exhaustive GPU certification list**; supported backend does not mean that every GPU model and every workflow has been validated.
+
+| Platform | Backend | Named hardware with validation evidence | Scope / qualification |
+|---|---|---|---|
+| Windows | NVIDIA CUDA | GeForce RTX 3060; GeForce RTX 50-series / Blackwell (real-hardware validation for the #118 fix) | CUDA runtime and affected processing routes tested; other models require a compatible NVIDIA driver and runtime |
+| Windows | AMD DirectML | Radeon RX 9070; Radeon 780M integrated graphics | Tested processing and scheduler cases; integrated GPUs may require lower concurrency |
+| Linux | NVIDIA CUDA | GeForce RTX 3060 Laptop GPU | Tested normal and drum workflows on NVIDIA Linux hardware |
+| Linux | AMD ROCm | Radeon RX 9070 | Tested ROCm processing; compatible ROCm/driver installation required |
+| macOS Apple Silicon | Apple MPS | Apple M1 (8 GB) | Tested GPU processing; memory-dependent concurrency limits apply |
+| macOS Intel | CPU | Intel Mac (CPU path) | Normal Stems supported; Direct Kit / Kit Split unsupported by design |
+
+**Additional compatibility case (not officially supported by AMD ROCm):** AMD Radeon RX 6700-series / Navi 22 (`gfx1031`) on Linux may use STEMwerk's narrowly scoped `HSA_OVERRIDE_GFX_VERSION=10.3.0` workaround. It has issue #123 validation evidence, but should **not** be described as officially ROCm-supported or guaranteed to work across drivers and models.
+
+Other compatible hardware may work, but absence from this table means **not individually certified by these release notes**, not automatically incompatible. CPU fallback is available where the selected workflow supports it.
 
 ## Platform notes
 
