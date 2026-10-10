@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description STEMwerk - AI Stem Separation
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.1.2
+-- @version 2.3.1.3
 -- @changelog
 --   2026-04-24: Added quick-command path for toolbar explode actions that run without opening Main UI.
 --   2026-04-24: Fixed playback-state transfer for imported stem takes with source-length guard (prevents double-stretch/content mismatch).
@@ -54,7 +54,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.3.1.2"
+local APP_VERSION = "2.3.1.3"
 SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
@@ -1124,7 +1124,17 @@ function normalizeUserFacingDeviceLabel(name)
 end
 
 function formatUserFacingProcessingDeviceLabel(...)
-    local candidates = { ... }
+    -- Normalize every slot to a real (possibly empty) string before building
+    -- the table: a bare nil in an early slot (e.g. a caller's stage1Runtime
+    -- that was never set) would otherwise make ipairs() stop before it ever
+    -- reaches a later slot carrying real evidence (e.g. effectiveDevice or
+    -- deviceName).
+    local argCount = select("#", ...)
+    local rawArgs = { ... }
+    local candidates = {}
+    for i = 1, argCount do
+        candidates[i] = tostring(rawArgs[i] or "")
+    end
     local sawCudaToken = false
     local sawNvidiaCuda = false
     local sawAmdRocmLike = false
@@ -1648,6 +1658,22 @@ local function isKnownMpsUnsupportedFailure(logSnippet)
     return text:find("output channels > 65536 not supported at the mps device", 1, true) ~= nil
 end
 
+-- The drum workflows share one failure branch, so the title has to name the
+-- workflow the user actually ran. workflow_source= is emitted by every drum run
+-- and survives in the log head; the command line is the fallback for the direct
+-- route, whose wrapper invocations do not always carry the source inline.
+-- Global, not local: this chunk sits at Lua's 200-local ceiling.
+function dksSeparationFailureTitle(lowerLog, isDirectDksCmd)
+    local text = tostring(lowerLog or "")
+    if text:find("workflow_source=dks_extract", 1, true) then
+        return "Kit Split separation failed."
+    end
+    if text:find("workflow_source=dks_direct", 1, true) or isDirectDksCmd then
+        return "Direct Kit separation failed."
+    end
+    return "Drum Kit separation failed."
+end
+
 local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine, logPath, debugLogPath, stdoutSnippet)
     local lowerLog = string.lower(tostring(logSnippet or ""))
     local lowerCmd = string.lower(tostring(cmdLine or ""))
@@ -1712,7 +1738,8 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
 
     if lowerLog:find("error_stage=stage2_runtime", 1, true)
         and (lowerLog:find("error_reason=drumsep_runtime_missing", 1, true)
-            or lowerLog:find("error_reason=drumsep_runtime_broken", 1, true)) then
+            or lowerLog:find("error_reason=drumsep_runtime_broken", 1, true)
+            or lowerLog:find("error_reason=drumsep_runtime_verify_timeout", 1, true)) then
         local reason = tostring(logSnippet or ""):match("error_reason=([^\r\n]+)") or "drumsep_runtime_missing"
         local detail = tostring(logSnippet or ""):match("detail=([^\r\n]+)") or ""
         local headline = reason == "drumsep_runtime_broken"
@@ -1725,6 +1752,12 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
             runtimeGuidance = runtimeGuidance .. "Optional GPU path: Setup/Repair Drum Kit Split ROCm runtime.\n"
         elseif OS == "Windows" then
             runtimeGuidance = "Re-run the STEMwerk installer to repair the Drum Kit Split runtime.\n"
+        end
+        if reason == "drumsep_runtime_verify_timeout" then
+            -- A slow cold start is not evidence of a broken runtime.
+            headline = "Drum Kit Split runtime check timed out."
+            runtimeGuidance = "The runtime did not finish its start-up check in time (common on a slow or busy first start).\n"
+                .. "Run the job again. Use Setup/Repair only if this keeps happening.\n"
         end
         local msg = headline .. "\n"
             .. runtimeGuidance
@@ -1774,7 +1807,7 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
             end
             return msg
         end
-        local msg = "Drum Kit Split separation failed.\n"
+        local msg = dksSeparationFailureTitle(lowerLog, isDirectDksCmd) .. "\n"
             .. "Reason: " .. tostring(reason)
             .. "\nerror_stage=" .. tostring(stage)
             .. "\nerror_reason=" .. tostring(reason)
@@ -9368,7 +9401,18 @@ function sanitizeUserFacingMethodLabel(candidate)
 end
 
 function preferredRuntimeSelection(runtimeSelected, stage2Runtime, stage1Runtime, backendRuntime, fallbackDevice)
-    local candidates = { runtimeSelected, stage2Runtime, stage1Runtime, backendRuntime, fallbackDevice }
+    -- Every slot must be a real (possibly empty) string, never a bare nil: a
+    -- nil in an early slot makes ipairs() stop before it ever reaches a later
+    -- slot that does carry real evidence (e.g. backendRuntime="directml"
+    -- behind a nil runtimeSelected, which is the normal shape of a Normal
+    -- Stems run -- info.runtimeSelected is never populated for that route).
+    local candidates = {
+        tostring(runtimeSelected or ""),
+        tostring(stage2Runtime or ""),
+        tostring(stage1Runtime or ""),
+        tostring(backendRuntime or ""),
+        tostring(fallbackDevice or ""),
+    }
     for _, candidate in ipairs(candidates) do
         local lower = tostring(candidate or ""):lower()
         if lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true) then
@@ -9447,11 +9491,74 @@ function resolveResultMethodLabel(data)
     return sanitizeUserFacingMethodLabel(data and data.methodLabel or "")
 end
 
+-- A friendly device name only reaches the UI when a run actually reported one
+-- (Selected device / auto_selected_preferred / normal_workflow_backend_preview_name).
+-- DrumSep-only runs never emit one, so an empty value, a bare device id echo or a
+-- generic placeholder must not be presented as the device that did the work.
+-- Conservative queue ETA: an honest "no estimate yet" beats a confident wrong
+-- one. Returns 0 whenever the signal cannot be trusted -- too early, unknown
+-- work still queued, or no measurable throughput -- and both ETA render sites
+-- already hide the value when it is 0.
+-- Global, not local: this chunk sits at Lua's 200-local ceiling.
+function estimateQueueEta(opts)
+    opts = opts or {}
+    local minElapsedSeconds = 20
+    local minProgressPercent = 10
+    local minReportableEta = 5
+    local totalAudio = tonumber(opts.totalAudioDur or 0) or 0
+    local completedAudio = tonumber(opts.completedAudioDur or 0) or 0
+    local elapsed = tonumber(opts.elapsedSinceFirstJob or 0) or 0
+    local overallProgress = tonumber(opts.overallProgress or 0) or 0
+    local previousEta = tonumber(opts.previousEta or 0) or 0
+
+    if opts.pendingUnknownDuration then return 0 end
+    if elapsed < minElapsedSeconds or overallProgress < minProgressPercent then return 0 end
+    if totalAudio <= 0 or completedAudio <= 0 then return 0 end
+
+    local throughput = completedAudio / elapsed
+    local remaining = totalAudio - completedAudio
+    if throughput <= 0 or remaining <= 0 then return 0 end
+
+    local estimate = remaining / throughput
+    -- Guard against inf/NaN reaching the formatter.
+    if estimate ~= estimate or estimate == math.huge then return 0 end
+    if previousEta > 0 then
+        estimate = previousEta * 0.8 + estimate * 0.2
+    end
+    return math.max(minReportableEta, math.floor(estimate + 0.5))
+end
+
+function resolveResultDeviceName(data)
+    local name = tostring((data and data.deviceName) or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if name == "" then return "" end
+    local lower = name:lower()
+    if lower == "auto" or lower == "cpu" or lower == "gpu" or lower == "directml" then return "" end
+    for _, prefix in ipairs({ "cuda", "directml", "privateuseone", "gpu" }) do
+        if lower:match("^" .. prefix .. "%s*:?%s*%d*$") or lower:match("^" .. prefix .. "%s+gpu%s*%d*$") then
+            return ""
+        end
+    end
+    return name
+end
+
+-- Method says CPU vs GPU; Backend names the implementation that ran it
+-- (DirectML / AMD ROCm / NVIDIA CUDA / Apple MPS); Device is only ever shown when
+-- a trustworthy friendly name exists. Single-item and multi-item completion both
+-- read this one resolver so their wording cannot drift apart again. CPU returns no
+-- backend, so a CPU-via-DirectML/ROCm fallback can never claim an accelerator.
+function resolveResultReportingTriple(data)
+    local label = resolveResultMethodLabel(data)
+    if label == "" then return "", "", "" end
+    local cpuLabel = trSafeValue("footer_device_cpu_label", "CPU")
+    if label == cpuLabel then return cpuLabel, "", "" end
+    local gpuLabel = trSafeValue("footer_device_gpu_intent", "GPU")
+    local backendLabel = (label ~= gpuLabel) and label or ""
+    return gpuLabel, backendLabel, resolveResultDeviceName(data)
+end
+
 function resolveSingleTrackMethodLabel(data)
-    local methodLabel = resolveResultMethodLabel(data)
-    if methodLabel == "CPU" then return "CPU" end
-    if methodLabel ~= "" then return "GPU" end
-    return ""
+    local methodLabel = resolveResultReportingTriple(data)
+    return methodLabel
 end
 
 local function logNormalFinalMethodDiagnostics(tag, data, resolvedLabel)
@@ -9463,6 +9570,45 @@ local function logNormalFinalMethodDiagnostics(tag, data, resolvedLabel)
     SW_LOG.logExecResult(prefix .. "_label_input_backend=" .. tostring(data and data.backendRuntime or data and data.backend or ""), nil, "")
     SW_LOG.logExecResult(prefix .. "_label_input_runtime_selected=" .. tostring(data and data.runtimeSelected or ""), nil, "")
     SW_LOG.logExecResult(prefix .. "_label_resolved=" .. tostring(resolvedLabel or ""), nil, "")
+end
+
+-- Shared by every completion branch: the "| Method: ..." suffix for the stats
+-- line, plus the optional follow-up line carrying Backend and Device.
+-- Global, not local: this chunk sits at Lua's 200-local ceiling.
+function resultMethodReportingText(data)
+    local method, backend, device = resolveResultReportingTriple(data)
+    local suffix = ""
+    if method ~= "" then
+        suffix = " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), method)
+    end
+    local detail = ""
+    if backend ~= "" then
+        detail = string.format(trSafeValue("result_backend_line", "Backend: %s"), backend)
+    end
+    if device ~= "" then
+        local deviceText = string.format(trSafeValue("result_device_line", "Device: %s"), device)
+        detail = (detail ~= "") and (detail .. " | " .. deviceText) or deviceText
+    end
+    return suffix, detail
+end
+
+-- failedJobIndices is a raw comma-joined list of job NUMBERS ("2", "1,2").
+-- Rendered as #-prefixed ids so it cannot be misread as a count of failures.
+function formatFailedJobIndices(raw)
+    local ids = {}
+    for token in tostring(raw or ""):gmatch("[^,%s]+") do
+        ids[#ids + 1] = "#" .. token
+    end
+    return table.concat(ids, ", "), #ids
+end
+
+function failedJobsLine(rawIndices)
+    local idList, idCount = formatFailedJobIndices(rawIndices)
+    if idCount == 0 then return "" end
+    if idCount == 1 then
+        return string.format(trSafeValue("dks_multi_failed_job_one", "Failed job: %s"), idList)
+    end
+    return string.format(trSafeValue("dks_multi_failed_jobs", "Failed jobs: %s"), idList)
 end
 
 function buildResultMessageLines()
@@ -9529,8 +9675,9 @@ function buildResultMessageLines()
                 data.expectedOutputs or stemsCreated
             )
             table.insert(lines, line1)
-            if data.failedJobIndices and data.failedJobIndices ~= "" then
-                table.insert(lines, string.format(trSafeValue("dks_multi_failed_jobs", "Failed jobs: %s"), data.failedJobIndices))
+            local failedLine = failedJobsLine(data.failedJobIndices)
+            if failedLine ~= "" then
+                table.insert(lines, failedLine)
             end
             return lines
         end
@@ -9556,12 +9703,13 @@ function buildResultMessageLines()
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
         local runtimeMode, _, runtimeReason = getRuntimeModeLabel(data)
         local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, runtimeMode)
-        local methodLabel = resolveResultMethodLabel(data)
-        if methodLabel ~= "" then
-            line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
-        end
+        local methodSuffix, methodDetail = resultMethodReportingText(data)
+        line2 = line2 .. methodSuffix
         table.insert(lines, line1)
         table.insert(lines, line2)
+        if methodDetail ~= "" then
+            table.insert(lines, methodDetail)
+        end
         if runtimeReason ~= "" then
             local reasonLabel = T("mode_reason_label") or "Reason"
             table.insert(lines, string.format("%s: %s", reasonLabel, runtimeReason))
@@ -9592,15 +9740,19 @@ function buildResultMessageLines()
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
         local runtimeMode, _, runtimeReason = getRuntimeModeLabel(data)
         local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, runtimeMode)
-        if data.resultStatus == "partial" and drumKitCopyActive and data.failedJobIndices and data.failedJobIndices ~= "" then
-            table.insert(lines, string.format(trSafeValue("dks_multi_failed_jobs", "Failed jobs: %s"), data.failedJobIndices))
+        if data.resultStatus == "partial" and drumKitCopyActive then
+            local failedLine = failedJobsLine(data.failedJobIndices)
+            if failedLine ~= "" then
+                table.insert(lines, failedLine)
+            end
         end
-        local methodLabel = resolveResultMethodLabel(data)
-        if methodLabel ~= "" then
-            line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
-        end
+        local methodSuffix, methodDetail = resultMethodReportingText(data)
+        line2 = line2 .. methodSuffix
         table.insert(lines, line1)
         table.insert(lines, line2)
+        if methodDetail ~= "" then
+            table.insert(lines, methodDetail)
+        end
         if runtimeReason ~= "" then
             local reasonLabel = T("mode_reason_label") or "Reason"
             table.insert(lines, string.format("%s: %s", reasonLabel, runtimeReason))
@@ -9667,20 +9819,17 @@ function buildResultMessageLines()
             table.insert(lines, T(actionKey) or "")
         end
         local speed = tonumber(data.realtimeFactor or 0) or 0
-        local methodLabel = resolveSingleTrackMethodLabel(data)
+        local methodSuffix, methodDetail = resultMethodReportingText(data)
         if speed > 0 then
             local speedStr = string.format("%.2fx", speed)
             local line2 = string.format(T("result_time_speed_line") or "Time: %s | Speed: %s realtime", timeStr, speedStr)
-            if methodLabel ~= "" then
-                line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
-            end
-            table.insert(lines, line2)
+            table.insert(lines, line2 .. methodSuffix)
         else
             local line2 = string.format(T("result_time_line") or "Time: %s", timeStr)
-            if methodLabel ~= "" then
-                line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
-            end
-            table.insert(lines, line2)
+            table.insert(lines, line2 .. methodSuffix)
+        end
+        if methodDetail ~= "" then
+            table.insert(lines, methodDetail)
         end
     end
 
@@ -14979,16 +15128,31 @@ function parseRuntimeMetadataFromLogFile(logFile, maxLines)
         end
         local torchVersion = line:match("torch_version=([^%s]+)")
         if torchVersion and tostring(torchVersion):lower():find("rocm", 1, true) then
-            info.runtimeSelected = "rocm"
+            -- torch_version proves the Python/Torch BUILD is ROCm-capable,
+            -- not that this job actually executed on the GPU (a ROCm build
+            -- can run device=cpu, e.g. .venv-drumsep-rocm serving explicit
+            -- CPU). Only fill runtimeSelected from this capability signal if
+            -- nothing has already reported an actual execution device/backend
+            -- (e.g. backend=cpu, drumsep_runtime_selected=cpu) -- mirroring
+            -- the existing backendRuntime guard just below, which already
+            -- gets this right.
             info.torchVersion = torchVersion
+            if not info.runtimeSelected or info.runtimeSelected == "" then
+                info.runtimeSelected = "rocm"
+            end
             if not info.backendRuntime or info.backendRuntime == "" then
                 info.backendRuntime = "rocm"
             end
         end
         local drumsepTorchHip = line:match("drumsep_torch_hip=([^\r\n]+)")
         if drumsepTorchHip and drumsepTorchHip ~= "" then
-            info.runtimeSelected = "rocm"
+            -- Same reasoning as torch_version above: torch.version.hip
+            -- being non-empty proves ROCm/HIP capability, not that this
+            -- specific run executed on the GPU.
             info.drumsepTorchHip = drumsepTorchHip
+            if not info.runtimeSelected or info.runtimeSelected == "" then
+                info.runtimeSelected = "rocm"
+            end
             if not info.backendRuntime or info.backendRuntime == "" then
                 info.backendRuntime = "rocm"
             end
@@ -15075,6 +15239,40 @@ function parseRuntimeMetadataFromLogFile(logFile, maxLines)
     end
     f:close()
     return info
+end
+
+-- Keep the live polling path and the completion path on one parser/mapping.
+-- A forced refresh reads the complete current-job log after DONE, including
+-- metadata emitted after the progress poller's 400-line window.
+function refreshProgressRuntimeMetadataFromLogFile(force)
+    if not progressState.logFile or progressState.logFile == "" then return false end
+    local now = os.clock()
+    if not force and progressState._deviceInfoLastAt and (now - progressState._deviceInfoLastAt) <= 0.5 then
+        return false
+    end
+
+    progressState._deviceInfoLastAt = now
+    local info = parseRuntimeMetadataFromLogFile(progressState.logFile, force and 0 or 400)
+    progressState._deviceId = info.devId or progressState._deviceId
+    progressState._deviceName = info.devName or progressState._deviceName
+    progressState._runtimeSelected = info.runtimeSelected or progressState._runtimeSelected
+    progressState._normalizedDeviceRequest = info.normalizedRequest or progressState._normalizedDeviceRequest
+    progressState._backendRuntime = info.backendRuntime or progressState._backendRuntime
+    progressState._effectiveDevice = info.effectiveDevice or progressState._effectiveDevice
+    progressState._runtimeGpuCapable = info.gpuCapable or progressState._runtimeGpuCapable
+    progressState._runtimeDeviceNames = info.runtimeDeviceNames or progressState._runtimeDeviceNames
+    progressState._stage1Runtime = info.stage1Runtime or progressState._stage1Runtime
+    progressState._stage1Device = info.stage1Device or progressState._stage1Device
+    progressState._stage2Runtime = info.stage2Runtime or progressState._stage2Runtime
+    progressState._stage2Device = info.stage2Device or progressState._stage2Device
+    progressState._drumsepRuntimeSelectionPolicy = info.drumsepRuntimeSelectionPolicy or progressState._drumsepRuntimeSelectionPolicy
+    progressState._drumsepSubprocessEnvProfile = info.drumsepSubprocessEnvProfile or progressState._drumsepSubprocessEnvProfile
+    progressState._drumsepHelperDeviceArg = info.drumsepHelperDeviceArg or progressState._drumsepHelperDeviceArg
+    progressState._drumsepRuntimeFallbackReason = info.drumsepRuntimeFallbackReason or progressState._drumsepRuntimeFallbackReason
+    progressState._drumsepSchedulerBackend = info.drumsepSchedulerBackend or progressState._drumsepSchedulerBackend
+    progressState._drumsepSchedulerPolicy = info.drumsepSchedulerPolicy or progressState._drumsepSchedulerPolicy
+    progressState._drumsepSchedulerUsesCpuFallback = info.drumsepSchedulerUsesCpuFallback or progressState._drumsepSchedulerUsesCpuFallback
+    return true
 end
 
 isDrumKitWorkflowActive = function()
@@ -16046,29 +16244,7 @@ function drawProgressWindow()
 
     -- Best-effort: parse actual selected device id/name from the separation log (so UI never lies).
     -- We update at most ~2x/sec to keep it cheap.
-    if progressState.logFile and (not progressState._deviceInfoLastAt or (os.clock() - progressState._deviceInfoLastAt) > 0.5) then
-        progressState._deviceInfoLastAt = os.clock()
-        local info = parseRuntimeMetadataFromLogFile(progressState.logFile, 400)
-        progressState._deviceId = info.devId or progressState._deviceId
-        progressState._deviceName = info.devName or progressState._deviceName
-        progressState._runtimeSelected = info.runtimeSelected or progressState._runtimeSelected
-        progressState._normalizedDeviceRequest = info.normalizedRequest or progressState._normalizedDeviceRequest
-        progressState._backendRuntime = info.backendRuntime or progressState._backendRuntime
-        progressState._effectiveDevice = info.effectiveDevice or progressState._effectiveDevice
-        progressState._runtimeGpuCapable = info.gpuCapable or progressState._runtimeGpuCapable
-        progressState._runtimeDeviceNames = info.runtimeDeviceNames or progressState._runtimeDeviceNames
-        progressState._stage1Runtime = info.stage1Runtime or progressState._stage1Runtime
-        progressState._stage1Device = info.stage1Device or progressState._stage1Device
-        progressState._stage2Runtime = info.stage2Runtime or progressState._stage2Runtime
-        progressState._stage2Device = info.stage2Device or progressState._stage2Device
-        progressState._drumsepRuntimeSelectionPolicy = info.drumsepRuntimeSelectionPolicy or progressState._drumsepRuntimeSelectionPolicy
-        progressState._drumsepSubprocessEnvProfile = info.drumsepSubprocessEnvProfile or progressState._drumsepSubprocessEnvProfile
-        progressState._drumsepHelperDeviceArg = info.drumsepHelperDeviceArg or progressState._drumsepHelperDeviceArg
-        progressState._drumsepRuntimeFallbackReason = info.drumsepRuntimeFallbackReason or progressState._drumsepRuntimeFallbackReason
-        progressState._drumsepSchedulerBackend = info.drumsepSchedulerBackend or progressState._drumsepSchedulerBackend
-        progressState._drumsepSchedulerPolicy = info.drumsepSchedulerPolicy or progressState._drumsepSchedulerPolicy
-        progressState._drumsepSchedulerUsesCpuFallback = info.drumsepSchedulerUsesCpuFallback or progressState._drumsepSchedulerUsesCpuFallback
-    end
+    refreshProgressRuntimeMetadataFromLogFile(false)
 
     -- === THEME TOGGLE (top right) ===
     local iconScale = 0.66
@@ -16908,6 +17084,7 @@ HELPERS.configure({ makeDir = makeDir, adjustTrackLayout = UI_Window.adjustTrack
 dofile(script_path .. "_internal/STEMwerk_Workflow.lua")
 WORKFLOW.configure({
     progressState                 = progressState,
+    normalizeProgressPercent      = UI_PROGRESS.normalizeMultiTrackProgress,
     GUI                           = GUI,
     T                             = T,
     showMessage                   = showMessage,
@@ -18106,6 +18283,7 @@ end
 -- Process stems after separation completes (called from progress UI)
 function processStemsResult(stems)
     SW_LOG.logExecResult("timing:finalize_start single", nil, "")
+    refreshProgressRuntimeMetadataFromLogFile(true)
     local count
     local mainItem
     local resultMsg
@@ -18995,6 +19173,43 @@ _sep.classifySchedulerBackend = function(device, hasGpuBackends)
     return "unknown"
 end
 
+-- The DirectML device probe exposes only adapter names (no memory size or
+-- adapter type), so only a name that positively identifies a discrete GPU
+-- unlocks parallel Direct Kit; integrated, other-vendor and unnamed adapters
+-- stay on the DirectML stability cap. APU names end in "Graphics", including
+-- "Radeon(TM) RX Vega ... Graphics", so that check comes first.
+_sep.classifyDirectmlSchedulerAdapter = function(name)
+    local lower = string.lower(tostring(name or ""))
+    if lower == "" then return "unknown" end
+    if lower:find("graphics", 1, true) then return "integrated" end
+    if lower:find("radeon", 1, true) and lower:find("%f[%w]rx%f[%W]") then return "discrete" end
+    return "unknown"
+end
+
+-- Adapter a DirectML run will execute on: the explicit directml:N entry, or
+-- for Auto / bare "directml" the default adapter (index 0), which is what
+-- both the Auto resolver and the DrumSep helper bind.
+_sep.resolveDirectmlSchedulerAdapter = function(requestedDevice, runtimeDevices)
+    local req = string.lower(tostring(requestedDevice or "auto"))
+    if req == "" then req = "auto" end
+    local default
+    for _, d in ipairs(runtimeDevices or {}) do
+        local id = string.lower(tostring(d.id or ""))
+        if id == "directml" or id:match("^directml:%d+$") then
+            if id == req then
+                return tostring(d.id), tostring(d.fullName or d.name or "")
+            end
+            if not default and (id == "directml" or id == "directml:0") then
+                default = d
+            end
+        end
+    end
+    if default and (req == "auto" or req == "directml") then
+        return tostring(default.id), tostring(default.fullName or default.name or "")
+    end
+    return "", ""
+end
+
 _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     opts = opts or {}
     local requestedParallel = opts.requestedParallel == true
@@ -19036,7 +19251,13 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     end
 
     if backend == "directml" then
-        if route == "dks_direct" then
+        if route == "dks_direct" and opts.directmlAdapterClass ~= "discrete" then
+            -- Concurrent DrumSep jobs on an integrated DirectML adapter lose the
+            -- device ("The GPU will not respond to more commands").
+            policy.sequentialMode = true
+            policy.cap = _sep.SCHEDULER_POLICY.DKS_DIRECT_DIRECTML_MAX_PARALLEL
+            policy.reason = "directml_multi_track"
+        elseif route == "dks_direct" then
             policy.sequentialMode = false
             if opts.longWorkload then
                 policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_LONG_MAX_PARALLEL)
@@ -19045,6 +19266,28 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
                 policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_SHORT_MAX_PARALLEL)
                 policy.reason = "scheduler_dks_direct_directml_cap4"
             end
+        elseif route == "dks_extract" and opts.directmlAdapterClass == "discrete" then
+            -- Kit Split stage 1 is ordinary separation, not the fragile DrumSep
+            -- helper, and Auto already runs it in parallel on this very adapter
+            -- through the generic GPU branch below. Selecting the same adapter
+            -- explicitly must not be slower for identical execution. Stage 2
+            -- stays capped at 1 independently (directml_fixed_cap1 in
+            -- audio_separator_process.py), so this cannot parallelize DrumSep.
+            policy.sequentialMode = false
+            policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_GPU_MAX_PARALLEL)
+            policy.reason = "scheduler_dks_extract_stage1_directml_discrete_cap4"
+        elseif route == "normal" and opts.directmlAdapterClass == "discrete" then
+            -- Normal Stems is ordinary separation (no DrumSep helper involved),
+            -- and Auto already runs it in parallel on this very adapter through
+            -- the generic GPU branch below (Auto is classified as backend "gpu",
+            -- never "directml", so it never reaches this function at all).
+            -- Selecting the same resolved discrete adapter explicitly must not
+            -- be slower for identical execution. Integrated/unknown adapters
+            -- (e.g. 780M) are not covered by this branch and keep the
+            -- conservative sequential fallback below.
+            policy.sequentialMode = false
+            policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_GPU_MAX_PARALLEL)
+            policy.reason = "scheduler_normal_directml_discrete_cap4"
         else
             policy.sequentialMode = true
             policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL
@@ -19066,6 +19309,26 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
             policy.sequentialMode = true
             policy.cap = 1
             policy.reason = "scheduler_dks_extract_mps_sequential"
+        elseif route == "dks_direct" and tostring(opts.requestedDevice or ""):lower() == "auto" then
+            -- Direct Kit's own DrumSep helper (unlike Kit Split's stage-1
+            -- normal separation) is the fragile, memory-heavy step, so Auto's
+            -- cap is keyed off physical unified memory rather than mirroring
+            -- Kit Split stage-1's blanket cap2. Proven safe at cap=1 on the
+            -- supported M1 8 GB config (2.3.1.3 hardware A/B: cap2 sustained
+            -- kernel-critical memory pressure there for ~5% wall-clock gain).
+            -- Higher-memory Apple Silicon keeps cap2 as a preserved, not yet
+            -- hardware-validated, policy -- unknown RAM defaults to the safe
+            -- side.
+            local ramGiB = tonumber(opts.ramGiB)
+            if ramGiB and ramGiB > 8.5 then
+                policy.sequentialMode = false
+                policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL)
+                policy.reason = "scheduler_dks_direct_mps_cap2"
+            else
+                policy.sequentialMode = true
+                policy.cap = 1
+                policy.reason = "scheduler_dks_direct_mps_low_memory_sequential"
+            end
         else
             policy.sequentialMode = true
             policy.cap = _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL
@@ -19109,7 +19372,21 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     -- is managed separately in audio_separator_process.py.
     if backend == "gpu" then
         policy.sequentialMode = false
-        if route == "dks_extract" and OS == "Windows" and tostring(opts.drumsepStage2SchedulerBackend or "") == "cuda" then
+        if route == "normal" and tostring(opts.directmlSchedulerAdapterId or "") ~= ""
+            and opts.directmlAdapterClass ~= "discrete"
+        then
+            -- Auto resolved onto a registered DirectML adapter that is not a
+            -- named discrete GPU (integrated, e.g. 780M, or an unrecognised
+            -- name). The generic cross-backend GPU parallel cap assumes
+            -- CUDA/ROCm safety margins that do not hold for DirectML; apply
+            -- the same stability policy an explicit selection of this exact
+            -- resolved adapter already gets just above, so the policy is
+            -- keyed on the effective device, not on whether it was chosen by
+            -- Auto or by name.
+            policy.sequentialMode = true
+            policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL
+            policy.reason = "directml_multi_track"
+        elseif route == "dks_extract" and OS == "Windows" and tostring(opts.drumsepStage2SchedulerBackend or "") == "cuda" then
             policy.cap = math.min(jobCount, 2)
             policy.reason = "scheduler_dks_extract_stage1_windows_cuda_cap2"
         else
@@ -20063,7 +20340,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         and hasRuntimeBackendType("mps")
         and not hasRuntimeBackendType("cuda")
         and not hasRuntimeBackendType("directml") then
-        if schedulerRoute == "normal" or schedulerRoute == "dks_extract" then
+        if schedulerRoute == "normal" or schedulerRoute == "dks_extract" or schedulerRoute == "dks_direct" then
             schedulerBackend = "mps"
         else
             schedulerBackend = "cpu"
@@ -20103,10 +20380,30 @@ _sep.runSingleTrackSeparation = function(trackList)
             requestedStage2ModelArg
         ))
     end
+    local directmlSchedulerAdapterId, directmlSchedulerAdapterName, directmlSchedulerAdapterClass = "", "", ""
+    if schedulerBackend == "directml"
+        -- Auto is classified generic "gpu" (classifySchedulerBackend has no
+        -- way to know which backend Auto will resolve to), so without this,
+        -- Normal Stems Auto never learns the resolved adapter's identity at
+        -- all and the policy below cannot tell an Auto-resolved integrated
+        -- DirectML adapter from an Auto-resolved discrete one or a CUDA/ROCm
+        -- GPU. resolveDirectmlSchedulerAdapter harmlessly returns "" when
+        -- this system has no registered DirectML adapter (a CUDA/ROCm Auto
+        -- run), so widening this is safe. Scoped to route == "normal" only:
+        -- DKS/Kit Split Auto scheduling is unrelated to this slice and must
+        -- stay byte-for-byte unchanged.
+        or (schedulerRoute == "normal" and schedulerBackend == "gpu")
+    then
+        directmlSchedulerAdapterId, directmlSchedulerAdapterName =
+            _sep.resolveDirectmlSchedulerAdapter(effectiveRunDevice(), RUNTIME_DEVICES or DEVICES)
+        directmlSchedulerAdapterClass = _sep.classifyDirectmlSchedulerAdapter(directmlSchedulerAdapterName)
+    end
     local schedulerPolicy = _sep.resolveSchedulerConcurrencyPolicy({
         route = schedulerRoute,
         stage = schedulerStage,
         backend = schedulerBackend,
+        directmlAdapterClass = directmlSchedulerAdapterClass,
+        directmlSchedulerAdapterId = directmlSchedulerAdapterId,
         drumsepSchedulerBackend = drumsepSchedulerBackend,
         drumsepStage2SchedulerBackend = drumsepStage2SchedulerBackend,
         requestedDevice = effectiveRunDevice(),
@@ -20268,6 +20565,9 @@ _sep.runSingleTrackSeparation = function(trackList)
             .. "\nscheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none")
             .. "\nscheduler_policy_reason=" .. tostring(multiTrackQueue.schedulerPolicyReason or "none")
             .. "\nscheduler_policy_long_workload=" .. tostring(multiTrackQueue.schedulerPolicyLongWorkload and "yes" or "no")
+            .. "\nscheduler_policy_directml_adapter=" .. tostring(directmlSchedulerAdapterId or "")
+            .. "\nscheduler_policy_directml_adapter_name=" .. tostring(directmlSchedulerAdapterName or "")
+            .. "\nscheduler_policy_directml_adapter_class=" .. tostring(directmlSchedulerAdapterClass or "")
             .. "\nbench_cpu_cap_env=" .. tostring(benchmarkCpuCapEnv or "")
             .. "\nbench_cpu_cap_requested=" .. tostring(benchmarkCpuCapRequested or benchmarkCpuCapRaw)
             .. "\nbench_cpu_cap_applied=" .. tostring(benchmarkCpuCapApplied or "none")
@@ -20373,6 +20673,246 @@ _sep.runSingleTrackSeparation = function(trackList)
 
     -- Show progress window that monitors all jobs
     _sep.showMultiTrackProgressWindow()
+end
+
+-- Linux-only gfx1031 ROCm compatibility override (issue #123): some gfx1031
+-- cards run real GPU kernels under the current ROCm/PyTorch stack only when
+-- HSA_OVERRIDE_GFX_VERSION=10.3.0 is set before HIP initializes, because
+-- gfx1031 isn't in that stack's officially supported gfx target list. This
+-- must stay narrowly scoped to gfx1031 on the ROCm backend; every other
+-- platform/backend/GPU (including RX 9070/gfx1201) keeps today's behavior
+-- untouched, and a value the user already set is never overridden. Result is
+-- cached on multiTrackQueue for the life of the REAPER session since the
+-- underlying hardware/environment cannot change mid-session.
+function resolveGfx1031RocmOverrideEnv()
+    if OS ~= "Linux" then
+        return nil, "not_linux"
+    end
+    if multiTrackQueue and multiTrackQueue.gfx1031OverrideResolved then
+        return multiTrackQueue.gfx1031OverrideValue, multiTrackQueue.gfx1031OverrideSource,
+            multiTrackQueue.gfx1031OverrideDetail
+    end
+
+    local value, source, detail = nil, "not_applicable", nil
+    if tostring(os.getenv("HSA_OVERRIDE_GFX_VERSION") or "") ~= "" then
+        source = "user_environment"
+    else
+        local cap = type(readCapabilities) == "function" and readCapabilities() or nil
+        local backend = cap and cap.kv and string.lower(tostring(cap.kv.BACKEND or "")) or ""
+        if backend == "rocm" then
+            -- REAPER's own process PATH (especially when launched from a
+            -- desktop icon/taskbar rather than a terminal that has sourced
+            -- a ROCm-aware shell profile) commonly does not include ROCm's
+            -- install directory, so relying on a bare `rocminfo` PATH
+            -- lookup alone silently loses the gfx1031 override on machines
+            -- where it is needed most. Nested locals here (rather than
+            -- top-level) to stay under STEMwerk.lua's existing top-level
+            -- local-variable ceiling.
+            local function rocmInfoCandidates()
+                local candidates = { "rocminfo" }
+                local rocmPathEnv = os.getenv("ROCM_PATH")
+                if rocmPathEnv and rocmPathEnv ~= "" then
+                    candidates[#candidates + 1] = rocmPathEnv .. "/bin/rocminfo"
+                end
+                candidates[#candidates + 1] = "/opt/rocm/bin/rocminfo"
+                -- Versioned installs without an /opt/rocm symlink (e.g. /opt/rocm-6.1.0/bin/rocminfo).
+                local globProbe = io.popen("ls -d /opt/rocm-*/bin/rocminfo 2>/dev/null")
+                if globProbe then
+                    for line in globProbe:lines() do
+                        if line and line ~= "" then
+                            candidates[#candidates + 1] = line
+                        end
+                    end
+                    globProbe:close()
+                end
+                return candidates
+            end
+
+            -- "gfx1031", "gfx90a" or torch's "gfx90a:sramecc+:xnack-" -> base
+            -- name; anything else (ISA strings, generic targets) -> nil.
+            local function normalizeGfxArch(token)
+                token = tostring(token or "")
+                local base = token:match("^(gfx%x+)$") or token:match("^(gfx%x+):")
+                return base and base:lower() or nil
+            end
+
+            -- Architectures of the GPU agents in rocminfo output, taken from
+            -- each "Agent N" block's own first "Name:" line (later Name lines
+            -- are ISA entries) and its "Device Type:". Returns nil when there
+            -- is no agent block with GPU evidence, or when any GPU agent's
+            -- architecture cannot be read, so banners, errors or a stray
+            -- "gfx1031" elsewhere in the text never count as evidence.
+            local function parseRocmInfoGpuArchs(out)
+                local archs, unreadable = {}, false
+                local inAgent, agentName, deviceType = false, nil, nil
+                local function closeAgent()
+                    if not inAgent then return end
+                    local arch = normalizeGfxArch(agentName)
+                    if deviceType == "GPU" or (deviceType == nil and arch) then
+                        if arch then archs[#archs + 1] = arch else unreadable = true end
+                    end
+                end
+                for rawLine in (tostring(out) .. "\n"):gmatch("([^\n]*)\n") do
+                    local line = rawLine:gsub("\r$", "")
+                    if line:match("^%s*Agent %d+%s*$") then
+                        closeAgent()
+                        inAgent, agentName, deviceType = true, nil, nil
+                    elseif inAgent then
+                        if agentName == nil then agentName = line:match("^%s*Name:%s*(.-)%s*$") end
+                        if deviceType == nil then deviceType = line:match("^%s*Device Type:%s*(%u+)") end
+                    end
+                end
+                closeAgent()
+                if unreadable or #archs == 0 then return nil end
+                return archs
+            end
+
+            -- Try each candidate location in turn (clean env, mirroring the
+            -- prior single-candidate probe) until one yields parseable GPU
+            -- architectures. io.popen returns a handle even when the
+            -- executable does not exist, so only output proves rocminfo ran.
+            local function probeRocmInfoGpuArchs()
+                local sawOutput = false
+                for _, exe in ipairs(rocmInfoCandidates()) do
+                    local probe = io.popen(
+                        "env -u HSA_OVERRIDE_GFX_VERSION -u HIP_VISIBLE_DEVICES -u ROCR_VISIBLE_DEVICES"
+                            .. " -u CUDA_VISIBLE_DEVICES " .. quoteArg(exe) .. " 2>/dev/null"
+                    )
+                    if probe then
+                        local out = probe:read("*a") or ""
+                        probe:close()
+                        if out ~= "" then
+                            sawOutput = true
+                            local archs = parseRocmInfoGpuArchs(out)
+                            if archs then return archs, true end
+                        end
+                    end
+                end
+                return nil, sawOutput
+            end
+
+            -- HSA_OVERRIDE_GFX_VERSION retargets every ROCm device in the
+            -- worker process, so it is only safe when every identified GPU
+            -- is gfx1031.
+            local function classifyGpuArchs(archs)
+                if #archs == 0 then return "no_devices" end
+                local matches = 0
+                for _, arch in ipairs(archs) do
+                    if arch == "gfx1031" then matches = matches + 1 end
+                end
+                if matches == #archs then return "all_gfx1031" end
+                if matches > 0 then return "mixed_archs" end
+                return "non_gfx1031"
+            end
+
+            -- Distro ROCm packaging (e.g. Fedora) and the pip ROCm torch
+            -- wheels do not need a separate rocminfo binary, so ask the
+            -- managed runtime that will run the job (PYTHON_PATH) for the
+            -- real GPU architecture instead. Runs in its own short-lived
+            -- child (HIP is never initialized in REAPER's process), loads
+            -- no model, and is bounded by coreutils timeout when present.
+            -- Returns the per-device gfx base names, or nil plus a reason.
+            local function probeRuntimeGfxArchs()
+                local py = tostring(PYTHON_PATH or "")
+                if py == "" then return nil, "no_python_path" end
+                local pyHandle = io.open(py, "r")
+                if not pyHandle then return nil, "python_missing" end
+                pyHandle:close()
+                local code = table.concat({
+                    "import sys",
+                    "try:",
+                    "    import torch",
+                    "    hip = getattr(torch.version, 'hip', None) or ''",
+                    "    n = torch.cuda.device_count() if hip and torch.cuda.is_available() else 0",
+                    "    print('STEMWERK_GFX_ARCH_PROBE hip=%s count=%d' % (hip.replace(' ', '_') or 'none', n))",
+                    "    for i in range(n):",
+                    "        a = getattr(torch.cuda.get_device_properties(i), 'gcnArchName', '') or ''",
+                    "        print('STEMWERK_GFX_ARCH_DEVICE %d %s' % (i, a.replace(' ', '_') or 'unknown'))",
+                    "    print('STEMWERK_GFX_ARCH_PROBE_END')",
+                    "except Exception as exc:",
+                    "    print('STEMWERK_GFX_ARCH_PROBE_ERROR %s' % type(exc).__name__)",
+                    "    sys.exit(3)",
+                }, "\n")
+                local probe = io.popen(
+                    "if command -v timeout >/dev/null 2>&1; then set -- timeout -k 5 30; else set --; fi; "
+                        .. "\"$@\" env -u HSA_OVERRIDE_GFX_VERSION -u PYTHONPATH -u PYTHONHOME "
+                        .. quoteArg(py) .. " -c " .. quoteArg(code) .. " 2>/dev/null; "
+                        .. "echo STEMWERK_GFX_ARCH_PROBE_RC=$?"
+                )
+                if not probe then return nil, "spawn_failed" end
+                local out = probe:read("*a") or ""
+                probe:close()
+                local rc = out:match("STEMWERK_GFX_ARCH_PROBE_RC=(%d+)")
+                if rc ~= "0" then
+                    local err = out:match("STEMWERK_GFX_ARCH_PROBE_ERROR (%S+)")
+                    if rc == "124" or rc == "137" then
+                        return nil, "timeout_rc=" .. rc
+                    end
+                    return nil, "exit_rc=" .. tostring(rc or "none") .. (err and (",error=" .. err) or "")
+                end
+                local count = tonumber(out:match("STEMWERK_GFX_ARCH_PROBE hip=%S+ count=(%d+)") or "")
+                if not count or not out:find("STEMWERK_GFX_ARCH_PROBE_END", 1, true) then
+                    return nil, "malformed_output"
+                end
+                local archs = {}
+                for arch in out:gmatch("STEMWERK_GFX_ARCH_DEVICE %d+ ([^\r\n]*)") do
+                    local base = normalizeGfxArch(arch)
+                    if not base then return nil, "malformed_arch" end
+                    archs[#archs + 1] = base
+                end
+                if #archs ~= count then return nil, "malformed_device_count" end
+                return archs
+            end
+
+            local compatValue = "10.3.0"
+            local rocmArchs, rocmSawOutput = probeRocmInfoGpuArchs()
+            if rocmArchs then
+                local state = classifyGpuArchs(rocmArchs)
+                detail = "rocminfo=" .. state .. " archs=" .. table.concat(rocmArchs, ",")
+                if state == "all_gfx1031" then
+                    value = compatValue
+                    source = "stemwerk_compatibility_rule"
+                elseif state == "mixed_archs" then
+                    source = "mixed_gpu_archs_not_overridden"
+                else
+                    source = "rocm_backend_not_gfx1031"
+                end
+            else
+                -- rocminfo absent, silent, failing or without readable GPU
+                -- agents is inconclusive, not a negative.
+                detail = "rocminfo=" .. (rocmSawOutput and "no_arch_evidence" or "no_output")
+                local archs, reason = probeRuntimeGfxArchs()
+                if not archs then
+                    source = "runtime_probe_unavailable"
+                    detail = detail .. " runtime_probe=" .. tostring(reason)
+                else
+                    local state = classifyGpuArchs(archs)
+                    detail = detail .. " runtime_probe=" .. state .. " archs="
+                        .. (#archs > 0 and table.concat(archs, ",") or "none")
+                    if state == "all_gfx1031" then
+                        value = compatValue
+                        source = "stemwerk_compatibility_rule_runtime_probe"
+                    elseif state == "mixed_archs" then
+                        source = "mixed_gpu_archs_not_overridden"
+                    else
+                        source = "runtime_probe_not_gfx1031"
+                    end
+                end
+            end
+            if SW_LOG and type(SW_LOG.logExecResult) == "function" then
+                pcall(SW_LOG.logExecResult, "gfx1031_override: value=" .. tostring(value or "")
+                    .. " source=" .. tostring(source) .. " detail=" .. tostring(detail), nil, "")
+            end
+        end
+    end
+
+    if multiTrackQueue then
+        multiTrackQueue.gfx1031OverrideResolved = true
+        multiTrackQueue.gfx1031OverrideValue = value
+        multiTrackQueue.gfx1031OverrideSource = source
+        multiTrackQueue.gfx1031OverrideDetail = detail
+    end
+    return value, source, detail
 end
 
 -- Start a separation process for one job (no window, just background process)
@@ -20636,6 +21176,10 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         end
     else
         -- Unix: background sh launcher that writes pid.txt and done.txt.
+        local gfx1031OverrideValue, gfx1031OverrideSource, gfx1031OverrideDetail = resolveGfx1031RocmOverrideEnv()
+        -- Negative ROCm outcomes are exported too, so a support bundle can
+        -- show which detection route ran and why no override was applied.
+        local gfx1031ExportSource = gfx1031OverrideSource ~= "not_linux" and gfx1031OverrideSource ~= "not_applicable"
         local launcherPath = job.trackDir .. PATH_SEP .. "run_bg.sh"
         local script = io.open(launcherPath, "w")
           if script then
@@ -20685,6 +21229,15 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
             script:write("  done\n")
             script:write("  export LD_LIBRARY_PATH\n")
             script:write("fi\n")
+            if gfx1031OverrideValue or gfx1031ExportSource then
+                if gfx1031OverrideValue then
+                    script:write("HSA_OVERRIDE_GFX_VERSION=" .. quoteArg(gfx1031OverrideValue) .. "\n")
+                    script:write("export HSA_OVERRIDE_GFX_VERSION\n")
+                end
+                script:write("STEMWERK_GFX1031_OVERRIDE_SOURCE=" .. quoteArg(tostring(gfx1031OverrideSource or "")) .. "\n")
+                script:write("STEMWERK_GFX1031_DETECTION_DETAIL=" .. quoteArg(tostring(gfx1031OverrideDetail or "")) .. "\n")
+                script:write("export STEMWERK_GFX1031_OVERRIDE_SOURCE STEMWERK_GFX1031_DETECTION_DETAIL\n")
+            end
             script:write("(\n")
             script:write('  set -- "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE"\n')
             script:write('  if [ -n "$WORKFLOW_MODE" ]; then set -- "$@" --workflow-mode "$WORKFLOW_MODE"; fi\n')
@@ -20710,8 +21263,17 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
             os.execute(cmd)
         else
             -- Fallback: run in foreground
+            local gfx1031OverridePrefix = ""
+            if gfx1031OverrideValue then
+                gfx1031OverridePrefix = "HSA_OVERRIDE_GFX_VERSION=" .. quoteArg(gfx1031OverrideValue) .. " "
+            end
+            if gfx1031OverrideValue or gfx1031ExportSource then
+                gfx1031OverridePrefix = gfx1031OverridePrefix
+                    .. "STEMWERK_GFX1031_OVERRIDE_SOURCE=" .. quoteArg(tostring(gfx1031OverrideSource or "")) .. " "
+                    .. "STEMWERK_GFX1031_DETECTION_DETAIL=" .. quoteArg(tostring(gfx1031OverrideDetail or "")) .. " "
+            end
             local cmd = string.format(
-                'STEMWERK_PROCESSING_MAY_DOWNLOAD=no STEMWERK_RUN_ID=%s STEMWERK_JOB_ID=%s STEMWERK_RUN_DIR_NAME=%s STEMWERK_RUN_STARTED_UTC=%s %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                gfx1031OverridePrefix .. 'STEMWERK_PROCESSING_MAY_DOWNLOAD=no STEMWERK_RUN_ID=%s STEMWERK_JOB_ID=%s STEMWERK_RUN_DIR_NAME=%s STEMWERK_RUN_STARTED_UTC=%s %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
                 quoteArg(runIdArg),
                 quoteArg(jobIdArg),
                 quoteArg(runDirNameArg),
@@ -21802,9 +22364,14 @@ function drawMultiTrackProgressWindow()
     local totalAudioDur = 0
     local completedAudioDur = 0
     local activeJob = nil
+    local firstJobStartTime = nil
+    local pendingUnknownDuration = false
 
     for _, job in ipairs(multiTrackQueue.jobs) do
         totalAudioDur = totalAudioDur + (job.audioDuration or 0)
+        if job.startTime and (not firstJobStartTime or job.startTime < firstJobStartTime) then
+            firstJobStartTime = job.startTime
+        end
         if job.done then
             completedJobs = completedJobs + 1
             completedAudioDur = completedAudioDur + (job.audioDuration or 0)
@@ -21814,6 +22381,11 @@ function drawMultiTrackProgressWindow()
             -- Estimate completed audio based on progress %
             completedAudioDur = completedAudioDur + (job.audioDuration or 0) * (job.percent or 0) / 100
         end
+        -- A job whose length REAPER could not report makes the remaining-work
+        -- term meaningless, so no ETA is claimed at all while one is pending.
+        if not job.done and (tonumber(job.audioDuration or 0) or 0) <= 0 then
+            pendingUnknownDuration = true
+        end
     end
 
     -- Calculate processing speed (realtime factor)
@@ -21822,16 +22394,23 @@ function drawMultiTrackProgressWindow()
         realtimeFactor = completedAudioDur / globalElapsed
     end
 
-    -- Estimate ETA
-    local eta = 0
-    local remainingAudio = totalAudioDur - completedAudioDur
-    if realtimeFactor > 0 then
-        eta = remainingAudio / realtimeFactor
-    elseif globalElapsed > 0 and overallProgress > 5 then
-        -- Fallback: estimate from progress %
-        local totalEstimate = globalElapsed * 100 / overallProgress
-        eta = totalEstimate - globalElapsed
+    -- Estimate ETA. Throughput is measured from the first job that actually
+    -- started, so queue setup and model load do not deflate it, and the estimate
+    -- is reseeded whenever a job finishes because the completed-audio term jumps
+    -- in one frame at that boundary.
+    if multiTrackQueue.etaCompletedJobs ~= completedJobs then
+        multiTrackQueue.etaCompletedJobs = completedJobs
+        multiTrackQueue.etaSmoothed = nil
     end
+    local eta = estimateQueueEta({
+        totalAudioDur = totalAudioDur,
+        completedAudioDur = completedAudioDur,
+        elapsedSinceFirstJob = (firstJobStartTime and (os.time() - firstJobStartTime)) or 0,
+        overallProgress = overallProgress,
+        pendingUnknownDuration = pendingUnknownDuration,
+        previousEta = multiTrackQueue.etaSmoothed,
+    })
+    multiTrackQueue.etaSmoothed = (eta > 0) and eta or nil
 
     -- Keep the UI minimal in terminal view (like the single-track Processing window).
     local summaryLine1, summaryLine2 = nil, nil

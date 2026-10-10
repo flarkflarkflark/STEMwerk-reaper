@@ -92,6 +92,78 @@ def test_native_extension_must_be_arm64_only(tmp_path, monkeypatch):
     builder.assert_arm64_macho(native)
 
 
+def test_libsamplerate_build_uses_explicit_deployment_target_not_host_default(tmp_path, monkeypatch):
+    """The native libsamplerate.dylib clang invocation must not silently inherit
+    whatever macOS SDK the build host happens to have installed -- it previously
+    had no -mmacosx-version-min flag and no MACOSX_DEPLOYMENT_TARGET, so on a
+    build host newer than the project's audit ceiling (BUNDLED_APPLE_SILICON_
+    MACOS_AUDIT_MAXIMUM, "14.0") the compiled dylib failed macos_macho_minimum_
+    os_too_new. It must reuse the same canonical Apple Silicon deployment
+    target FFmpeg already builds against, not a second divergent literal."""
+    builder = _load_builder()
+    monkeypatch.setattr(builder, "_download_verified", lambda *_a, **_k: None)
+
+    class _FakeArchive:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def extractall(self, path, **_kwargs):
+            source = Path(path) / f"libsamplerate-{builder.LIBSAMPLERATE_VERSION}"
+            (source / "include").mkdir(parents=True, exist_ok=True)
+            src_dir = source / "src"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            for name in ("samplerate.c", "src_linear.c", "src_sinc.c", "src_zoh.c"):
+                (src_dir / name).write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(builder.tarfile, "open", lambda *_a, **_k: _FakeArchive())
+
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, check, env):
+        captured["cmd"] = cmd
+        captured["env"] = env
+        return builder.subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(builder.subprocess, "run", fake_run)
+
+    audited: list[Path] = []
+    monkeypatch.setattr(builder, "assert_arm64_macho", lambda path: audited.append(path))
+
+    builder._build_native_libsamplerate(tmp_path)
+
+    cmd = captured["cmd"]
+    env = captured["env"]
+    assert builder.FFMPEG_DEPLOYMENT_TARGET == "12.0"
+    assert f"-mmacosx-version-min={builder.FFMPEG_DEPLOYMENT_TARGET}" in cmd
+    assert env["MACOSX_DEPLOYMENT_TARGET"] == builder.FFMPEG_DEPLOYMENT_TARGET
+    # Reuses FFmpeg's canonical constant rather than a second hardcoded value.
+    from tools import macos_ffmpeg as _macos_ffmpeg_pkg
+
+    assert builder.FFMPEG_DEPLOYMENT_TARGET is _macos_ffmpeg_pkg.FFMPEG_DEPLOYMENT_TARGET
+
+    # The existing Mach-O maximum-OS audit still runs on the compiled output
+    # and was not weakened or bypassed by adding the deployment-target flag.
+    assert len(audited) == 1
+    assert audited[0].name == "libsamplerate.dylib"
+
+
+def test_libsamplerate_deployment_target_does_not_exceed_audit_maximum(tmp_path, monkeypatch):
+    """Sanity pin: whatever value libsamplerate now builds against must stay
+    under the project's real Mach-O audit ceiling, so a future edit of either
+    constant can't silently reopen this defect."""
+    builder = _load_builder()
+    from tools import macos_ffmpeg as _macos_ffmpeg_pkg
+
+    target = tuple(int(part) for part in builder.FFMPEG_DEPLOYMENT_TARGET.split("."))
+    maximum = tuple(
+        int(part) for part in _macos_ffmpeg_pkg.BUNDLED_APPLE_SILICON_MACOS_AUDIT_MAXIMUM.split(".")
+    )
+    assert target <= maximum
+
+
 def test_macho_probe_uses_magic_before_lipo(tmp_path, monkeypatch):
     builder = _load_builder()
     candidate = tmp_path / "native.bin"

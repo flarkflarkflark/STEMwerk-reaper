@@ -334,7 +334,24 @@ function WORKFLOW.updateProgressFromFile()
     if lastProgress then
         local prevPercent = tonumber(C.progressState.percent) or 0
         local prevStage = tostring(C.progressState.stage or "")
-        C.progressState.percent = lastProgress.percent
+        local workflowSource = tostring(C.progressState.workflowSource or "")
+        -- The drum workflows emit STAGE-LOCAL percentages: Kit Split stage 2 and
+        -- Direct Kit both restart their own counter, so painting them straight
+        -- onto the overall bar makes it jump backwards. Reuse the very same
+        -- normalizer the multi-item queue already applies so both paths agree.
+        -- The raw value is kept for diagnostics and milestone reporting.
+        C.progressState.rawPercent = lastProgress.percent
+        if type(C.normalizeProgressPercent) == "function"
+            and (workflowSource == "dks_extract" or workflowSource == "dks_direct") then
+            C.progressState.percent = C.normalizeProgressPercent(
+                lastProgress.percent,
+                lastProgress.stage,
+                workflowSource,
+                prevPercent
+            )
+        else
+            C.progressState.percent = lastProgress.percent
+        end
         C.progressState.stage = lastProgress.stage
         if lastProgress.percent ~= prevPercent or tostring(lastProgress.stage or "") ~= prevStage then
             touchProgressActivity("progress_update")
@@ -406,6 +423,9 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
     C.progressState._deviceName = nil
     C.progressState._runtimeSelected = nil
     C.progressState._normalizedDeviceRequest = nil
+    C.progressState._backendRuntime = nil
+    C.progressState._effectiveDevice = nil
+    C.progressState._drumsepHelperDeviceArg = nil
     C.progressState._runtimeGpuCapable = nil
     C.progressState._runtimeDeviceNames = nil
     C.progressState._stage1Runtime = nil
@@ -710,6 +730,11 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
         local lf = io.open(logFile, "w")
         if lf then lf:close() end
 
+        -- Same gfx1031 ROCm decision as the multi-track launcher in STEMwerk.lua;
+        -- the single-item worker must receive it in its own environment.
+        local gfx1031OverrideValue, gfx1031OverrideSource, gfx1031OverrideDetail = resolveGfx1031RocmOverrideEnv()
+        local gfx1031ExportSource = gfx1031OverrideSource ~= "not_linux" and gfx1031OverrideSource ~= "not_applicable"
+
         local launcherPath = outputDir .. PATH_SEP .. "run_bg.sh"
         local script = io.open(launcherPath, "w")
         if script then
@@ -776,6 +801,15 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             script:write("  done\n")
             script:write("  export LD_LIBRARY_PATH\n")
             script:write("fi\n")
+            if gfx1031OverrideValue or gfx1031ExportSource then
+                if gfx1031OverrideValue then
+                    script:write("HSA_OVERRIDE_GFX_VERSION=" .. C.quoteArg(gfx1031OverrideValue) .. "\n")
+                    script:write("export HSA_OVERRIDE_GFX_VERSION\n")
+                end
+                script:write("STEMWERK_GFX1031_OVERRIDE_SOURCE=" .. C.quoteArg(tostring(gfx1031OverrideSource or "")) .. "\n")
+                script:write("STEMWERK_GFX1031_DETECTION_DETAIL=" .. C.quoteArg(tostring(gfx1031OverrideDetail or "")) .. "\n")
+                script:write("export STEMWERK_GFX1031_OVERRIDE_SOURCE STEMWERK_GFX1031_DETECTION_DETAIL\n")
+            end
             script:write("(\n")
             script:write('  set -- "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE"\n')
             script:write('  if [ -n "$WORKFLOW_MODE" ]; then set -- "$@" --workflow-mode "$WORKFLOW_MODE"; fi\n')
@@ -812,7 +846,16 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             if requestedStage2ModelArg ~= "" then
                 extraArgs = extraArgs .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)
             end
-            local cmd = string.format(
+            local gfx1031OverridePrefix = ""
+            if gfx1031OverrideValue then
+                gfx1031OverridePrefix = "HSA_OVERRIDE_GFX_VERSION=" .. C.quoteArg(gfx1031OverrideValue) .. " "
+            end
+            if gfx1031OverrideValue or gfx1031ExportSource then
+                gfx1031OverridePrefix = gfx1031OverridePrefix
+                    .. "STEMWERK_GFX1031_OVERRIDE_SOURCE=" .. C.quoteArg(tostring(gfx1031OverrideSource or "")) .. " "
+                    .. "STEMWERK_GFX1031_DETECTION_DETAIL=" .. C.quoteArg(tostring(gfx1031OverrideDetail or "")) .. " "
+            end
+            local cmd = gfx1031OverridePrefix .. string.format(
                 'STEMWERK_PROCESSING_MAY_DOWNLOAD=no STEMWERK_RUN_ID=%s STEMWERK_JOB_ID=%s STEMWERK_RUN_DIR_NAME=%s STEMWERK_RUN_STARTED_UTC=%s %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE > %s',
                 C.quoteArg(runIdArg),
                 C.quoteArg(jobIdArg),

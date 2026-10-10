@@ -186,6 +186,23 @@ bundled_stemwerk_core_wheel() {
   return 1
 }
 
+managed_stemwerk_core_wheel() {
+  [ -n "${MANAGED_WHEELS_DIR:-}" ] && [ -d "${MANAGED_WHEELS_DIR}" ] || return 1
+  _managed_core_wheel=""
+  _managed_core_wheel_count=0
+  for _wheel in "${MANAGED_WHEELS_DIR}"/stemwerk_core-*.whl; do
+    [ -f "${_wheel}" ] || continue
+    _managed_core_wheel="${_wheel}"
+    _managed_core_wheel_count=$((_managed_core_wheel_count + 1))
+  done
+  if [ "${_managed_core_wheel_count}" -gt 1 ]; then
+    log "Managed stemwerk-core wheel selection is ambiguous in ${MANAGED_WHEELS_DIR}"
+    return 2
+  fi
+  [ "${_managed_core_wheel_count}" -eq 1 ] || return 1
+  printf "%s\n" "${_managed_core_wheel}"
+}
+
 bundled_models_dir() {
   [ -d "${BUNDLED_PAYLOAD_DIR}/models" ] || return 1
   printf "%s\n" "${BUNDLED_PAYLOAD_DIR}/models"
@@ -1346,11 +1363,38 @@ resolve_core_target() {
     log "Required: pyproject.toml, src/stemwerk_core/__init__.py, src/stemwerk_core/separator.py"
   fi
 
-  CORE_BUNDLE_DIR="${STEMWERK_CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"
+  if [ -n "${STEMWERK_CORE_BUNDLE_DIR:-}" ]; then
+    CORE_BUNDLE_DIR="${STEMWERK_CORE_BUNDLE_DIR}"
+    if [ -d "${CORE_BUNDLE_DIR}" ]; then
+      if is_core_source_bundle "${CORE_BUNDLE_DIR}"; then
+        CORE_TARGET="${CORE_BUNDLE_DIR}"
+        CORE_TARGET_DESC="STEMWERK_CORE_BUNDLE_DIR source"
+        CORE_SUPPORTS_EXTRAS=1
+        return 0
+      fi
+      log "Configured stemwerk-core source is incomplete: ${CORE_BUNDLE_DIR}"
+      log "Required: pyproject.toml, src/stemwerk_core/__init__.py, src/stemwerk_core/separator.py"
+    fi
+    return 1
+  fi
+
+  _managed_core_wheel=""
+  _managed_core_wheel_rc=0
+  _managed_core_wheel="$(managed_stemwerk_core_wheel)" || _managed_core_wheel_rc=$?
+  if [ "${_managed_core_wheel_rc}" -eq 2 ]; then
+    return 1
+  fi
+  if [ -n "${_managed_core_wheel}" ]; then
+    CORE_TARGET="${_managed_core_wheel}"
+    CORE_TARGET_DESC="managed wheel"
+    return 0
+  fi
+
+  CORE_BUNDLE_DIR="${BUNDLED_CORE_DIR}"
   if [ -d "${CORE_BUNDLE_DIR}" ]; then
     if is_core_source_bundle "${CORE_BUNDLE_DIR}"; then
       CORE_TARGET="${CORE_BUNDLE_DIR}"
-      CORE_TARGET_DESC="bundled source"
+      CORE_TARGET_DESC="vendored source"
       CORE_SUPPORTS_EXTRAS=1
       return 0
     fi
@@ -1492,7 +1536,11 @@ PROFILE="mac-cpu"
 BACKEND="cpu"
 BACKEND_REASON=""
 STEP_INDEX=""
-STEP_TOTAL="5"
+if [ "${MAC_ARCH}" = "x86_64" ]; then
+  STEP_TOTAL="4"
+else
+  STEP_TOTAL="5"
+fi
 STEP_LABEL=""
 SELECTED_PYTHON_VERSION=""
 FIRST_UNSUPPORTED_PYTHON_PATH=""
@@ -2069,7 +2117,9 @@ log "MACOS_BUNDLED_FFMPEG_STATUS=${MACOS_BUNDLED_FFMPEG_STATUS}"
 log "MACOS_FFMPEG_VALIDATED=${FFMPEG_VALIDATED}"
 log "MACOS_FFMPEG_VALIDATION_REASON=${FFMPEG_VALIDATION_REASON}"
 
-set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"
+if [ "${MAC_ARCH}" != "x86_64" ]; then
+  set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"
+fi
 
 if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   FINAL_RUNTIME_VERIFIED="yes"
@@ -2161,7 +2211,14 @@ if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
     fi
   fi
 fi
-if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
+if [ "${MAC_ARCH}" = "x86_64" ]; then
+  if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
+    READY_RUNTIME_STATUS="skipped"
+    READY_DRUMSEP_MODEL_STATUS="skipped"
+    READY_DETAIL="unsupported_mac_intel"
+    log "drumsep_ready_status=unsupported_mac_intel"
+  fi
+elif [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   _bundled_drumsep_dir="$(bundled_drumsep_dir || true)"
   if [ -n "${_bundled_drumsep_dir}" ]; then
     if copy_bundled_models_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"; then
@@ -2170,35 +2227,28 @@ if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
       MACOS_BUNDLED_DRUMSEP_STATUS="copy_failed"
     fi
   fi
-  if [ "${MAC_ARCH}" = "x86_64" ]; then
-    READY_RUNTIME_STATUS="skipped"
-    READY_DRUMSEP_MODEL_STATUS="skipped"
-    READY_DETAIL="unsupported_mac_intel"
-    log "drumsep_ready_status=unsupported_mac_intel"
+  if ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"; then
+    READY_RUNTIME_STATUS="ok"
+    READY_DRUMSEP_MODEL_STATUS="ok"
+    READY_DETAIL="ok"
   else
-    if ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"; then
-      READY_RUNTIME_STATUS="ok"
-      READY_DRUMSEP_MODEL_STATUS="ok"
-      READY_DETAIL="ok"
-    else
-      log "drumsep_model_prefetch_detail=${DRUMSEP_PREFETCH_DETAIL:-unknown}"
-      READY_RUNTIME_STATUS="missing"
-      READY_DRUMSEP_MODEL_STATUS="missing"
-      case "${DRUMSEP_PREFETCH_DETAIL:-}" in
-        asset_integrity_mismatch:*)
-          READY_DETAIL="drumsep_model_integrity_failed"
-          set_status "deps_failed" "drumsep_model_integrity_failed"
-          ;;
-        asset_download_failed:*|download_checks_write_failed:*|runtime_download_checks_missing|drumsep_yaml_filename_missing|builtin_fallback|catalog_entry_missing)
-          READY_DETAIL="drumsep_model_download_failed"
-          set_status "deps_failed" "drumsep_model_download_failed"
-          ;;
-        *)
-          READY_DETAIL="drumsep_model_prefetch_failed"
-          set_status "deps_failed" "drumsep_model_prefetch_failed"
-          ;;
-      esac
-    fi
+    log "drumsep_model_prefetch_detail=${DRUMSEP_PREFETCH_DETAIL:-unknown}"
+    READY_RUNTIME_STATUS="missing"
+    READY_DRUMSEP_MODEL_STATUS="missing"
+    case "${DRUMSEP_PREFETCH_DETAIL:-}" in
+      asset_integrity_mismatch:*)
+        READY_DETAIL="drumsep_model_integrity_failed"
+        set_status "deps_failed" "drumsep_model_integrity_failed"
+        ;;
+      asset_download_failed:*|download_checks_write_failed:*|runtime_download_checks_missing|drumsep_yaml_filename_missing|builtin_fallback|catalog_entry_missing)
+        READY_DETAIL="drumsep_model_download_failed"
+        set_status "deps_failed" "drumsep_model_download_failed"
+        ;;
+      *)
+        READY_DETAIL="drumsep_model_prefetch_failed"
+        set_status "deps_failed" "drumsep_model_prefetch_failed"
+        ;;
+    esac
   fi
 fi
 write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${READY_MAIN_RUNTIME_STATUS}"

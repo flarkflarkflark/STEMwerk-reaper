@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -56,6 +57,32 @@ def test_diffq_wheels_contain_native_code_for_the_right_arch():
             assert so_files, f"no .so in {wheel.name}"
             out = subprocess.run(["file", str(so_files[0])], capture_output=True, text=True).stdout
             assert arch in out, f"{wheel.name}: expected {arch} in {out.strip()}"
+
+
+@pytest.mark.skipif(shutil.which("otool") is None, reason="Mach-O audit requires macOS otool")
+def test_diffq_native_extensions_have_required_macho_uuid():
+    for wheel in (
+        WHEELS_ARM64 / "diffq-0.2.4-cp312-cp312-macosx_11_0_arm64.whl",
+        WHEELS_X64 / "diffq-0.2.4-cp312-cp312-macosx_11_0_x86_64.whl",
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            with zipfile.ZipFile(wheel) as archive:
+                archive.extractall(tmp)
+            so_files = list(Path(tmp).rglob("bitpack*.so"))
+            assert len(so_files) == 1, f"expected one bitpack extension in {wheel.name}"
+            result = subprocess.run(
+                ["otool", "-l", str(so_files[0])],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            assert "LC_UUID" in result.stdout, f"{wheel.name} lacks required LC_UUID"
+
+
+def test_x86_diffq_build_recipe_preserves_and_audits_macho_uuid():
+    recipe = (ROOT / "tools/darwin-wheelhouse/build_x86_64_wheels.sh").read_text(encoding="utf-8")
+    assert '-Wl,-no_uuid' not in recipe
+    assert 'otool -l "${SO}" | grep -q "LC_UUID"' in recipe
 
 
 def test_bootstrap_onnxruntime_pin_matrix_and_macos_floor():

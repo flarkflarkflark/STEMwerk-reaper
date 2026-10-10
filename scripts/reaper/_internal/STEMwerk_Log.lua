@@ -446,9 +446,14 @@ function SW_LOG.classifyModelFailure(logText, stdoutText)
         or lower:find("f7e0c4bc%-ba3fe64a%.th", 1) ~= nil
         or lower:find("demucs", 1, true) ~= nil
         or lower:find("audio_separator_model_dir", 1, true) ~= nil
+    -- Deliberately NOT a bare lower:find("download", 1, true): audio-separator
+    -- logs benign, successful lines like "already exists ... skipping download"
+    -- on every clean-cache local model load, which made an unrelated later
+    -- crash (e.g. a CUDA kernel-support failure, issue #118) get misclassified
+    -- as a network/download failure. Only match text that is itself specific
+    -- to a failed download attempt.
     local hasDownloadContext = lower:find("dl.fbaipublicfiles.com", 1, true) ~= nil
         or lower:find("https://dl.fbaipublicfiles.com", 1, true) ~= nil
-        or lower:find("download", 1, true) ~= nil
         or lower:find("connectionerror", 1, true) ~= nil
 
     local function extractFirst(pattern)

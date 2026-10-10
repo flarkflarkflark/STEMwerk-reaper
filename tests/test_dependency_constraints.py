@@ -651,15 +651,16 @@ def test_linux_setup_reports_five_top_level_steps_when_ready_runtime_runs():
     assert '"5. Drum Kit runtime"' in setup_internal
 
 
-def test_macos_setup_reports_five_top_level_steps_for_reapack_bootstrap():
+def test_macos_setup_reports_four_intel_steps_and_five_apple_silicon_steps():
     bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
-    assert 'STEP_TOTAL="5"' in bootstrap
+    assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then\n  STEP_TOTAL="4"\nelse\n  STEP_TOTAL="5"\nfi' in bootstrap
     assert 'set_progress "1" "${STEP_TOTAL}" "Preparing runtime"' in bootstrap
     assert 'set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"' in bootstrap
     assert 'set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"' in bootstrap
     assert 'set_progress "4" "${STEP_TOTAL}" "Checking FFmpeg"' in bootstrap
     assert 'set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"' in bootstrap
+    assert 'if [ "${MAC_ARCH}" != "x86_64" ]; then\n  set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"\nfi' in bootstrap
     assert 'set_progress "4" "${STEP_TOTAL}" "Finalizing setup"' not in bootstrap
 
 
@@ -1182,12 +1183,21 @@ def test_normal_mps_scheduler_cap2_slice_preserves_parallel_launch_limiter():
     assert ' .. " cap=" .. tostring(multiTrackQueue.parallelJobLimit or "none")' in script
 
 
-def test_normal_auto_mps_slice_prefers_mps_without_changing_dks_routes():
+def test_normal_auto_mps_slice_prefers_mps_and_now_also_classifies_dks_direct():
+    # 2.3.1.3: dks_direct joined normal/dks_extract in the Auto-on-Apple-
+    # Silicon "mps" classification (it was the one route still forced onto
+    # the old CPU misclassification here; explicit_mps_conservative in
+    # resolveSchedulerConcurrencyPolicy separately keys its actual cap off
+    # physical RAM -- see test_dks_direct_mps_branch_is_memory_scaled_not_a_
+    # bare_hardcode in test_macos_dks_direct_auto_mps_scheduler_cap_2313.py).
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 
     assert 'if string.lower(tostring(effectiveRunDevice() or "")) == "auto"' in script
     assert 'and hasRuntimeBackendType("mps")' in script
-    assert 'if schedulerRoute == "normal" or schedulerRoute == "dks_extract" then' in script
+    assert (
+        'if schedulerRoute == "normal" or schedulerRoute == "dks_extract"'
+        ' or schedulerRoute == "dks_direct" then'
+    ) in script
     assert 'schedulerBackend = "mps"' in script
     assert 'schedulerBackend = "cpu"' in script
     assert 'if isDrumKitMultiRun and workflowSourceArg == "dks_direct" then' in script
@@ -1235,7 +1245,10 @@ def test_drumkit_stage2_cpu_default_stays_cap1_without_benchmark_override(monkey
     assert "lua_dks_extract_stage2_concurrency_cap=1" in captured.err
 
 
-def test_drumkit_stage2_gpu_default_policy_uses_cap4_without_benchmark_override(monkeypatch, tmp_path, capsys):
+def test_drumkit_stage2_gpu_default_policy_uses_cap2_without_benchmark_override(monkeypatch, tmp_path, capsys):
+    # Was cap=4 through 2.3.1.3; lowered to cap=2 after the release-gate found
+    # 4 concurrent stage-2 DrumSep jobs stalling on a single ROCm GPU (see
+    # test_linux_amd_kitsplit_stage2_rocm_cap.py for the full finding).
     module = _load_audio_separator_process_module()
     monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
     monkeypatch.delenv("STEMWERK_BENCH_CPU_CAP", raising=False)
@@ -1245,10 +1258,10 @@ def test_drumkit_stage2_gpu_default_policy_uses_cap4_without_benchmark_override(
         pass
     captured = capsys.readouterr()
     assert "bench_dks_stage2_cap_requested=unset" in captured.err
-    assert "bench_dks_stage2_cap_applied=4" in captured.err
+    assert "bench_dks_stage2_cap_applied=2" in captured.err
     assert "bench_dks_stage2_cap_ignored_reason=not_requested" in captured.err
-    assert "dks_extract_stage2_effective_cap=4" in captured.err
-    assert "lua_dks_extract_stage2_concurrency_cap=4" in captured.err
+    assert "dks_extract_stage2_effective_cap=2" in captured.err
+    assert "lua_dks_extract_stage2_concurrency_cap=2" in captured.err
 
 
 def test_normal_workflow_provenance_is_explicit_in_lua_summary_and_python_stderr():
@@ -2540,7 +2553,7 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert "bench_dks_stage2_cap_applied=" in script
     assert "bench_dks_stage2_cap_ignored_reason=" in script
     assert "dks_extract_stage2_effective_cap=" in script
-    assert "DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 4" in script
+    assert "DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 2" in script
     assert 'def _dks_extract_stage2_lock(output_root: Path, stage2_backend: str = ""):' in script
     assert "stage2_backend = _detect_dks_extract_stage2_backend(runtime_kind, runtime_info, drumsep_python)" in script
     assert "with _dks_extract_stage2_lock(output_root, stage2_backend):" in script
@@ -2576,7 +2589,7 @@ def test_drumkit_stage2_benchmark_cap_parser_accepts_only_allowed_values_and_res
 
     monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
     assert module._read_benchmark_dks_stage2_cap_request() == (None, "unset")
-    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "unset", 4, "not_requested")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "unset", 2, "not_requested")
 
     monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "2")
     assert module._read_benchmark_dks_stage2_cap_request() == (2, "2")
@@ -2589,7 +2602,7 @@ def test_drumkit_stage2_benchmark_cap_parser_accepts_only_allowed_values_and_res
 
     monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "8")
     assert module._read_benchmark_dks_stage2_cap_request() == (None, "8")
-    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "8", 4, "invalid_request")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "8", 2, "invalid_request")
 
     monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "1")
     assert module._read_benchmark_dks_stage2_cap_request() == (1, "1")
@@ -5351,7 +5364,7 @@ def _assert_readme_release_contract(readme, target_version):
 
 def test_shipped_readme_identifies_current_public_2311_release_and_assets():
     repository_version = Path("VERSION").read_text(encoding="utf-8").strip()
-    assert repository_version == "2.3.1.2"
+    assert repository_version == "2.3.1.3"
     target_version = repository_version
 
     readme = Path("README.md").read_text(encoding="utf-8")
@@ -5367,7 +5380,7 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
     deliberately-unpublished Linux native packages or the separate-channel
     offline/allmodels pkg advertised as release assets, and dropped published
     rows."""
-    assert Path("VERSION").read_text(encoding="utf-8").strip() == "2.3.1.2"
+    assert Path("VERSION").read_text(encoding="utf-8").strip() == "2.3.1.3"
     target_version = Path("VERSION").read_text(encoding="utf-8").strip()
     real_readme = Path("README.md").read_text(encoding="utf-8")
 
@@ -5528,22 +5541,66 @@ def test_windows_fetch_runtime_assets_declares_pinned_checksums_and_immutable_ff
     script = Path("installer/windows/fetch_runtime_assets.sh").read_text(encoding="utf-8")
     ps1 = Path("installer/windows/fetch_runtime_assets.ps1").read_text(encoding="utf-8")
 
-    assert 'PYTHON_SHA256="fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in script
-    assert 'FFMPEG_SHA256="fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9"' in script
-    assert "gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip\"" not in script
-    assert (
-        'FFMPEG_URL="https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"'
-        in script
+    expected_version = "9.0.1"
+    expected_archive = f"ffmpeg-{expected_version}-essentials_build.zip"
+    expected_url = (
+        "https://github.com/GyanD/codexffmpeg/releases/download/"
+        f"{expected_version}/{expected_archive}"
     )
+    expected_sha256 = "fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9"
+    stale_url = (
+        "https://www.gyan.dev/ffmpeg/builds/packages/"
+        "ffmpeg-9.0.1-essentials_build.zip"
+    )
+
+    shell_url = re.search(r'^FFMPEG_URL="([^"]+)"$', script, re.MULTILINE)
+    shell_sha256 = re.search(r'^FFMPEG_SHA256="([0-9a-f]{64})"$', script, re.MULTILINE)
+    shell_file = re.search(r'^FFMPEG_FILE="([^"]+)"$', script, re.MULTILINE)
+    powershell_url = re.search(r'^\$ffmpegUrl = "([^"]+)"$', ps1, re.MULTILINE)
+    powershell_sha256 = re.search(r'^\$ffmpegSha256 = "([0-9a-f]{64})"$', ps1, re.MULTILINE)
+    powershell_file = re.search(r'^\$ffmpegFile = "([^"]+)"$', ps1, re.MULTILINE)
+
+    assert all(
+        match is not None
+        for match in (
+            shell_url,
+            shell_sha256,
+            shell_file,
+            powershell_url,
+            powershell_sha256,
+            powershell_file,
+        )
+    )
+
+    assert 'PYTHON_SHA256="fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in script
+    assert shell_url.group(1) == powershell_url.group(1) == expected_url
+    assert shell_sha256.group(1) == powershell_sha256.group(1) == expected_sha256
+    assert shell_file.group(1) == powershell_file.group(1) == "ffmpeg-release-essentials.zip"
+    assert expected_url.endswith(f"/download/{expected_version}/{expected_archive}")
+    assert stale_url not in script
+    assert stale_url not in ps1
+    assert "gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip\"" not in script
     assert "verify_sha256" in script
+    assert 'download_if_missing "$FFMPEG_URL" "$FFMPEG_DIR/$FFMPEG_FILE" "$FFMPEG_SHA256"' in script
 
     assert '$pythonSha256 = "fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in ps1
-    assert '$ffmpegSha256 = "fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9"' in ps1
-    assert (
-        '$ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"'
-        in ps1
-    )
     assert "Verify-Sha256" in ps1
+    assert "Download-IfMissing $ffmpegUrl (Join-Path $ffmpegDir $ffmpegFile) $ffmpegSha256" in ps1
+
+
+def test_windows_bundled_ffmpeg_archive_contract_requires_ffmpeg_and_ffprobe():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(
+        encoding="utf-8-sig"
+    )
+
+    archive_validator = bootstrap[
+        bootstrap.index("function TestFfmpegArchive") : bootstrap.index(
+            "function GetFfmpegDownloadFailure"
+        )
+    ]
+    assert '$_ -like "*/bin/ffmpeg.exe"' in archive_validator
+    assert '$_ -like "*/bin/ffprobe.exe"' in archive_validator
+    assert "return ($hasFfmpeg -and $hasFfprobe)" in archive_validator
 
 
 def test_windows_fetch_runtime_assets_accepts_bytes_matching_expected_checksum(tmp_path):
@@ -5995,6 +6052,28 @@ def test_setup_internal_luac_compiles_under_reaper_limits():
     assert result.returncode == 0, result.stderr or result.stdout
 
 
+def test_main_script_luac_compiles_under_reaper_limits():
+    """STEMwerk.lua sits just under Lua's hard ceiling of 200 top-level locals,
+    so one more `local` in the main chunk stops the whole script compiling --
+    a total product failure that no behavioural test would reach, because the
+    file never loads. Same luac -p mechanism as the Setup_Internal guard above.
+    """
+    luac = shutil.which("luac")
+    if not luac:
+        pytest.skip("luac not available")
+    result = subprocess.run(
+        [luac, "-p", "scripts/reaper/STEMwerk.lua"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = result.stderr or result.stdout
+    assert result.returncode == 0 and "too many local variables" not in output, (
+        "STEMwerk.lua no longer compiles; if this mentions 'too many local variables', "
+        "make the newly added top-level function a global instead of a local.\n" + output
+    )
+
+
 def test_support_bundle_windows_zip_helper_prefers_python_and_writes_clean_entries(tmp_path):
     script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
 
@@ -6338,8 +6417,8 @@ def test_macos_build_script_excludes_appledouble_sidecars_and_repacks_clean_payl
     assert "repack_pkg_without_appledouble()" in script
     assert 'mkbom "$STAGE" "$PACKAGE_REPACK_DIR/Bom"' in script
     assert "find . -print | cpio -o --format odc --owner 0:80" in script
-    assert 'xar -xf "$OUTPUT_PKG"' in script
-    assert 'xar --compression none -cf "$OUTPUT_PKG" Bom Payload Scripts PackageInfo' in script
+    assert 'xar -xf "$COMPONENT_PKG"' in script
+    assert 'xar --compression none -cf "$COMPONENT_PKG" Bom Payload Scripts PackageInfo' in script
     assert script.index('remove_appledouble_sidecars "$STAGE"') < script.index("pkgbuild \\")
     assert script.index("pkgbuild \\") < script.index("repack_pkg_without_appledouble\n")
 
@@ -6714,6 +6793,9 @@ def test_single_track_workflow_uses_run_snapshot_device_and_resets_progress_devi
     assert "C.progressState._deviceName = nil" in workflow_script
     assert "C.progressState._runtimeSelected = nil" in workflow_script
     assert "C.progressState._normalizedDeviceRequest = nil" in workflow_script
+    assert "C.progressState._backendRuntime = nil" in workflow_script
+    assert "C.progressState._effectiveDevice = nil" in workflow_script
+    assert "C.progressState._drumsepHelperDeviceArg = nil" in workflow_script
     assert "C.progressState._runtimeGpuCapable = nil" in workflow_script
     assert "C.progressState._runtimeDeviceNames = nil" in workflow_script
     assert "C.progressState._stage1Runtime = nil" in workflow_script
@@ -7399,7 +7481,7 @@ def test_darwin_wheelhouse_sha256_identity():
         "scripts/reaper/vendor/wheels/darwin-arm64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_arm64.whl": "bf65321f2360e0be40bc6441e299531aec547eb0024382182c179206e37d29db",
         "scripts/reaper/vendor/wheels/darwin-arm64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_arm64.whl": "adb4c3e63fae815e6856e6a75d24d09e47f614d478316dc4cad479301d685531",
         "scripts/reaper/vendor/wheels/darwin-arm64-cp312/stemwerk_core-0.1.1-py3-none-any.whl": "e4555cd9179a5927c0121b140e3f98c36bfd6d4a5bb7b7d25a1786be7250a981",
-        "scripts/reaper/vendor/wheels/darwin-x86_64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_x86_64.whl": "d06a8ccdf3048d76442a680dd89fd0932837cd56b62a9d0564f7584bf57a9a68",
+        "scripts/reaper/vendor/wheels/darwin-x86_64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_x86_64.whl": "51a41e40354aa306a810fb8120ca2483acf01fd9b407d01a0a52e9cba749b257",
         "scripts/reaper/vendor/wheels/darwin-x86_64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_x86_64.whl": "3d5bcd3b72cf45b9d447cd8b5903b3b62b32fe9405384d9388eecb197a4a78f6",
         "scripts/reaper/vendor/wheels/darwin-x86_64-cp312/stemwerk_core-0.1.1-py3-none-any.whl": "e4555cd9179a5927c0121b140e3f98c36bfd6d4a5bb7b7d25a1786be7250a981",
     }
@@ -7805,12 +7887,16 @@ def test_result_window_keeps_method_line_and_uses_runtime_metadata_sanitizer():
     assert 'data.effectiveDevice = tostring((state and (state._effectiveDevice or state._drumsepHelperDeviceArg)) or "")' in script
     assert 'function sanitizeUserFacingMethodLabel(candidate)' in script
     assert 'function resolveSingleTrackMethodLabel(data)' in script
-    assert 'if methodLabel == "CPU" then return "CPU" end' in script
-    assert 'if methodLabel ~= "" then return "GPU" end' in script
+    # Method (CPU vs GPU), Backend (the implementation) and Device (only when
+    # trustworthy) are resolved once and shared by the single-item and
+    # multi-item branches, so their wording cannot diverge.
+    assert 'function resolveResultReportingTriple(data)' in script
+    assert 'if label == cpuLabel then return cpuLabel, "", "" end' in script
+    assert 'local methodLabel = resolveResultReportingTriple(data)' in script
     assert 'return sanitizeUserFacingMethodLabel(data and data.methodLabel or "")' in script
-    assert 'string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)' in script
-    assert 'local methodLabel = resolveSingleTrackMethodLabel(data)' in script
-    assert 'line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)' in script
+    assert 'string.format(trSafeValue("result_method_line", "Method: %s"), method)' in script
+    assert 'local methodSuffix, methodDetail = resultMethodReportingText(data)' in script
+    assert 'line2 = line2 .. methodSuffix' in script
     assert 'resultData.methodLabel = tostring(resolveResultMethodLabel(resultData) or resultData.methodLabel or "")' in script
     assert 'local resolvedMethod = resolveResultMethodLabel(data)' in script
     assert 'if resolvedMethod ~= "" then' in script
@@ -7888,7 +7974,13 @@ def test_linux_setup_existing_runtime_view_uses_compact_top_right_mode_summary()
     assert 'gfx.drawstr(setupText("setup_modes_title", "Modes"))' in setup_script
     assert 'local summaryLabel = compactModeSummaryLabel(c)' in setup_script
     assert 'summaryLabel .. " · " .. tostring(c.sub or "")' not in setup_script
-    assert 'ellipsizeToWidth(summaryLabel, summaryInnerW - 22' in setup_script
+    assert 'local legendCols = 1' in setup_script
+    assert 'legendCols = 4' in setup_script
+    assert 'legendCols = 2' in setup_script
+    assert 'local legendGridRows = math.ceil(#summaryRows / legendCols)' in setup_script
+    assert 'for i = 1, #summaryRows do' in setup_script
+    assert 'local maxRowsThatFit' not in setup_script
+    assert 'local shown = math.min(#summaryRows, maxRowsThatFit)' not in setup_script
     assert 'local headerBottom = math.max(y, midPanelY + midPanelH)' in setup_script
     assert 'layout.btnY = math.max(layout.btnY, headerBottom + headerGap)' in setup_script
     assert 'setup_summary_drumkit_rocm = "DrumKit ROCm"' in langs
@@ -8456,11 +8548,18 @@ def test_windows_installer_uses_five_step_progress_and_drumkit_finish_copy():
     assert "FindLastPos('[3/5]', Text)" in script
     assert "FindLastPos('[2/5]', Text)" in script
     assert "FindLastPos('[1/5]', Text)" in script
-    assert "What was installed:" in script
-    assert "Installed locations:" in script
-    assert "Next step:" in script
-    assert "%APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper" in script
-    assert "%LOCALAPPDATA%\\STEMwerk" in script
+    # P2.1 replaced the overflowing narrative with native structured rows.
+    assert "Installed components" in script
+    assert "FinishedPathsHeading" in script
+    assert "FinishedStatusNames[4]" in script
+    assert "FinishedPathEdits[3].Text := GetLogPath;" in script
+    assert "Use STEMwerk: Setup to check the runtime (Check only)." in script
+    # Live validation found these literal %APPDATA%/%LOCALAPPDATA% placeholders
+    # displayed unresolved next to otherwise-real C:\Users\... paths; P2 fixed
+    # them to use the same resolved-path accessors ({app}, GetRuntimeBasePath)
+    # every other part of the wizard already uses.
+    assert "ExpandConstant('{app}')" in script
+    assert "GetRuntimeBasePath" in script
 
 
 def test_windows_update_patch_forces_current_runtime_repair_after_script_update():

@@ -159,16 +159,23 @@ def test_windows_mutating_dispatch_fails_closed_and_points_to_the_installer() ->
 
 def test_windows_choices_dispatch_chokepoint_only_reaches_startwindowssetup_via_menu() -> None:
     text = _read(SETUP_INTERNAL)
-    # startWindowsSetup must have exactly one *call* site (its own def line
-    # excluded): the dispatch inside existingRuntimeSetupMenuTick, itself
-    # only reachable for ids that buildSetupMenuChoices puts in `choices` --
-    # which no longer includes any mutating id on Windows (proven by the
-    # headless test above).
+    # startWindowsSetup has exactly two *call* sites (its own def line
+    # excluded), both Windows-only: the dispatch inside
+    # existingRuntimeSetupMenuTick (only reachable for ids that
+    # buildSetupMenuChoices puts in `choices`, which no longer includes any
+    # mutating id on Windows), and the 2.3.1.3 Repair/Rebuild venv guard in
+    # the shared final window, which Windows reaches via Check only. Both hit
+    # its fail-closed guard (see tests/test_2313_windows_repair_dispatch.py).
     call_sites = [
         idx for idx in range(len(text))
         if text.startswith("startWindowsSetup(", idx) and text[max(0, idx - 9):idx] != "function "
     ]
-    assert len(call_sites) == 1, f"expected exactly one call site for startWindowsSetup, found {len(call_sites)}"
+    assert len(call_sites) == 2, f"expected exactly two call sites for startWindowsSetup, found {len(call_sites)}"
+    menu_idx = text.index("startWindowsSetup(runtime, separatorScript, chosen, true)")
+    assert 'if OS == "Windows" then' in text[menu_idx - 60:menu_idx]
+    final_idx = text.index('startWindowsSetup(LINUX_SETUP.runtime, LINUX_SETUP.separatorScript, "repair", true)')
+    assert 'elseif (b.action == "repair" or b.action == "rebuild_venv") and OS == "Windows" then' in text[final_idx - 400:final_idx]
+    assert sorted(call_sites) == sorted([menu_idx, final_idx])
 
 
 def test_windows_notices_no_longer_reference_removed_actions() -> None:
@@ -338,8 +345,9 @@ def test_console_autoscroll_follows_tail_and_respects_manual_scroll() -> None:
 
 def test_autoscroll_code_is_shared_with_macos_not_windows_specific() -> None:
     # linuxSetupTick / LINUX_SETUP is used for both Linux and macOS
-    # (startLinuxSetup has no OS gate), and never for Windows (which uses the
-    # entirely separate WINDOWS_SETUP / windowsSetupTick).
+    # (startLinuxSetup has no OS gate). Windows reaches it only as the
+    # Check-only final window (finalizeWindowsVerify -> showDeferredFinalWindow);
+    # its sole Windows branch is the 2.3.1.3 Repair/Rebuild venv installer guard.
     #
     # 2.3.1.1 Finding 6 (adversarial review) INVERTED this test's original
     # premise: the completion-follow/autoscroll behavior turned out to be a
@@ -357,7 +365,10 @@ def test_autoscroll_code_is_shared_with_macos_not_windows_specific() -> None:
     tick_start = text.index("function linuxSetupTick()")
     tick_end = text.index("\ndo\n", tick_start)
     tick_body = text[tick_start:tick_end]
-    assert 'OS == "Windows"' not in tick_body, "this shared code must never branch on Windows -- Windows never reaches it"
+    windows_guard = 'elseif (b.action == "repair" or b.action == "rebuild_venv") and OS == "Windows" then'
+    assert tick_body.count('OS == "Windows"') == 1 and windows_guard in tick_body, (
+        "the only Windows branch in this shared code must be the Repair/Rebuild venv installer guard"
+    )
     assert tick_body.count("linuxConsoleAutoscrollAppliesOnThisOS()") == 2, (
         "exactly the two completion-follow/autoscroll gate sites (running-phase pull-to-bottom, "
         "deferred completion reset) must dispatch through the shared predicate"
@@ -439,8 +450,14 @@ def test_installer_finished_page_no_longer_offers_check_or_repair_in_reaper() ->
     assert "check or repair the runtime" not in text, (
         "the installer finished-page must no longer tell the user STEMwerk: Setup can repair the runtime"
     )
-    idx = text.index("function BuildFinishedSummaryText")
-    end = text.index("\nfunction FindLastPos", idx)
+    # This guidance is success-path text: only a successfully completed
+    # install should tell the user to run "Setup: Check" and treat the
+    # installer as the repair path. BuildFinishedSummaryText (#120(b)/
+    # #122(b)) is now a thin dispatcher between BuildFinishedSuccessSummaryText
+    # and BuildFinishedFailureSummaryText, so anchor on the function that
+    # actually owns this text.
+    idx = text.index("function BuildFinishedSuccessSummaryText")
+    end = text.index("\nfunction BuildFinishedFailureSummaryText", idx)
     section = text[idx:end]
     assert "LText('- Use STEMwerk: Setup to check the runtime (Check only). " in section
     assert "re-run this STEMwerk installer to repair it." in section, "EN finished-page text must point to the external installer for repair"
@@ -544,12 +561,21 @@ def test_performpostbootstrap_literal_messages_route_through_windows_safe_reason
 
 def test_windows_reachable_repair_button_text_stays_confined_to_linux_macos_only_code() -> None:
     # Defense-in-depth, narrowly scoped: the literal "Repair"/"Rebuild venv"
-    # action-button labels must remain only inside linuxDrawFinal (confirmed
-    # Linux/macOS-only, never called by WINDOWS_SETUP/windowsSetupTick) and
-    # buildCheckOnlyFinalMessage (reachable only via verifyExistingSetup,
-    # which existingRuntimeSetupMenuTick's own dispatch never calls for
-    # Windows -- windowsVerifyStart is used there instead).
+    # action-button labels live in linuxDrawFinal and
+    # buildCheckOnlyFinalMessage. buildCheckOnlyFinalMessage is reachable only
+    # via verifyExistingSetup, which existingRuntimeSetupMenuTick's dispatch
+    # never calls for Windows (windowsVerifyStart is used there instead).
+    # linuxDrawFinal IS reached on Windows (windowsVerifyStart ->
+    # finalizeWindowsVerify -> showDeferredFinalWindow), so its Repair/Rebuild
+    # venv buttons are gated by linuxFinalOffersInReaperRepair(); the real
+    # route is exercised in tests/test_2313_windows_repair_dispatch.py.
     text = _read(SETUP_INTERNAL)
+    draw_start = text.index("function linuxDrawFinal(")
+    draw_body = text[draw_start:text.index("\nend\n", draw_start)]
+    gate_idx = draw_body.index("if linuxFinalOffersInReaperRepair() then")
+    assert gate_idx < draw_body.index('{ label = "Repair", action = "repair"') < draw_body.index("\n        end\n", gate_idx)
+    assert gate_idx < draw_body.index('{ label = "Rebuild venv", action = "rebuild_venv" }') < draw_body.index("\n        end\n", gate_idx)
+    assert "function linuxFinalOffersInReaperRepair()\n    return OS ~= \"Windows\"\nend" in text
     assert 'existingRuntimeSetupMenuTick' in text
     dispatch_idx = text.index('if chosen == "verify" then')
     dispatch_region = text[dispatch_idx:dispatch_idx + 250]

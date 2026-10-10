@@ -8,6 +8,9 @@ BUNDLED_PAYLOAD_ROOT="$ROOT_DIR/scripts/reaper/_bundled/macos/apple-silicon"
 PAYLOAD_MANIFEST="$ROOT_DIR/installer/macos/payload-manifest.txt"
 PAYLOAD_AUDITOR="$ROOT_DIR/installer/macos/audit_payload.py"
 PACKAGE_AUDITOR="$ROOT_DIR/installer/macos/audit_pkg.py"
+DISTRIBUTION_FILE="$ROOT_DIR/installer/macos/Distribution.xml"
+BRANDING_ASSET="$ROOT_DIR/installer/assets/stemwerk.png"
+BRANDING_RENDERER="$ROOT_DIR/installer/macos/render_installer_logo.py"
 
 VERSION="${STEMWERK_VERSION:-}"
 PKG_ID="com.flarkaudio.stemwerk"
@@ -70,11 +73,16 @@ esac
 STAGE="$ROOT_DIR/installer/macos/build/$VARIANT/root"
 PAYLOAD_DEST="$STAGE/Users/Shared/STEMwerk-reaper/_bundled/macos/apple-silicon"
 OUTPUT_PKG="$OUT_DIR/STEMwerk-$VERSION$OUTPUT_SUFFIX.pkg"
+BUILD_DIR="$ROOT_DIR/installer/macos/build/$VARIANT"
+COMPONENT_PKG="$BUILD_DIR/STEMwerk-component.pkg"
+INSTALLER_RESOURCES="$BUILD_DIR/installer-resources"
+BRANDING_RESIZE="$BUILD_DIR/stemwerk-installer-128.png"
 PAYLOAD_INVENTORY="$ROOT_DIR/installer/macos/build/$VARIANT/payload-inventory.json"
 PACKAGE_AUDIT_REPORT="$ROOT_DIR/installer/macos/build/$VARIANT/final-package-audit.json"
 PACKAGE_REPACK_DIR=""
 
 cleanup() {
+  rm -f "$BRANDING_RESIZE"
   if [[ -n "$PACKAGE_REPACK_DIR" && -d "$PACKAGE_REPACK_DIR" ]]; then
     rm -rf "$PACKAGE_REPACK_DIR"
   fi
@@ -89,7 +97,7 @@ repack_pkg_without_appledouble() {
   PACKAGE_REPACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/stemwerk-macos-pkg-repack.XXXXXX")"
   (
     cd "$PACKAGE_REPACK_DIR"
-    xar -xf "$OUTPUT_PKG"
+    xar -xf "$COMPONENT_PKG"
   )
 
   mkbom "$STAGE" "$PACKAGE_REPACK_DIR/Bom"
@@ -98,15 +106,28 @@ repack_pkg_without_appledouble() {
     find . -print | cpio -o --format odc --owner 0:80 2>/dev/null | gzip -c > "$PACKAGE_REPACK_DIR/Payload"
   )
 
-  rm -f "$OUTPUT_PKG"
+  rm -f "$COMPONENT_PKG"
   (
     cd "$PACKAGE_REPACK_DIR"
-    xar --compression none -cf "$OUTPUT_PKG" Bom Payload Scripts PackageInfo
+    xar --compression none -cf "$COMPONENT_PKG" Bom Payload Scripts PackageInfo
   )
 }
 
-rm -rf "$STAGE"
-mkdir -p "$OUT_DIR" "$STAGE/Users/Shared/STEMwerk-reaper"
+rm -rf "$STAGE" "$INSTALLER_RESOURCES"
+rm -f "$COMPONENT_PKG" "$BRANDING_RESIZE"
+mkdir -p "$OUT_DIR" "$STAGE/Users/Shared/STEMwerk-reaper" "$INSTALLER_RESOURCES"
+
+# Installer.app branding is a product-archive resource, not payload content.
+# Derive a compact presentation copy from the canonical repository logo so
+# the Installer background is branded without placing a 512px image behind
+# the package text. First retain the established sips resize exactly, then
+# change only alpha bytes outside a deterministic rounded mask. Both package
+# variants use this shared resource path.
+sips -Z 128 "$BRANDING_ASSET" --out "$BRANDING_RESIZE" >/dev/null
+python3 "$BRANDING_RENDERER" \
+  "$BRANDING_RESIZE" \
+  "$INSTALLER_RESOURCES/stemwerk.png"
+rm -f "$BRANDING_RESIZE"
 
 PAYLOAD_ROOT="$STAGE/Users/Shared/STEMwerk-reaper"
 awk -F '\t' '
@@ -160,9 +181,16 @@ pkgbuild \
   --scripts "$SCRIPTS_DIR" \
   --identifier "$PKG_ID" \
   --version "$VERSION" \
-  "$OUTPUT_PKG"
+  "$COMPONENT_PKG"
 
 repack_pkg_without_appledouble
+
+rm -f "$OUTPUT_PKG"
+productbuild \
+  --distribution "$DISTRIBUTION_FILE" \
+  --resources "$INSTALLER_RESOURCES" \
+  --package-path "$BUILD_DIR" \
+  "$OUTPUT_PKG"
 
 PYTHONDONTWRITEBYTECODE=1 python3 "$PACKAGE_AUDITOR" \
   --package "$OUTPUT_PKG" \

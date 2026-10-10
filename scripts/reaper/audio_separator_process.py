@@ -101,7 +101,7 @@ DRUMSEP_RUNTIME_CUDA_DIRNAME = ".venv-drumsep-cuda"
 DRUMSEP_RUNTIME_DIRECTML_DIRNAME = ".venv-drumsep-directml"
 DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
 DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
-DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 4
+DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 2  # ROCm/CUDA DrumSep stage 2: 4 concurrent jobs on one GPU stalls (see 2.3.1.3 Linux AMD release-gate finding); cap=2 is proven stable
 DKS_EXTRACT_STAGE2_BENCHMARK_CAPS = {1, 2, 4}
 BENCHMARK_CPU_CAPS = {1, 2, 4}
 BENCHMARK_MPS_CAP_MIN = 1
@@ -113,6 +113,11 @@ LOW_VRAM_THRESHOLD_BYTES = 6 * 1024 * 1024 * 1024
 CUDA_DKS_RUNTIME_GUIDANCE = "CUDA Drum Kit Split failed on this GPU. Try CPU/low-VRAM mode or rebuild/repair runtime."
 DRUMSEP_HELPER_POLL_INTERVAL_SECONDS = 2.0
 DRUMSEP_HELPER_NO_OUTPUT_STALL_SECONDS = 60 * 60
+# Bound for one cold-start import/device probe of a DrumSep runtime interpreter
+# (not processing liveness). Healthy slow Windows CPU machines were measured at
+# up to ~30 s (issue #127), so the old 30 s bound misreported them as broken.
+DRUMSEP_RUNTIME_VERIFY_TIMEOUT_SECONDS = 120
+DRUMSEP_RUNTIME_VERIFY_TIMEOUT_DETAIL_PREFIX = "verify_timeout:"
 
 
 def _prefer_vendored_stemwerk_core() -> None:
@@ -1247,6 +1252,34 @@ def _emit_direct_dks_runtime_unsupported_markers(requested_model: str, resolved_
         print(f"Detail: {detail}", file=sys.stderr)
 
 
+def _drumsep_runtime_failure_is_verify_timeout_only(runtime_info: Dict[str, Any]) -> bool:
+    """True when every probed (non-missing) DrumSep interpreter only timed out.
+
+    Any concrete failure (import error, non-zero exit, device mismatch, ...)
+    keeps the selection classified as broken.
+    """
+    details: List[str] = []
+    for key, attempts in (runtime_info or {}).items():
+        if not str(key).endswith("_attempts") or not isinstance(attempts, list):
+            continue
+        for attempt in attempts:
+            if isinstance(attempt, dict):
+                detail = str(attempt.get("detail") or "")
+                if detail and detail != "missing":
+                    details.append(detail)
+    return bool(details) and all(d.startswith(DRUMSEP_RUNTIME_VERIFY_TIMEOUT_DETAIL_PREFIX) for d in details)
+
+
+def _drumsep_runtime_unavailable_reason(runtime_kind: str, runtime_info: Dict[str, Any], requested_device: str) -> str:
+    if runtime_kind != "missing" and _drumsep_runtime_failure_is_verify_timeout_only(runtime_info):
+        return "drumsep_runtime_verify_timeout"
+    if str(requested_device or "").strip().lower() == "cpu":
+        reason = "drumsep_cpu_runtime_missing" if runtime_kind == "missing" else "drumsep_cpu_runtime_broken"
+    else:
+        reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
+    return reason
+
+
 def _emit_direct_dks_stage2_runtime_markers(reason: str, python_path: Path, detail: str = "") -> None:
     print("error_stage=stage2_runtime", file=sys.stderr)
     print(f"error_reason={reason}", file=sys.stderr)
@@ -1256,9 +1289,17 @@ def _emit_direct_dks_stage2_runtime_markers(reason: str, python_path: Path, deta
     guidance = DRUMSEP_RUNTIME_GUIDANCE
     if reason in {"drumsep_cpu_runtime_missing", "drumsep_cpu_runtime_broken"}:
         guidance = "CPU Drum Kit Split runtime is missing or broken. Run Setup/Repair Drum Kit Split runtime before using the CPU option."
+    elif reason == "drumsep_runtime_verify_timeout":
+        guidance = (
+            f"The Drum Kit Split runtime check did not finish within {DRUMSEP_RUNTIME_VERIFY_TIMEOUT_SECONDS} seconds. "
+            "This does not show the runtime is broken; it can happen on a slow or busy first start. "
+            "Run the job again; use Setup/Repair only if this keeps happening."
+        )
     print(f"guidance={guidance}", file=sys.stderr)
     if reason in {"drumsep_runtime_missing", "drumsep_cpu_runtime_missing"}:
         print("Direct Drum Kit Split runtime is not installed.", file=sys.stderr)
+    elif reason == "drumsep_runtime_verify_timeout":
+        print("Direct Drum Kit Split runtime check timed out.", file=sys.stderr)
     else:
         print("Direct Drum Kit Split runtime is broken.", file=sys.stderr)
     print(guidance, file=sys.stderr)
@@ -2293,10 +2334,14 @@ print(json.dumps({
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=30,
+            timeout=DRUMSEP_RUNTIME_VERIFY_TIMEOUT_SECONDS,
             env=_clean_env(),
             **_windows_no_window_kwargs(),
         )
+    except subprocess.TimeoutExpired:
+        # subprocess.run() has already killed and reaped the probe. Running out
+        # of time is inconclusive, not evidence that the runtime is broken.
+        return False, f"{DRUMSEP_RUNTIME_VERIFY_TIMEOUT_DETAIL_PREFIX}{DRUMSEP_RUNTIME_VERIFY_TIMEOUT_SECONDS}s", {}
     except Exception as exc:
         return False, f"verify_spawn_failed:{type(exc).__name__}:{exc}", {}
 
@@ -2602,13 +2647,130 @@ def _select_drumsep_runtime(
             info["selection_policy"] = "explicit_cpu"
             info["cpu_python_attempts"] = cpu_attempts
             return selected_cpu_python, "cpu", info
+
+        # No dedicated CPU DrumSep runtime (.venv-drumsep) exists or it is
+        # broken. On Linux, a ROCm DrumSep runtime (.venv-drumsep-rocm), when
+        # present, is a fully CPU-capable Python environment in its own
+        # right (proven: real production DrumSep helper run, device=cpu,
+        # inside .venv-drumsep-rocm -- effective_device/model_device=cpu,
+        # CPUExecutionProvider, no GPU touched). Probing it with
+        # require_gpu=False here only checks that its interpreter and
+        # required packages import cleanly, exactly like the cpu_candidates
+        # probe above -- it does not require the GPU to be present or
+        # working. This mirrors the existing cuda-falls-back-to-cpu and
+        # mps-falls-back-to-cpu conventions elsewhere in this function: fall
+        # through to the next tier regardless of whether the preferred tier
+        # was "missing" or "broken".
+        rocm_cpu_detail = "missing"
+        rocm_cpu_attempts: List[Dict[str, Any]] = []
+        if sys.platform.startswith("linux"):
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_as_cpu_start", file=sys.stderr)
+            selected_rocm_cpu_python, rocm_cpu_detail, rocm_cpu_payload, rocm_cpu_attempts = _probe_drumsep_runtime_candidates(
+                rocm_candidates, require_gpu=False
+            )
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_as_cpu_end detail={rocm_cpu_detail}", file=sys.stderr)
+            if selected_rocm_cpu_python is not None:
+                info = dict(rocm_cpu_payload or {})
+                info["kind"] = "cpu"
+                info["detail"] = rocm_cpu_detail
+                info["fallback_reason"] = f"cpu_skipped:{cpu_detail}"
+                info["selection_policy"] = "explicit_cpu_via_rocm_runtime"
+                info["runtime_source_family"] = "rocm"
+                info["cpu_python_attempts"] = cpu_attempts
+                info["rocm_cpu_python_attempts"] = rocm_cpu_attempts
+                return selected_rocm_cpu_python, "cpu", info
+
+        # No dedicated CPU DrumSep runtime (.venv-drumsep) exists or it is
+        # broken. On Windows, a DirectML DrumSep runtime
+        # (.venv-drumsep-directml), when present, is a fully CPU-capable
+        # Python environment in its own right: the DrumSep helper
+        # (stemwerk_drumsep_process.py) only calls torch_directml.device()
+        # / sets use_directml=True when --device directml is passed -- for
+        # --device cpu it always takes the plain mdx_params/demucs_params/
+        # mdxc_params={"device": "cpu"} path, identical to a dedicated CPU
+        # venv, regardless of which venv hosts the interpreter. Probing it
+        # here with require_gpu=False only checks that its interpreter and
+        # required packages import cleanly, exactly like the cpu_candidates
+        # probe above -- it does not require DirectML/the GPU to be present
+        # or working. This mirrors the Linux ROCm-as-CPU fallback above:
+        # fall through to the next tier regardless of whether the preferred
+        # tier was "missing" or "broken".
+        directml_cpu_detail = "missing"
+        directml_cpu_attempts: List[Dict[str, Any]] = []
+        if _is_windows_runtime():
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_directml_as_cpu_start", file=sys.stderr)
+            selected_directml_cpu_python, directml_cpu_detail, directml_cpu_payload, directml_cpu_attempts = _probe_drumsep_runtime_candidates(
+                directml_candidates, require_gpu=False
+            )
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_directml_as_cpu_end detail={directml_cpu_detail}", file=sys.stderr)
+            if selected_directml_cpu_python is not None:
+                info = dict(directml_cpu_payload or {})
+                info["kind"] = "cpu"
+                info["detail"] = directml_cpu_detail
+                info["fallback_reason"] = f"cpu_skipped:{cpu_detail}"
+                info["selection_policy"] = "explicit_cpu_via_directml_runtime"
+                info["runtime_source_family"] = "directml"
+                info["cpu_python_attempts"] = cpu_attempts
+                info["directml_cpu_python_attempts"] = directml_cpu_attempts
+                return selected_directml_cpu_python, "cpu", info
+
+        # No dedicated CPU DrumSep runtime (.venv-drumsep) exists or it is
+        # broken, and no DirectML runtime is present either. On Windows, a
+        # CUDA DrumSep runtime (.venv-drumsep-cuda), when present, is a fully
+        # CPU-capable Python environment in its own right: the DrumSep helper
+        # only enables GPU execution when --device cuda is passed -- for
+        # --device cpu it always takes the plain mdx_params/demucs_params/
+        # mdxc_params={"device": "cpu"} path, identical to a dedicated CPU
+        # venv, regardless of which venv hosts the interpreter. Probing it
+        # here with require_gpu=False only checks that its interpreter and
+        # required packages import cleanly, exactly like the cpu_candidates
+        # probe above -- it does not require CUDA/the GPU to be present or
+        # working. This mirrors the Linux ROCm-as-CPU and Windows
+        # DirectML-as-CPU fallbacks above: fall through to the next tier
+        # regardless of whether the preferred tier was "missing" or "broken".
+        # build_drumsep_subprocess_env additionally blanks CUDA_VISIBLE_DEVICES
+        # / NVIDIA_VISIBLE_DEVICES whenever backend=="cpu", so the CUDA-capable
+        # interpreter cannot see the GPU even though it is CUDA-capable.
+        cuda_cpu_detail = "missing"
+        cuda_cpu_attempts: List[Dict[str, Any]] = []
+        if _is_windows_runtime():
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_as_cpu_start", file=sys.stderr)
+            selected_cuda_cpu_python, cuda_cpu_detail, cuda_cpu_payload, cuda_cpu_attempts = _probe_drumsep_runtime_candidates(
+                cuda_candidates, require_gpu=False
+            )
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_as_cpu_end detail={cuda_cpu_detail}", file=sys.stderr)
+            if selected_cuda_cpu_python is not None:
+                info = dict(cuda_cpu_payload or {})
+                info["kind"] = "cpu"
+                info["detail"] = cuda_cpu_detail
+                info["fallback_reason"] = f"cpu_skipped:{cpu_detail};directml_skipped:{directml_cpu_detail}"
+                info["selection_policy"] = "explicit_cpu_via_cuda_runtime"
+                info["runtime_source_family"] = "cuda"
+                info["cpu_python_attempts"] = cpu_attempts
+                info["directml_cpu_python_attempts"] = directml_cpu_attempts
+                info["cuda_cpu_python_attempts"] = cuda_cpu_attempts
+                return selected_cuda_cpu_python, "cpu", info
+
         info = {
             "cpu_detail": cpu_detail,
             "cpu_python": str(cpu_python),
             "cpu_python_attempts": cpu_attempts,
+            "rocm_cpu_detail": rocm_cpu_detail,
+            "rocm_cpu_python_attempts": rocm_cpu_attempts,
+            "directml_cpu_detail": directml_cpu_detail,
+            "directml_cpu_python_attempts": directml_cpu_attempts,
+            "cuda_cpu_detail": cuda_cpu_detail,
+            "cuda_cpu_python_attempts": cuda_cpu_attempts,
             "selection_policy": "explicit_cpu",
         }
-        reason = "missing" if cpu_detail == "missing" else "broken"
+        reason = (
+            "missing"
+            if cpu_detail == "missing"
+            and rocm_cpu_detail == "missing"
+            and directml_cpu_detail == "missing"
+            and cuda_cpu_detail == "missing"
+            else "broken"
+        )
         return None, reason, info
 
     if explicit_cuda and sys.platform.startswith("linux"):
@@ -2627,6 +2789,50 @@ def _select_drumsep_runtime(
             info["selection_policy"] = "explicit_cuda"
             info["cuda_python_attempts"] = cuda_attempts
             return selected_cuda_python, "cuda", info
+
+        # No genuine NVIDIA CUDA runtime verified. AMD/HIP GPUs also live
+        # under the torch.cuda / "cuda:N" namespace on ROCm builds of
+        # PyTorch -- a literal "cuda:0" request on Linux is not proof the
+        # physical backend is NVIDIA, so before falling back to CPU, check
+        # the ROCm candidate against the exact same live capability test
+        # Auto's gpu_prefer_rocm branch already trusts (require_gpu=True:
+        # torch_hip non-empty, torch_cuda_available, real device names) --
+        # not merely whether .venv-drumsep-rocm exists on disk. This only
+        # runs after the real NVIDIA check above has already failed, so a
+        # machine with genuine NVIDIA CUDA available is never redirected to
+        # ROCm. On a genuine NVIDIA machine with no ROCm runtime installed,
+        # this candidate is simply absent (detail=="missing"), so this falls
+        # straight through to the unmodified CPU fallback below.
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_for_cuda_namespace_start", file=sys.stderr)
+        selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(
+            rocm_candidates, require_gpu=True
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_for_cuda_namespace_end detail={rocm_detail}", file=sys.stderr)
+        if selected_rocm_python is not None:
+            info = dict(rocm_payload or {})
+            info["kind"] = "rocm"
+            info["detail"] = rocm_detail
+            info["fallback_reason"] = f"cuda_skipped:{cuda_detail}"
+            info["selection_policy"] = "explicit_cuda_namespace_resolved_rocm"
+            info["rocm_python_attempts"] = rocm_attempts
+            info["cuda_python_attempts"] = cuda_attempts
+            return selected_rocm_python, "rocm", info
+        if rocm_detail != "missing":
+            # .venv-drumsep-rocm exists (Setup/Repair specifically provisioned
+            # it for this machine) but failed its own ROCm capability check --
+            # this is a ROCm runtime problem, not evidence this is a plain
+            # CPU-only machine. Report it as such instead of chasing the
+            # (irrelevant here) CPU fallback below, which would otherwise
+            # misattribute the failure to .venv-drumsep.
+            info = {
+                "cuda_detail": cuda_detail,
+                "rocm_detail": rocm_detail,
+                "rocm_python": str(rocm_python),
+                "cuda_python_attempts": cuda_attempts,
+                "rocm_python_attempts": rocm_attempts,
+                "selection_policy": "explicit_cuda_namespace_resolved_rocm",
+            }
+            return None, "broken", info
 
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
         selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(
@@ -2968,6 +3174,17 @@ def _run_direct_dks_drumsep_helper(
             return None
         return max(0, min(99, int(matches[-1].group(1))))
 
+    def helper_inference_band_percent(raw_percent: int) -> int:
+        """Map the helper's inference progress into the reserved 1..90 band.
+
+        The helper's tqdm reaching 100% means its inference loop finished, not
+        that the job did: reconstruction and six WAV writes still follow. 95 is
+        owned by "Writing drum tracks" and 100 by genuine completion, so helper
+        progress must never present itself as either.
+        """
+        bounded = max(0, min(99, int(raw_percent)))
+        return max(1, min(90, 1 + (bounded * 89) // 99))
+
     def helper_file_signature(path: Path) -> Tuple[int, int]:
         try:
             stat = path.stat()
@@ -3019,7 +3236,7 @@ def _run_direct_dks_drumsep_helper(
                 elapsed = int(now - start_time)
                 percent = min(12, 1 + elapsed // 10)
             else:
-                percent = observed_progress
+                percent = helper_inference_band_percent(observed_progress)
             if percent != last_percent:
                 print(f"PROGRESS:{percent}:Splitting drum kit...", flush=True)
                 last_percent = percent
@@ -4368,6 +4585,26 @@ def main():
     write_done = _setup_reaper_io(args.output_dir if args.output_dir else None)
     _write_worker_context(args.output_dir if args.output_dir else None)
     emit_phase("python_start")
+    if sys.platform.startswith("linux"):
+        _hsa_override_gfx_version = os.environ.get("HSA_OVERRIDE_GFX_VERSION", "")
+        if _hsa_override_gfx_version:
+            print(f"STEMWERK_DIAG hsa_override_gfx_version={_hsa_override_gfx_version}", file=sys.stderr)
+            print(
+                "STEMWERK_DIAG hsa_override_gfx_version_source="
+                f"{os.environ.get('STEMWERK_GFX1031_OVERRIDE_SOURCE') or 'user_environment'}",
+                file=sys.stderr,
+            )
+        elif os.environ.get("STEMWERK_GFX1031_OVERRIDE_SOURCE"):
+            print(
+                "STEMWERK_DIAG gfx1031_override_not_applied_source="
+                f"{os.environ.get('STEMWERK_GFX1031_OVERRIDE_SOURCE')}",
+                file=sys.stderr,
+            )
+        if os.environ.get("STEMWERK_GFX1031_DETECTION_DETAIL"):
+            print(
+                f"STEMWERK_DIAG gfx1031_detection_detail={os.environ.get('STEMWERK_GFX1031_DETECTION_DETAIL')}",
+                file=sys.stderr,
+            )
     ffmpeg_path, ffmpeg_wrapper, ffmpeg_path_prefix = _configure_ffmpeg_runtime()
     model_cache_dir = _configure_model_cache_runtime()
     if ffmpeg_path is not None:
@@ -4472,11 +4709,7 @@ def main():
         print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
         print(f"dks_extract_stage2_backend={runtime_kind}", file=sys.stderr)
         if drumsep_python is None:
-            requested_runtime = str(device_preference or "").strip().lower()
-            if requested_runtime == "cpu":
-                reason = "drumsep_cpu_runtime_missing" if runtime_kind == "missing" else "drumsep_cpu_runtime_broken"
-            else:
-                reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
+            reason = _drumsep_runtime_unavailable_reason(runtime_kind, runtime_info, device_preference)
             runtime_path = Path(
                 str(
                     runtime_info.get("cuda_python")
@@ -4665,11 +4898,7 @@ def main():
         drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)
         print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
         if drumsep_python is None:
-            requested_runtime = str(device_preference or "").strip().lower()
-            if requested_runtime == "cpu":
-                reason = "drumsep_cpu_runtime_missing" if runtime_kind == "missing" else "drumsep_cpu_runtime_broken"
-            else:
-                reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
+            reason = _drumsep_runtime_unavailable_reason(runtime_kind, runtime_info, device_preference)
             runtime_path = Path(
                 str(
                     runtime_info.get("cuda_python")

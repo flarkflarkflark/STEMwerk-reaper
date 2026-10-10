@@ -387,8 +387,11 @@ class TestRunContextAuthorityUntouched:
     future authorized change to it. The guard is scoped instead to the
     actual protected RunContext-authority surface: the diff must not touch
     any line mentioning the worker/run/job-identity symbols below anywhere
-    in either file. STEMwerk_Log.lua remains fully untouched by this fix,
-    so it keeps the stronger whole-file check."""
+    in either file. STEMwerk_Log.lua is treated the same way as
+    STEMwerk_Save_Support_Bundle.lua below: future unrelated edits to it
+    (e.g. its own model-failure/download classifier, unrelated to
+    RunContext authority) are allowed; edits that touch a protected
+    run_id/job_id/RunContext-authority symbol are not."""
 
     RUNCONTEXT_AUTHORITY_MARKERS = (
         "run_id", "job_id", "worker_context", "current_processing",
@@ -400,19 +403,28 @@ class TestRunContextAuthorityUntouched:
         "readCurrentProcessingRecord",
     )
 
-    def test_diagnostics_log_file_not_touched(self):
+    def test_runcontext_authority_symbols_untouched_in_diagnostics_log(self):
         import subprocess as sp
 
+        target = "scripts/reaper/_internal/STEMwerk_Log.lua"
         result = sp.run(
-            ["git", "diff", "--name-only", "011ab8f5d8ea863d01d9acab27b97654967510e7", "--"],
+            ["git", "diff", "-U0", "011ab8f5d8ea863d01d9acab27b97654967510e7", "--", target],
             capture_output=True, text=True, cwd=str(ROOT),
         )
         if result.returncode != 0:
             pytest.skip("git history unavailable in this environment")
-        changed = set(result.stdout.strip().splitlines())
-        assert "scripts/reaper/_internal/STEMwerk_Log.lua" not in changed, (
-            "STEMwerk_Log.lua is not in scope for the Setup readiness "
-            "truthfulness fix and must not be touched"
+        changed_lines = [
+            line for line in result.stdout.splitlines()
+            if line[:1] in ("+", "-") and not line.startswith(("+++", "---"))
+        ]
+        offenders = [
+            (marker, line) for line in changed_lines
+            for marker in self.RUNCONTEXT_AUTHORITY_MARKERS
+            if marker in line
+        ]
+        assert not offenders, (
+            "a diff hunk in STEMwerk_Log.lua touches a protected "
+            f"RunContext-authority symbol: {offenders}"
         )
 
     def test_runcontext_authority_symbols_untouched_in_support_bundle(self):

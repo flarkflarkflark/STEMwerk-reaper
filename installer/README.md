@@ -109,7 +109,7 @@ Release-facing distribution inputs are pinned, not tracked against a moving
 branch/alias:
 
 - ReaPack `index.xml` package payload sources point at the immutable release
-  tag (e.g. `v2.3.1.2`), never `main`/`master`/`latest`. The ReaPack
+  tag (e.g. `v2.3.1.3`), never `main`/`master`/`latest`. The ReaPack
   subscription/discovery URL that points users at `index.xml` itself is the
   one intentionally moving reference -- it has to keep tracking the default
   branch so existing subscribers see new releases. `tools/release_gate.py`

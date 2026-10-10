@@ -1,10 +1,10 @@
 ﻿# STEMwerk Windows Setup Guide
 
-This guide is for the Windows installer build of STEMwerk 2.3.1.2.
+This guide is for the Windows installer build of STEMwerk 2.3.1.3.
 
-## What the installer just did
+## What the installer attempts to do
 
-The Windows installer:
+If setup completed without errors, the Windows installer:
 
 - installed the STEMwerk REAPER scripts
 - prepared the STEMwerk runtime under `%LOCALAPPDATA%\STEMwerk`
@@ -12,9 +12,11 @@ The Windows installer:
 - checked FFmpeg and the core runtime packages
 - installed bundled Drum Kit runtime and offline model payloads when included in the installer
 
+If you saw an error during setup, or REAPER's STEMwerk Setup -> Check reports a problem, one or more of these steps may not have actually completed. Check `%LOCALAPPDATA%\STEMwerk\logs\bootstrap.log` before assuming any of the above finished successfully.
+
 The Windows installer remains the recommended fresh-install and repair route on Windows.
 
-If you are updating an older Windows STEMwerk install, uninstall the old version first and then install `2.3.1.2` fresh. This avoids stale runtime/backend state.
+If you are updating an older Windows STEMwerk install, uninstall the old version first and then install `2.3.1.3` fresh. This avoids stale runtime/backend state.
 
 ## Installer types
 
@@ -22,7 +24,7 @@ If you are updating an older Windows STEMwerk install, uninstall the old version
 - `bundled installer`: includes Python and FFmpeg
 - `offline-bundled ... allmodels installer`: includes the bundled runtime payloads needed for a fully offline install for its target backend
 
-The large offline allmodels installers remain on the `2.3.0.0` release line and are still valid unless you specifically need the latest Windows setup/runtime fixes from `2.3.1.2`.
+The large offline allmodels installers remain on the `2.3.0.0` release line and are still valid unless you specifically need the latest Windows setup/runtime fixes from `2.3.1.3`.
 
 ## Offline allmodels variants
 
@@ -40,7 +42,7 @@ These installers are intended to complete setup fully offline from bundled wheel
 2. If `STEMwerk` actions are already visible, run `STEMwerk: Setup` if you want to check the runtime.
 3. Use `Check only` to verify runtime health.
 4. Run `Stemwerk: Main` from the Actions menu for normal use.
-5. If `STEMwerk` actions are missing, open `Actions -> Show action list -> ReaScript: Load...`.
+5. If `STEMwerk` actions are missing, open `Actions -> Show action list -> ReaScript: Add...`.
 6. Preferred one-time registration helper:
    `C:\Users\<Username>\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\STEMwerk_Setup_Toolbar.lua`
 7. That helper registers the normal STEMwerk actions inside REAPER. If you only need the actions, you can cancel the later toolbar prompt.
@@ -63,7 +65,7 @@ Uninstall removes STEMwerk runtime data and installed STEMwerk REAPER scripts.
 1. First confirm the installed script folder exists:
    `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`
 2. If the folder exists but no `STEMwerk` actions appear, REAPER has not registered the scripts yet.
-3. In REAPER, open `Actions -> Show action list -> ReaScript: Load...`.
+3. In REAPER, open `Actions -> Show action list -> ReaScript: Add...`.
 4. Preferred one-time registration helper:
    `STEMwerk_Setup_Toolbar.lua`
 5. If you do not want to use the helper, manually load only:

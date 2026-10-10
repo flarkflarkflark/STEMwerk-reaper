@@ -86,7 +86,7 @@ local function showWindowsInstallerRequired(detail)
     local message = "The STEMwerk runtime is not installed or is incomplete."
     if detail and detail ~= "" then message = message .. "\n\n" .. tostring(detail) end
     message = message .. "\n\nRe-run the STEMwerk installer before processing."
-    C.showMessageBox(message, "STEMwerk Setup", 0)
+    C.showMessageBox("STEMwerk Setup", message, 0)
 end
 
 local function showUnsupportedSetupPlatform()

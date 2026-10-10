@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>STEMwerk</title>
+    <background file="stemwerk.png" mime-type="image/png" alignment="bottomleft" scaling="none"/>
+    <options customize="never" require-scripts="false" hostArchitectures="x86_64,arm64"/>
+    <choices-outline>
+        <line choice="default">
+            <line choice="com.flarkaudio.stemwerk"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="com.flarkaudio.stemwerk" visible="false">
+        <pkg-ref id="com.flarkaudio.stemwerk"/>
+    </choice>
+    <pkg-ref id="com.flarkaudio.stemwerk" onConclusion="none">STEMwerk-component.pkg</pkg-ref>
+</installer-gui-script>

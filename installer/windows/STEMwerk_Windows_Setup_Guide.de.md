@@ -1,16 +1,18 @@
 # STEMwerk Windows-Setup-Anleitung
 
-Diese Anleitung gilt fuer den Windows-Installer von STEMwerk 2.3.1.2.
+Diese Anleitung gilt fuer den Windows-Installer von STEMwerk 2.3.1.3.
 
-## Was der Installer gerade gemacht hat
+## Was der Installer versucht zu tun
 
-Der Windows-Installer hat:
+Wenn das Setup ohne Fehler abgeschlossen wurde, hat der Windows-Installer:
 
 - die STEMwerk REAPER-Skripte installiert
 - die STEMwerk-Runtime unter `%LOCALAPPDATA%\STEMwerk` vorbereitet
 - die von STEMwerk verwendete Python-Umgebung erstellt oder aktualisiert
 - FFmpeg und die zentralen Runtime-Pakete geprueft
 - gebuendelte Drum-Kit-Runtime- und Offline-Modell-Payloads installiert, wenn sie in diesem Installer enthalten sind
+
+Wenn beim Setup ein Fehler aufgetreten ist, oder STEMwerk Setup -> Check in REAPER ein Problem meldet, ist moeglicherweise nicht jeder dieser Schritte tatsaechlich abgeschlossen worden. Pruefe `%LOCALAPPDATA%\STEMwerk\logs\bootstrap.log`, bevor du davon ausgehst, dass alles oben Genannte erfolgreich war.
 
 Der Windows-Installer bleibt der empfohlene Weg fuer Erstinstallation und Reparatur unter Windows.
 
@@ -36,7 +38,7 @@ Diese Installer sollen die Einrichtung fuer ihre Ziel-Runtime vollstaendig offli
 2. Wenn die `STEMwerk`-Aktionen bereits sichtbar sind, fuehre `STEMwerk: Setup` aus, wenn du die Runtime pruefen willst.
 3. Nutze `Check only`, um den Runtime-Zustand zu verifizieren.
 4. Starte `Stemwerk: Main` aus dem Actions-Menue fuer die normale Nutzung.
-5. Wenn `STEMwerk`-Aktionen fehlen, oeffne `Actions -> Show action list -> ReaScript: Load...`.
+5. Wenn `STEMwerk`-Aktionen fehlen, oeffne `Actions -> Show action list -> ReaScript: Add...`.
 6. Bevorzugter Helfer fuer die einmalige Registrierung:
    `C:\Users\<Username>\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\STEMwerk_Setup_Toolbar.lua`
 7. Dieser Helfer registriert die normalen STEMwerk-Aktionen in REAPER. Wenn du nur die Aktionen brauchst, kannst du den spaeteren Toolbar-Dialog abbrechen.
@@ -59,7 +61,7 @@ Die Deinstallation entfernt STEMwerk-Runtime-Daten und installierte STEMwerk-REA
 1. Pruefe zuerst, ob dieser Skript-Ordner existiert:
    `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`
 2. Wenn der Ordner existiert, aber keine `STEMwerk`-Aktionen erscheinen, hat REAPER die Skripte noch nicht registriert.
-3. Oeffne in REAPER `Actions -> Show action list -> ReaScript: Load...`.
+3. Oeffne in REAPER `Actions -> Show action list -> ReaScript: Add...`.
 4. Bevorzugter Helfer fuer die einmalige Registrierung:
    `STEMwerk_Setup_Toolbar.lua`
 5. Wenn du den Helfer nicht verwenden willst, lade nur:

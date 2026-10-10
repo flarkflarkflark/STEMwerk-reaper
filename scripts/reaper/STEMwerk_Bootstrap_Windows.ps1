@@ -181,6 +181,96 @@ $script:DrumsepOfflinePayloadReason = ""
 $script:DrumsepModelSource = ""
 $script:DrumsepRuntimeWheelSource = ""
 
+function Measure-StemwerkInstalledFootprint([string]$ScriptRoot, [string]$RuntimeRoot) {
+    if ([string]::IsNullOrWhiteSpace($ScriptRoot) -or [string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $ScriptRoot -PathType Container)) { return $null }
+    if (-not (Test-Path -LiteralPath $RuntimeRoot -PathType Container)) { return $null }
+
+    try {
+        $scriptRootFull = [System.IO.Path]::GetFullPath($ScriptRoot).TrimEnd('\')
+        $runtimeRootFull = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')
+        $bundledRootFull = [System.IO.Path]::GetFullPath((Join-Path $scriptRootFull "_bundled")).TrimEnd('\')
+        $modelsRootFull = [System.IO.Path]::GetFullPath((Join-Path $runtimeRootFull "models")).TrimEnd('\')
+        $seenTotalPaths = @{}
+
+        $measureTree = {
+            param(
+                [string]$Root,
+                [string]$ExcludedRoot,
+                [string]$ClassifiedModelsRoot,
+                [hashtable]$SeenPaths
+            )
+
+            [int64]$primaryBytes = 0
+            [int64]$modelBytes = 0
+            [int64]$uniqueTotalBytes = 0
+            $stack = New-Object 'System.Collections.Generic.Stack[string]'
+            $stack.Push($Root)
+
+            while ($stack.Count -gt 0) {
+                $directory = $stack.Pop()
+                if ($ExcludedRoot -and $directory.Equals($ExcludedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    continue
+                }
+
+                $entries = [System.IO.Directory]::GetFileSystemEntries($directory)
+                foreach ($entry in $entries) {
+                    $attributes = [System.IO.File]::GetAttributes($entry)
+                    if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                        continue
+                    }
+                    if (($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
+                        $entryDirectory = [System.IO.Path]::GetFullPath($entry).TrimEnd('\')
+                        if (-not $ExcludedRoot -or -not $entryDirectory.Equals($ExcludedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $stack.Push($entryDirectory)
+                        }
+                        continue
+                    }
+
+                    $filePath = [System.IO.Path]::GetFullPath($entry)
+                    [int64]$fileBytes = (New-Object System.IO.FileInfo($filePath)).Length
+                    $isModelFile = $ClassifiedModelsRoot -and $filePath.StartsWith(
+                        $ClassifiedModelsRoot + '\',
+                        [System.StringComparison]::OrdinalIgnoreCase
+                    )
+                    if ($isModelFile) {
+                        $modelBytes += $fileBytes
+                    } else {
+                        $primaryBytes += $fileBytes
+                    }
+
+                    $pathKey = $filePath.ToLowerInvariant()
+                    if (-not $SeenPaths.ContainsKey($pathKey)) {
+                        $SeenPaths[$pathKey] = $true
+                        $uniqueTotalBytes += $fileBytes
+                    }
+                }
+            }
+
+            return [pscustomobject]@{
+                PrimaryBytes = $primaryBytes
+                ModelBytes = $modelBytes
+                UniqueTotalBytes = $uniqueTotalBytes
+            }
+        }
+
+        $scriptResult = & $measureTree $scriptRootFull $bundledRootFull "" $seenTotalPaths
+        $runtimeResult = & $measureTree $runtimeRootFull "" $modelsRootFull $seenTotalPaths
+        if ($null -eq $scriptResult -or $null -eq $runtimeResult) { return $null }
+
+        return [pscustomobject]@{
+            ScriptsBytes = [int64]$scriptResult.PrimaryBytes
+            RuntimeBytes = [int64]$runtimeResult.PrimaryBytes
+            ModelsBytes = [int64]$runtimeResult.ModelBytes
+            TotalBytes = [int64]$scriptResult.UniqueTotalBytes + [int64]$runtimeResult.UniqueTotalBytes
+        }
+    } catch {
+        return $null
+    }
+}
+
 function TestCoreSourceBundle([string]$Root) {
     if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
     if (-not (Test-Path $Root)) { return $false }
@@ -283,6 +373,53 @@ function LogExecutionPolicyStatus {
         Set-Status "failed" "execution_policy_restricted"
     } else {
         LogProgress "EXECUTION_POLICY_STATUS=ok"
+    }
+}
+
+function LogVisualCppRuntimeStatus {
+    # Issue #126: real user evidence showed Torch/ONNX Runtime native DLL
+    # init failures ("c10.dll", ONNX Runtime init errors, silent CPU
+    # fallback) that were actually caused by a stale Microsoft Visual C++
+    # x64 Redistributable, not by anything STEMwerk installs itself.
+    # Installing the current VC++ x64 redistributable resolved it. This is
+    # a warn-only preflight so a future user gets a diagnosable log line
+    # instead of an obscure DLL error -- it never auto-installs/downloads
+    # anything and never makes an absent/stale runtime a hard setup failure
+    # on its own, since a still-working install should not be blocked here.
+    $minVersion = [version]"14.40.0.0"
+    $installed = $false
+    $versionString = "unknown"
+    foreach ($path in @(
+        "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\X64"
+    )) {
+        try {
+            $props = Get-ItemProperty -Path $path -ErrorAction Stop
+            if ($props.Installed -eq 1) {
+                $installed = $true
+                $versionString = [string]$props.Version
+                break
+            }
+        } catch {
+        }
+    }
+
+    if (-not $installed) {
+        LogProgress "VCPP_RUNTIME_STATUS=missing"
+        LogStatusDetail "Microsoft Visual C++ x64 Redistributable was not detected. If Torch/ONNX Runtime fail to initialize (DLL errors, silent CPU fallback), install the latest VC++ x64 redistributable and retry."
+        return
+    }
+
+    try {
+        $parsed = [version]($versionString -replace '^v', '')
+        if ($parsed -lt $minVersion) {
+            LogProgress ("VCPP_RUNTIME_STATUS=stale version=" + $versionString)
+            LogStatusDetail ("Installed Visual C++ x64 Redistributable (" + $versionString + ") appears outdated. If Torch/ONNX Runtime fail to initialize (DLL errors, silent CPU fallback), install the latest VC++ x64 redistributable and retry.")
+        } else {
+            LogProgress ("VCPP_RUNTIME_STATUS=ok version=" + $versionString)
+        }
+    } catch {
+        LogProgress ("VCPP_RUNTIME_STATUS=ok version=" + $versionString)
     }
 }
 
@@ -3161,6 +3298,7 @@ if (-not (TestRuntimeWritable (Join-Path $RuntimeBase "logs"))) {
 }
 LogProgress ("Runtime write test passed: " + $RuntimeBase)
 LogExecutionPolicyStatus
+LogVisualCppRuntimeStatus
 
 Step "step_2_python" "python + venv"
 LogProgress "Looking for existing Python installations"
@@ -3428,6 +3566,20 @@ if ($RuntimeBase) {
     }
 }
 
+$installedFootprint = $null
+if ($status -eq "ok") {
+    LogStatusDetail "Calculating installed size..."
+    $installedFootprint = Measure-StemwerkInstalledFootprint $scriptRoot $RuntimeBase
+    if ($null -eq $installedFootprint) {
+        LogLine "Installed footprint measurement unavailable; no size total will be reported."
+    } else {
+        LogProgress ("INSTALLED_SCRIPTS_BYTES=" + $installedFootprint.ScriptsBytes)
+        LogProgress ("INSTALLED_RUNTIME_BYTES=" + $installedFootprint.RuntimeBytes)
+        LogProgress ("INSTALLED_MODELS_BYTES=" + $installedFootprint.ModelsBytes)
+        LogProgress ("INSTALLED_TOTAL_BYTES=" + $installedFootprint.TotalBytes)
+    }
+}
+
 $lines = @()
 $lines += "STATUS=$status"
 $lines += "STATUS_REASON=$statusReason"
@@ -3441,6 +3593,12 @@ if ($script:FfprobePath) { $lines += "FFPROBE_PATH=$script:FfprobePath" }
 if ($script:FfmpegSource) { $lines += "FFMPEG_SOURCE=$script:FfmpegSource" }
 if ($installerMode) { $lines += "INSTALLER=1" }
 if ($RuntimeBase) { $lines += "RUNTIME_BASE=$RuntimeBase" }
+if ($null -ne $installedFootprint) {
+    $lines += "INSTALLED_SCRIPTS_BYTES=$($installedFootprint.ScriptsBytes)"
+    $lines += "INSTALLED_RUNTIME_BYTES=$($installedFootprint.RuntimeBytes)"
+    $lines += "INSTALLED_MODELS_BYTES=$($installedFootprint.ModelsBytes)"
+    $lines += "INSTALLED_TOTAL_BYTES=$($installedFootprint.TotalBytes)"
+}
 
 $lines | Out-File -FilePath $StateFile -Encoding ascii
 

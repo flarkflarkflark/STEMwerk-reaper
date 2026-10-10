@@ -1,6 +1,6 @@
 -- @description STEMwerk - Setup Toolbar Actions
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.1.2
+-- @version 2.3.1.3
 -- @changelog
 --   Adds/refreshes STEMwerk scripts in the Action List and guides toolbar setup.
 --   Registers the dedicated "Stemwerk: Explode Takes (In Place)" quick action.
@@ -359,7 +359,11 @@ end
 local function backupMenuFile(menuPath)
     local data = readFile(menuPath)
     if not data then
-        return false, "Unable to read reaper-menu.ini for backup."
+        -- A fresh REAPER profile has no reaper-menu.ini yet: nothing exists
+        -- to back up, so this is not a failure -- writeStemwerkToolbar will
+        -- create the file for the first time via writeFile()'s normal
+        -- create-on-write behavior.
+        return true, nil
     end
     local backupPath = menuPath .. ".STEMwerk-backup-" .. makeTimestamp()
     if not writeFile(backupPath, data) then
@@ -403,10 +407,12 @@ local function buildToolbarWritePlan(actionMap)
     end
 
     local menuPath = joinPath(resourcePath, "reaper-menu.ini")
-    local menuData = readFile(menuPath)
-    if not menuData then
-        return false, "Unable to read reaper-menu.ini at:\n" .. tostring(menuPath)
-    end
+    -- A fresh REAPER profile has no reaper-menu.ini yet (issue #121): treat
+    -- a missing file the same as an empty one rather than failing outright.
+    -- splitLines("") / parseIniSections({}) / appendSection() already
+    -- handle an empty ini correctly, and writeFile() creates the file on
+    -- first write regardless of whether it existed before.
+    local menuData = readFile(menuPath) or ""
 
     local lines = splitLines(menuData)
     local sections = parseIniSections(lines)
@@ -478,8 +484,10 @@ local function writeStemwerkToolbar(actionMap)
         return false, "Failed to write toolbar section to:\n" .. tostring(plan.menuPath)
     end
 
+    local backupLine = backupInfo and ("Backup created:\n" .. backupInfo)
+        or "No reaper-menu.ini existed yet; nothing to back up."
     local result =
-        "Backup created:\n" .. backupInfo ..
+        backupLine ..
         "\n\nToolbar slot:\nFloating toolbar " .. tostring(plan.slot) ..
         "\n\nOpen in REAPER via:\nView -> Floating toolbar " .. tostring(plan.slot) ..
         "\n\nIf it does not appear immediately, restart REAPER."
@@ -601,7 +609,7 @@ if flowChoice == 6 then
                 "STEMwerk Toolbar Setup\n" .. hr(),
                 section("Result", "Toolbar setup completed successfully.\n\nYour toolbar actions and icon-strip assignments are now ready."),
                 section("Toolbar location", "Open in REAPER: View -> Floating toolbar"),
-                section("Backup", "A backup of reaper-menu.ini was created before writing."),
+                section("Backup", "If reaper-menu.ini already existed, a backup of it was created before writing."),
                 section("Recommended order", table.concat(recommendedToolbarOrder, "\n"))
             ) .. existingUpdateLine .. (isDebugEnabled() and "\n\nTechnical details were written to the REAPER console." or ""),
             0

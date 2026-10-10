@@ -1,16 +1,18 @@
 # STEMwerk Windows Setup-handleiding
 
-Deze handleiding hoort bij de Windows-installer van STEMwerk 2.3.1.2.
+Deze handleiding hoort bij de Windows-installer van STEMwerk 2.3.1.3.
 
-## Wat de installer zojuist heeft gedaan
+## Wat de installer probeert te doen
 
-De Windows-installer heeft:
+Als de setup zonder fouten is voltooid, heeft de Windows-installer:
 
 - de STEMwerk REAPER-scripts geinstalleerd
 - de STEMwerk-runtime voorbereid onder `%LOCALAPPDATA%\STEMwerk`
 - de Python-omgeving van STEMwerk aangemaakt of bijgewerkt
 - FFmpeg en de kernpakketten van de runtime gecontroleerd
 - meegeleverde Drum Kit-runtime en offline modelpayloads geinstalleerd wanneer die in deze installer zitten
+
+Als er tijdens de setup een fout is opgetreden, of als STEMwerk Setup -> Check in REAPER een probleem meldt, is het mogelijk dat niet elk van deze stappen daadwerkelijk is voltooid. Controleer `%LOCALAPPDATA%\STEMwerk\logs\bootstrap.log` voordat je ervan uitgaat dat het bovenstaande gelukt is.
 
 De Windows-installer blijft de aanbevolen route voor een eerste installatie en voor herstel op Windows.
 
@@ -36,7 +38,7 @@ Deze installers zijn bedoeld om volledig offline te kunnen afronden met alleen d
 2. Als de `STEMwerk`-acties al zichtbaar zijn, voer dan `STEMwerk: Setup` uit als je de runtime wilt controleren.
 3. Gebruik `Check only` om de runtime te verifieren.
 4. Start `Stemwerk: Main` vanuit het Actions-menu voor normaal gebruik.
-5. Als `STEMwerk`-acties ontbreken, open dan `Actions -> Show action list -> ReaScript: Load...`.
+5. Als `STEMwerk`-acties ontbreken, open dan `Actions -> Show action list -> ReaScript: Add...`.
 6. Voorkeurshelper voor eenmalige registratie:
    `C:\Users\<Username>\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\STEMwerk_Setup_Toolbar.lua`
 7. Die helper registreert de normale STEMwerk-acties in REAPER. Als je alleen de acties nodig hebt, kun je de latere toolbar-prompt annuleren.
@@ -59,7 +61,7 @@ De-installeren verwijdert STEMwerk-runtime-data en geinstalleerde STEMwerk REAPE
 1. Controleer eerst of deze scriptmap bestaat:
    `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`
 2. Als die map bestaat maar er geen `STEMwerk`-acties zichtbaar zijn, heeft REAPER de scripts nog niet geregistreerd.
-3. Open in REAPER `Actions -> Show action list -> ReaScript: Load...`.
+3. Open in REAPER `Actions -> Show action list -> ReaScript: Add...`.
 4. Voorkeurshelper voor eenmalige registratie:
    `STEMwerk_Setup_Toolbar.lua`
 5. Als je de helper niet wilt gebruiken, laad dan alleen:

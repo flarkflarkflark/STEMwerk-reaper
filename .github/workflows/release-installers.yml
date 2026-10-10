@@ -20,7 +20,7 @@ on:
         description: "Full 40-hex commit SHA to build (BUILD mode), or to verify the release tag against (PUBLICATION mode). Never a branch/tag name."
         required: true
       tag:
-        description: "Release tag (e.g. v2.3.1.2). Must match VERSION; for publication it must already exist and resolve to source_commit."
+        description: "Release tag (e.g. v2.3.1.3). Must match VERSION; for publication it must already exist and resolve to source_commit."
         required: false
         default: ""
       upload_release_assets:
@@ -175,28 +175,16 @@ jobs:
         shell: powershell
         run: |
           choco install innosetup --no-progress -y
-          choco install imagemagick --no-progress -y
 
-      - name: Generate installer assets from SVG
-        shell: powershell
-        run: |
-          $assets = "installer\\assets"
-          New-Item -ItemType Directory -Force -Path $assets | Out-Null
-
-          $svg = Join-Path $assets "stemwerk.svg"
-          if (Test-Path $svg) {
-            $png = Join-Path $assets "stemwerk.png"
-            & magick -background none -density 220 $svg -resize 512x512 $png
-
-            $ico = Join-Path $assets "stemwerk.ico"
-            & magick $png -define icon:auto-resize=256,128,64,48,32,16 $ico
-
-            $wiz = Join-Path $assets "stemwerk-wizard.bmp"
-            & magick $png -resize 140x140 -background white -gravity center -extent 164x314 $wiz
-
-            $wizSmall = Join-Path $assets "stemwerk-wizard-small.bmp"
-            & magick $png -resize 48x48 -background white -gravity center -extent 55x58 $wizSmall
-          }
+      # Installer branding (SetupIconFile, WizardImageFile*, WizardSmallImageFile*)
+      # uses the committed canonical assets directly (installer/assets/stemwerk.ico,
+      # stemwerk.png, stemwerk-wizard.bmp) -- those are the source of truth, not
+      # generated here. A step used to regenerate them on every run from
+      # stemwerk.svg (a wide white-background wordmark banner, not the square
+      # app icon), silently overwriting the correct committed artwork before
+      # Inno Setup compiled. stemwerk.svg is not referenced anywhere else in
+      # the repo, so nothing regenerates it; the committed files are used as-is
+      # by both the standard and bundled builds below.
 
       - name: Build .exe (Inno Setup)
         shell: powershell
@@ -365,7 +353,7 @@ jobs:
             rsync curl
 
       # .deb/.rpm/Arch packaging is build-tooling only (installer/linux/build_deb.sh,
-      # build_rpm.sh, build_archpkg.sh); it is not part of the published 2.3.1.2
+      # build_rpm.sh, build_archpkg.sh); it is not part of the published 2.3.1.3
       # artifact matrix, so this workflow builds only the AppImage.
       - name: Build AppImage
         shell: bash

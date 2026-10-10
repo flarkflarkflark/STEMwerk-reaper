@@ -25,11 +25,11 @@ Totaal arm64: 4.166.098 B (≈ 4,0 MB).
 
 | bestand | sha256 | bytes |
 |---|---|---|
-| diffq-0.2.4-cp312-cp312-macosx_11_0_x86_64.whl | `d06a8ccdf3048d76442a680dd89fd0932837cd56b62a9d0564f7584bf57a9a68` | 112.822 |
+| diffq-0.2.4-cp312-cp312-macosx_11_0_x86_64.whl | `51a41e40354aa306a810fb8120ca2483acf01fd9b407d01a0a52e9cba749b257` | 107.690 |
 | samplerate-0.1.0-py3-none-macosx_11_0_x86_64.whl | `3d5bcd3b72cf45b9d447cd8b5903b3b62b32fe9405384d9388eecb197a4a78f6` | 4.028.665 |
 | stemwerk_core-0.1.1-py3-none-any.whl | `e4555cd9179a5927c0121b140e3f98c36bfd6d4a5bb7b7d25a1786be7250a981` | 10.795 |
 
-Totaal x86_64: 4.152.282 B (≈ 4,0 MB).
+Totaal x86_64: 4.147.150 B (≈ 4,0 MB).
 
 ## Recept (x86_64)
 
@@ -38,13 +38,19 @@ python3.12 (env `PYTHON312` overstuurbaar). Stappen:
 
 1. **diffq 0.2.4**: sdist van PyPI (`diffq-0.2.4.tar.gz`, sha256
    `049064861e974ebf00d0badab8b324c775037371419eda3150985b9d477b5bd2`) → cross-build
-   (`ARCHFLAGS="-arch x86_64"`, `MACOSX_DEPLOYMENT_TARGET=11.0`, `LDFLAGS="-Wl,-no_uuid -Wl,-S"`,
+   (`ARCHFLAGS="-arch x86_64"`, `MACOSX_DEPLOYMENT_TARGET=11.0`, `LDFLAGS="-Wl,-S"`,
    vaste buildmap) in geïsoleerde env met gepinde `cython==3.2.8` + `setuptools==83.0.0` →
    retag naar `macosx_11_0_x86_64` met RECORD-regeneratie en genormaliseerde zip-timestamps.
    Inhoudscontrole: `bitpack.cpython-312-darwin.so` is `Mach-O x86_64` (D7-bewijsvoering).
-   Determinisme: `LC_UUID` weggelaten (`-no_uuid`), OSO-symbolen (object-mtimes) gestript
-   (`-S`), vaste buildmap (pad-embedding). Run-op-run byte-identiek op deze toolchain
-   (verifieerd 2026-07-27, clang Xcode 26.x arm64-host).
+   `LC_UUID` blijft aanwezig omdat recente Intel macOS-versies een native extension zonder
+   deze load command weigeren te laden. Het recept controleert dit fail-closed met `otool -l`.
+   OSO-symbolen (object-mtimes) worden gestript (`-S`) en de buildmap is vast
+   (pad-embedding).
+
+   De RC3-remediatie is op 2026-10-06 tweemaal byte-identiek herbouwd op een arm64-host met
+   managed Python 3.12.13, Apple clang 21.0.0 (`clang-2100.3.34.2`) en macOS SDK 27.0.
+   De resulterende x86_64-extension heeft `LC_BUILD_VERSION minos 11.0`, een `LC_UUID`,
+   en importeert onder de bestaande Python 3.12.13 Rosetta-harness met Intel torch 2.2.2.
 2. **samplerate 0.1.0**: PyPI-wheel (`samplerate-0.1.0-py2.py3-none-any.whl`, sha256
    `f55e5c9d0a8ba3c82a53b7d9c34a2d145439c61166a7f310efaec88f2781b8f8`) → retag naar
    `py3-none-macosx_11_0_x86_64` (zelfde deterministische herschrijver; de PyPI-inhoud —

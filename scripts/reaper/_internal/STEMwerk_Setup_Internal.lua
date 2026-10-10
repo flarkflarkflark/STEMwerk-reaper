@@ -1,6 +1,6 @@
 -- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.1.2
+-- @version 2.3.1.3
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -110,6 +110,21 @@ local function getScriptDir()
 end
 
 local RAW_SCRIPT_DIR = getScriptDir()
+-- Setup runs in its own ReaScript process, so it cannot rely on STEMwerk.lua
+-- having populated an architecture global first.  Resolve the host fact via
+-- the existing shared system helper; isIntelMacDksUnsupported() remains the
+-- single product-policy predicate used by every Setup UI/dispatch surface.
+do
+    if OS == "macOS" and tostring(MAC_ARCH or "") == "" then
+        local systemOk, systemModule = pcall(dofile, RAW_SCRIPT_DIR .. "STEMwerk_System.lua")
+        if systemOk and type(systemModule) == "table" and type(systemModule.getArch) == "function" then
+            local archOk, detectedArch = pcall(systemModule.getArch)
+            if archOk then
+                MAC_ARCH = tostring(detectedArch or "")
+            end
+        end
+    end
+end
 local PATH_HELPER = nil
 local linuxEnvPrefix
 local appendLogLine
@@ -1439,8 +1454,44 @@ local function readTail(path, maxLines)
     return lines
 end
 
+-- Return at most maxCodepoints without ever ending inside a valid UTF-8
+-- sequence. Invalid input bytes are treated as single units so existing log
+-- or path text remains displayable without making this helper throw.
+function setupUtf8SafePrefix(text, maxCodepoints)
+    local s = tostring(text or "")
+    local limit = math.max(0, math.floor(tonumber(maxCodepoints) or 0))
+    local byteIndex, byteEnd, count = 1, 0, 0
+    while byteIndex <= #s and count < limit do
+        local first = s:byte(byteIndex) or 0
+        local sequenceBytes = 1
+        if first >= 0xC2 and first <= 0xDF then
+            sequenceBytes = 2
+        elseif first >= 0xE0 and first <= 0xEF then
+            sequenceBytes = 3
+        elseif first >= 0xF0 and first <= 0xF4 then
+            sequenceBytes = 4
+        end
+        if byteIndex + sequenceBytes - 1 > #s then
+            sequenceBytes = 1
+        else
+            for offset = 1, sequenceBytes - 1 do
+                local continuation = s:byte(byteIndex + offset) or 0
+                if continuation < 0x80 or continuation > 0xBF then
+                    sequenceBytes = 1
+                    break
+                end
+            end
+        end
+        byteEnd = byteIndex + sequenceBytes - 1
+        byteIndex = byteEnd + 1
+        count = count + 1
+    end
+    return s:sub(1, byteEnd), byteEnd, byteIndex <= #s
+end
+
 local function wrapLine(line, maxLen, withOffsets)
-    if #line <= maxLen then
+    local firstChunk, _, hasMore = setupUtf8SafePrefix(line, maxLen)
+    if not hasMore then
         if withOffsets then
             return { { text = line, charStart = 1, charEnd = #line } }
         end
@@ -1456,9 +1507,12 @@ local function wrapLine(line, maxLen, withOffsets)
             out[#out + 1] = text
         end
     end
-    while #s > maxLen do
-        local chunk = s:sub(1, maxLen)
-        local cut = chunk:match("^(.*)%s+[%w%p]*$")
+    while true do
+        local chunk, chunkBytes, chunkHasMore = setupUtf8SafePrefix(s, maxLen)
+        if not chunkHasMore then break end
+        -- Split at the last whitespace without classifying the following word
+        -- as ASCII `%w`; translated words may begin with a multibyte letter.
+        local cut = chunk:match("^(.*)%s+[^%s]*$")
         if cut and #cut > 0 then
             append(cut, charStart, charStart + #cut - 1)
             s = s:sub(#cut + 1)
@@ -1467,8 +1521,8 @@ local function wrapLine(line, maxLen, withOffsets)
             charStart = charStart + #cut + #leading
         else
             append(chunk, charStart, charStart + #chunk - 1)
-            s = s:sub(maxLen + 1)
-            charStart = charStart + maxLen
+            s = s:sub(chunkBytes + 1)
+            charStart = charStart + chunkBytes
         end
     end
     if s ~= "" then append(s, charStart, charStart + #s - 1) end
@@ -2032,6 +2086,17 @@ local function buildVerifyOnlyState(runtime, state, capState, readyState)
     return out, readyHealthy, staleFailedVerification
 end
 
+-- Hardware-level fact, independent of any runtime/profile/backend state:
+-- Intel macOS never supports Drum Kit Split. Mirrors intelMacDksPolicyBlocked()
+-- in the main STEMwerk.lua processing GUI, which already correctly hides
+-- Direct Kit/Kit Split controls there -- Setup runs as its own separate
+-- REAPER script/process and cannot call that function directly, so this is
+-- the one Setup-side definition every Setup UI surface below reuses, rather
+-- than each re-deriving (or forgetting to derive) the same OS/MAC_ARCH fact.
+function isIntelMacDksUnsupported()
+    return OS == "macOS" and MAC_ARCH == "x86_64"
+end
+
 function resolveDrumsepPolicyState(readyState, profile, backend)
     readyState = readyState or {}
     local drumsepStatus = trim(readyState.DRUMSEP_STATUS or "")
@@ -2042,8 +2107,7 @@ function resolveDrumsepPolicyState(readyState, profile, backend)
     local modelStatus = trim(readyState.DRUMSEP_READY_MODEL_STATUS or "")
     local mainRuntimeStatus = trim(readyState.MAIN_RUNTIME_STATUS or "")
 
-    if drumsepStatus == "" and OS == "macOS"
-        and MAC_ARCH == "x86_64"
+    if drumsepStatus == "" and isIntelMacDksUnsupported()
         and profile == "mac-cpu"
         and backend == "cpu"
         and (readyDetail == "unsupported_mac_intel" or runtimeStatus == "skipped" or modelStatus == "skipped")
@@ -5126,11 +5190,15 @@ drawLinuxScrollbar = function(rect, totalLines, visibleLines)
     gfx.rect(x + 2, thumbY + 2, w - 4, math.max(8, thumbH - 4), 1)
 end
 
+local function defaultSetupStepTotal()
+    return isIntelMacDksUnsupported() and 4 or 5
+end
+
 local function linuxCurrentStep(state)
     local idx = tonumber(trim(state.STEP_INDEX or ""))
     local total = tonumber(trim(state.STEP_TOTAL or ""))
     if not total or total < 1 then
-        total = 5
+        total = defaultSetupStepTotal()
     end
     if idx and idx >= 1 and idx <= total then
         if LINUX_SETUP and LINUX_SETUP.lastStepIndex and idx < LINUX_SETUP.lastStepIndex then
@@ -5211,7 +5279,7 @@ local function linuxProgressPercent(state, logLines)
     local activeFill = linuxActiveStepFill(state, logLines or {})
     local total = tonumber(trim(state.STEP_TOTAL or ""))
     if not total or total < 1 then
-        total = 5
+        total = defaultSetupStepTotal()
     end
     local segment = 100 / total
     local completed = (idx - 1) * segment
@@ -5339,7 +5407,14 @@ function refreshSetupMenuChoiceLabels(menu)
     end
 end
 
-local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
+-- Global (not local) and pure/side-effect-free so the exact step labels,
+-- colors, and which steps may ever render as active/completed are
+-- independently, headlessly testable -- same rationale as
+-- buildSetupMenuChoices above. Intel macOS has no Drum Kit runtime phase, so
+-- its legend has four rows. Apple Silicon and Linux retain the five-step DKS
+-- capable presentation.
+function linuxStepLegendModel(intelMacUnsupported)
+    intelMacUnsupported = intelMacUnsupported and true or false
     local labels = {
         "1. Runtime",
         "2. Python + venv",
@@ -5354,6 +5429,17 @@ local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
         { 100, 255, 100 },
         { 255, 196, 80 },
     }
+    local forceNeutral = { false, false, false, false, false }
+    if intelMacUnsupported then
+        labels[5] = nil
+        colors[5] = nil
+        forceNeutral[5] = nil
+    end
+    return labels, colors, forceNeutral
+end
+
+local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
+    local labels, colors, forceNeutral = linuxStepLegendModel(isIntelMacDksUnsupported())
     -- Step 1 ("Runtime") is the only step with a resolved pass/fail/not_proven
     -- state once a Check-only final result exists (deriveLinuxFinalPresentation).
     -- Unlike steps 2-5 (pure setup progress), it must never render the fixed
@@ -5366,7 +5452,7 @@ local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
     end
     local total = tonumber(trim(state.STEP_TOTAL or ""))
     if not total or total < 1 then
-        total = 5
+        total = defaultSetupStepTotal()
     end
     local currentStep = linuxCurrentStep(state)
     local done = trim(state.STATUS or "") == "ok"
@@ -5377,8 +5463,8 @@ local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
     for i = 1, total do
         local colX = x + ((i - 1) * (colW + gap))
         local c = colors[i]
-        local isCompleted = done or i < currentStep
-        local isActive = (not done) and i == currentStep
+        local isCompleted = (not forceNeutral[i]) and (done or i < currentStep)
+        local isActive = (not forceNeutral[i]) and (not done) and i == currentStep
         if isCompleted or isActive then
             gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 1)
             gfx.setfont(1, "Arial Bold", linuxFontSize(13))
@@ -5496,6 +5582,13 @@ function linuxDrawStatus(state, logLines, pidAlive, pid)
     drawLinuxLogPanel(logX, logY, logW, logH, logLines, "Console wheel scrolls. Ctrl+wheel outside console zooms text. Use +/- or 0 for text size.")
 end
 
+-- Windows also reaches this shared final window (finalizeWindowsVerify ->
+-- showDeferredFinalWindow), but Windows repair is owned by the external
+-- installer, so in-REAPER Repair/Rebuild venv are offered on Linux/macOS only.
+function linuxFinalOffersInReaperRepair()
+    return OS ~= "Windows"
+end
+
 function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     local w, h = gfx.w, gfx.h
     gfx.set(0.03, 0.03, 0.04, 1)
@@ -5587,7 +5680,7 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     end
     if finalSuccess then
         finalState.STATUS = "ok"
-        finalState.STEP_INDEX = trim(finalState.STEP_TOTAL or "") ~= "" and tostring(finalState.STEP_TOTAL) or "5"
+        finalState.STEP_INDEX = trim(finalState.STEP_TOTAL or "") ~= "" and tostring(finalState.STEP_TOTAL) or tostring(defaultSetupStepTotal())
     end
 
     -- Runtime step segment must reflect the same runtimeKind used for the
@@ -5614,8 +5707,10 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     -- implication" requirement).
     local actionButtons = {}
     if presentation.state == "failed" then
-        actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair", style = "primary" }
-        actionButtons[#actionButtons + 1] = { label = "Rebuild venv", action = "rebuild_venv" }
+        if linuxFinalOffersInReaperRepair() then
+            actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair", style = "primary" }
+            actionButtons[#actionButtons + 1] = { label = "Rebuild venv", action = "rebuild_venv" }
+        end
         actionButtons[#actionButtons + 1] = { label = "Set FFmpeg Path...", action = "set_ffmpeg_path" }
     else
         actionButtons[#actionButtons + 1] = { label = "Open STEMwerk", action = "open_stemwerk", style = "primary" }
@@ -5723,8 +5818,9 @@ end
 -- and the deferred completion scroll reset, both inside linuxSetupTick
 -- below) actually apply on this OS? linuxSetupTick/LINUX_SETUP is shared
 -- code with no OS gate on startLinuxSetup itself -- it is used for both
--- Linux and macOS Setup windows, and never for Windows (which has its own
--- separate WINDOWS_SETUP/windowsSetupTick entirely). This behavior has no
+-- Linux and macOS Setup windows, and on Windows only as the Check-only
+-- final window (finalizeWindowsVerify -> showDeferredFinalWindow; see
+-- linuxFinalOffersInReaperRepair). This behavior has no
 -- macOS counterpart before 2.3.1.1, so it must stay Linux-only; macOS keeps
 -- its exact pre-2.3.1.1 scroll contract. Both actual gate sites below call
 -- this exact function (not a reimplementation of the same condition).
@@ -5993,6 +6089,11 @@ function linuxSetupTick()
                             runSetFfmpegPathAction()
                         end)
                         return
+                    elseif (b.action == "repair" or b.action == "rebuild_venv") and OS == "Windows" then
+                        -- Windows reaches this shared window via finalizeWindowsVerify; repair
+                        -- belongs to the external installer, so use its fail-closed guard and
+                        -- never fall through to startLinuxSetup (which clears state files).
+                        startWindowsSetup(LINUX_SETUP.runtime, LINUX_SETUP.separatorScript, "repair", true)
                     elseif b.action == "repair" then
                         local runtime = LINUX_SETUP.runtime
                         local separatorScript = LINUX_SETUP.separatorScript or (SCRIPT_DIR .. "audio_separator_process.py")
@@ -7070,6 +7171,25 @@ startLinuxSetup = function(runtime, separatorScript, mode)
     if mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime" and mode ~= "ready-to-go-verify" then
         mode = "repair"
     end
+    -- Defense in depth: Drum Kit Split is unsupported on Intel macOS even if
+    -- this mode is somehow dispatched directly (bypassing the Setup action
+    -- screen, which already omits the choice -- see buildSetupMenuChoices).
+    -- Fail/return cleanly before touching any state file, log, or process;
+    -- never attempt to create or repair a DrumSep runtime here.
+    if (mode == "drumsep-runtime" or mode == "drumsep-rocm-runtime") and isIntelMacDksUnsupported() then
+        -- Reuse the same localized keys the main STEMwerk.lua GUI already
+        -- uses for this identical policy (showIntelMacDksPolicyBlock) instead
+        -- of a separate English-only message: setupText() resolves through
+        -- the same STEMwerk_I18N.lua/languages.lua dictionary, so EN/NL/DE
+        -- all come from the existing translations, not a new Setup-only copy.
+        local title = setupText("drumsep_intel_mac_unsupported_title", "Drum Kit Split unavailable on Intel Mac")
+        local body = setupText(
+            "drumsep_intel_mac_unsupported_body",
+            "Drum Kit Split is not available on Intel Mac in this release. Normal CPU stem separation, including the normal six-stem mode, remains available."
+        )
+        msgBox(title, body, 0)
+        return
+    end
     local isDrumsepRuntime = mode == "drumsep-runtime"
     local isDrumsepRocmRuntime = mode == "drumsep-rocm-runtime"
     local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or "bootstrap.env")
@@ -7301,7 +7421,13 @@ function existingRuntimeSetupMenuTick()
         local ellipsis = "..."
         local trimmed = raw
         while #trimmed > 1 do
-            trimmed = trimmed:sub(1, #trimmed - 1)
+            local codepointStart = #trimmed
+            while codepointStart > 1 do
+                local byte = trimmed:byte(codepointStart) or 0
+                if byte < 0x80 or byte > 0xBF then break end
+                codepointStart = codepointStart - 1
+            end
+            trimmed = trimmed:sub(1, codepointStart - 1)
             local candidate = trimmed .. ellipsis
             if gfx.measurestr(candidate) <= width then
                 return candidate
@@ -7373,29 +7499,47 @@ function existingRuntimeSetupMenuTick()
     drawLinuxPanel(panelX, panelY, panelW, panelH, { themePanelBg[1], themePanelBg[2], themePanelBg[3], 1 }, { themeBorder[1], themeBorder[2], themeBorder[3], 1 })
 
     local scale = m.fontScale or 1.0
-    local compact = (w < 760 or h < 460 or scale >= 2.6)
+    local compact = (w < 760 or h < 460 or scale >= 1.8)
     local tiny = (w < 560 or h < 360)
     local showSubs = not compact
 
-    local cols = 3
-    if bodyW < 980 or scale >= 2.2 then cols = 3 end
-    if bodyW < 700 or scale >= 2.8 then cols = 2 end
+    local cols = (scale >= 2.2 and bodyW >= 900) and 4 or 3
+    -- Keep the established three-column action grid at high text zoom. The
+    -- window minimum still leaves useful card widths, while dropping to two
+    -- columns would turn the Intel nine-action screen into five tall rows and
+    -- collide with the footer. Card titles are width-capped below instead.
+    if bodyW < 700 then cols = 2 end
     if bodyW < 420 then cols = 1 end
 
-    local btnGapX = math.max(8, math.floor(linuxLineHeight(8)))
-    local btnGapY = math.max(8, math.floor(linuxLineHeight(8)))
+    local btnGapX = math.max(8, math.floor(linuxLineHeight(compact and 5 or 8)))
+    local btnGapY = math.max(8, math.floor(linuxLineHeight(compact and 5 or 8)))
 
     local function buildButtonLayout(colCount, withSubs)
         local btnW = math.floor((bodyW - btnGapX * (colCount - 1)) / colCount)
+        local titleByChoice = {}
         local subByChoice = {}
         local labelH = linuxLineHeight(16)
         local subH = linuxLineHeight(12)
+        local titleMaxLines = 1
         local subMaxLines = 1
+        local titleChars = math.max(8, math.floor((btnW - 24) / math.max(6, linuxFontSize(14) * 0.56)))
+        local titleCap = withSubs and 2 or 1
+        for i, c in ipairs(choices) do
+            local titleLines = cappedWrap(c.label, titleChars, titleCap)
+            for lineIndex, line in ipairs(titleLines) do
+                titleLines[lineIndex] = ellipsizeToWidth(line, btnW - 24, "Arial Bold", linuxFontSize(14), 0)
+            end
+            titleByChoice[i] = titleLines
+            titleMaxLines = math.max(titleMaxLines, #titleLines)
+        end
         if withSubs then
-            local subChars = math.max(8, math.floor((btnW - 20) / math.max(6, linuxFontSize(10) * 0.56)))
+            local subChars = math.max(8, math.floor((btnW - 24) / math.max(6, linuxFontSize(10) * 0.56)))
             local subCap = (scale >= 2.4) and 1 or 2
             for i, c in ipairs(choices) do
                 local lines = cappedWrap(c.sub, subChars, subCap)
+                for lineIndex, line in ipairs(lines) do
+                    lines[lineIndex] = ellipsizeToWidth(line, btnW - 24, "Arial", linuxFontSize(10), 0)
+                end
                 subByChoice[i] = lines
                 subMaxLines = math.max(subMaxLines, #lines)
             end
@@ -7403,22 +7547,27 @@ function existingRuntimeSetupMenuTick()
             for i = 1, #choices do subByChoice[i] = {} end
         end
 
-        local topPad = math.max(8, linuxLineHeight(8))
-        local bottomPad = math.max(8, linuxLineHeight(8))
+        local topPad = math.max(10, linuxLineHeight(compact and 5 or 9))
+        local bottomPad = math.max(10, linuxLineHeight(compact and 5 or 9))
         local innerGap = withSubs and math.max(4, linuxLineHeight(4)) or 0
+        local labelBlockH = titleMaxLines * labelH
         local subtitleBlock = withSubs and (subMaxLines * subH) or 0
-        local btnH = math.max(56, topPad + labelH + innerGap + subtitleBlock + bottomPad)
+        local btnH = math.max(58, topPad + labelBlockH + innerGap + subtitleBlock + bottomPad)
         local rows = math.ceil(#choices / colCount)
         local btnBlockH = rows * btnH + (rows - 1) * btnGapY
         local btnY = panelY + panelH - btnBlockH - math.max(10, linuxLineHeight(10))
         return {
             cols = colCount,
+            gridX = bodyX + math.floor((bodyW - ((btnW * colCount) + (btnGapX * (colCount - 1)))) / 2),
             btnW = btnW,
             btnH = btnH,
             btnY = btnY,
             labelH = labelH,
+            labelBlockH = labelBlockH,
             subH = subH,
             innerGap = innerGap,
+            subtitleBlock = subtitleBlock,
+            titleByChoice = titleByChoice,
             subByChoice = subByChoice,
         }
     end
@@ -7469,8 +7618,13 @@ function existingRuntimeSetupMenuTick()
     local summaryMaxW = math.min(linuxLineHeight(220), math.floor(bodyW * 0.34))
     local summaryW = math.max(summaryMinW, math.floor(bodyW * 0.29))
     summaryW = math.min(summaryW, summaryMaxW)
-    local minLeftColW = math.max(linuxLineHeight(240), math.floor(bodyW * 0.52))
+    local minLeftColW = compact
+        and math.max(linuxLineHeight(120), math.floor(bodyW * 0.40))
+        or math.max(linuxLineHeight(240), math.floor(bodyW * 0.52))
     local maxSummaryFromBody = math.max(linuxLineHeight(132), bodyW - minLeftColW - topColGap)
+    if scale >= 1.4 then
+        summaryW = math.max(summaryW, math.floor(bodyW * (compact and 0.58 or 0.44)))
+    end
     summaryW = math.min(summaryW, maxSummaryFromBody)
     local leftColW = bodyW - summaryW - topColGap
     if leftColW < minLeftColW then
@@ -7489,7 +7643,8 @@ function existingRuntimeSetupMenuTick()
     -- Info content is drawn only when it fits; this prevents overlap in tiny windows.
     local y = bodyY
     local titleText = "werk Setup [" .. setupUiLabel() .. "]"
-    titleText = ellipsizeToWidth(titleText, leftColW, "Arial Bold", linuxFontSize(22), 0)
+    gfx.setfont(1, "Arial", linuxFontSize(22))
+    titleText = ellipsizeToWidth(titleText, leftColW - gfx.measurestr("STEM"), "Arial Bold", linuxFontSize(22), 0)
     drawStemwerkInline(bodyX, y, linuxFontSize(22), "", titleText)
     y = y + linuxLineHeight(30)
 
@@ -7506,8 +7661,8 @@ function existingRuntimeSetupMenuTick()
     -- data sources, same wrap/ellipsis helpers, same row order as before --
     -- only the container and shared left inset are new.
     if not tiny then
-        local groupPad = 10
-        local rowGap = 8
+        local groupPad = math.max(10, linuxLineHeight(10))
+        local rowGap = math.max(6, linuxLineHeight(6))
         local groupInnerW = leftColW - (groupPad * 2)
         local rowH = linuxLineHeight(16)
 
@@ -7708,66 +7863,108 @@ function existingRuntimeSetupMenuTick()
         end
     end
     local hasVerRow = verRow ~= ""
+    local showVerRow = hasVerRow and not compact
+    local legendCols = 1
+    if scale >= 2.2 then
+        legendCols = 4
+    elseif scale >= 1.4 then
+        legendCols = 2
+    end
+    legendCols = math.max(1, math.min(legendCols, #choices))
+    local legendColGap = math.max(8, linuxLineHeight(compact and 5 or 6))
+    local legendCellW = math.floor((summaryInnerW - (legendColGap * (legendCols - 1))) / legendCols)
+    local legendLineH = linuxLineHeight(compact and 11 or 12)
+    local legendTextW = math.max(24, legendCellW - 10)
     local summaryRows = {}
+    local legendMaxLines = 1
     for i, c in ipairs(choices) do
         local summaryLabel = compactModeSummaryLabel(c)
+        local summaryChars = math.max(4, math.floor(legendTextW / math.max(6, linuxFontSize(10) * 0.54)))
+        local summaryLines = cappedWrap(summaryLabel, summaryChars, compact and 2 or 1)
+        for lineIndex, line in ipairs(summaryLines) do
+            summaryLines[lineIndex] = ellipsizeToWidth(line, legendTextW, "Arial", linuxFontSize(10), 0)
+        end
         summaryRows[#summaryRows + 1] = {
             accent = c.accent,
-            text = ellipsizeToWidth(summaryLabel, summaryInnerW - 22, "Arial", linuxFontSize(10), 0),
+            lines = summaryLines,
         }
+        legendMaxLines = math.max(legendMaxLines, #summaryLines)
     end
-    local headerGap = math.max(10, linuxLineHeight(8))
-    local summaryMaxH = math.max(linuxLineHeight(52), infoBottom - summaryY)
-    local baseSummaryH = 10 + linuxLineHeight(16) + (hasVerRow and linuxLineHeight(14) or 0) + 8
-    local maxRowsThatFit = math.max(1, math.floor((summaryMaxH - baseSummaryH) / perItem))
-    local shown = math.min(#summaryRows, maxRowsThatFit)
-    local contentH = 10 + linuxLineHeight(16)
-        + (hasVerRow and linuxLineHeight(14) or 0)
-        + (shown * perItem)
-        + 8
+    local headerGap = math.max(8, linuxLineHeight(compact and 4 or 8))
+    perItem = math.max(perItem, legendMaxLines * legendLineH)
+    local legendGridRows = math.ceil(#summaryRows / legendCols)
+    local legendPad = compact and 6 or 10
+    local legendHeaderH = linuxLineHeight(compact and 14 or 16)
+    local contentH = legendPad + legendHeaderH
+        + (showVerRow and linuxLineHeight(14) or 0)
+        + (legendGridRows * perItem)
+        + legendPad
     local midPanelH = contentH
     if midPanelH >= linuxLineHeight(40) then
         drawLinuxPanel(summaryX, midPanelY, summaryW, midPanelH, { themeCardBg[1], themeCardBg[2], themeCardBg[3], 1 }, { themeBorder[1], themeBorder[2], themeBorder[3], 1 })
 
-        local iy = midPanelY + 10
+        local iy = midPanelY + legendPad
         gfx.setfont(1, "Arial Bold", linuxFontSize(12))
         gfx.set(themeText[1], themeText[2], themeText[3], 1)
         gfx.x = summaryX + 12
         gfx.y = iy
         gfx.drawstr(setupText("setup_modes_title", "Modes"))
-        iy = iy + linuxLineHeight(16)
+        iy = iy + legendHeaderH
 
-        if hasVerRow and iy + linuxLineHeight(14) <= midPanelY + midPanelH - 8 then
+        if showVerRow and iy + linuxLineHeight(14) <= midPanelY + midPanelH - legendPad then
             gfx.setfont(1, "Arial", linuxFontSize(10))
-            gfx.set(m.updateDetected and 0.97 or 0.45, m.updateDetected and 0.80 or 0.47, m.updateDetected and 0.15 or 0.54, 1)
+            if m.updateDetected then
+                gfx.set(0.97, 0.80, 0.15, 1)
+            else
+                gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
+            end
             gfx.x = summaryX + 12
             gfx.y = iy
             gfx.drawstr(ellipsizeToWidth(verRow, summaryInnerW, "Arial", linuxFontSize(10), 0))
             iy = iy + linuxLineHeight(14)
         end
 
-        for i = 1, shown do
+        for i = 1, #summaryRows do
             local row = summaryRows[i]
+            local gridRow = math.floor((i - 1) / legendCols)
+            local gridCol = (i - 1) % legendCols
+            local itemX = summaryX + 12 + gridCol * (legendCellW + legendColGap)
+            local itemY = iy + gridRow * perItem
+            local itemTextH = #row.lines * legendLineH
+            local textY = itemY + math.max(0, math.floor((perItem - itemTextH) / 2))
             gfx.set(row.accent[1], row.accent[2], row.accent[3], 1)
-            gfx.rect(summaryX + 12, iy + 4, 5, math.max(5, linuxLineHeight(5)), 1)
+            gfx.rect(itemX, itemY + math.max(1, math.floor((perItem - math.max(7, linuxLineHeight(7))) / 2)), 5, math.max(7, linuxLineHeight(7)), 1)
             gfx.setfont(1, "Arial", linuxFontSize(10))
             gfx.set(themeText[1], themeText[2], themeText[3], 1)
-            gfx.x = summaryX + 22
-            gfx.y = iy
-            gfx.drawstr(row.text)
-            iy = iy + perItem
+            for _, line in ipairs(row.lines) do
+                gfx.x = itemX + 10
+                gfx.y = textY
+                gfx.drawstr(line)
+                textY = textY + legendLineH
+            end
         end
     end
 
     local headerBottom = math.max(y, midPanelY + midPanelH)
+    -- Retain the footer-derived lower anchor as the available-space limit,
+    -- then distribute the flexible space around the action grid instead of
+    -- leaving one large void above it. A little less than half stays above
+    -- the cards, keeping them related to the status content while preserving
+    -- a clear footer region at the default and larger window sizes.
     layout.btnY = math.max(layout.btnY, headerBottom + headerGap)
+    do
+        local minimumActionY = headerBottom + headerGap
+        local flexibleSpace = math.max(0, layout.btnY - minimumActionY)
+        layout.btnY = math.max(minimumActionY,
+            math.min(layout.btnY, minimumActionY + math.floor(flexibleSpace * 0.42)))
+    end
 
     local hoveredChoice = nil
     local chosen = nil
     for i, c in ipairs(choices) do
         local row = math.floor((i - 1) / layout.cols)
         local col = (i - 1) % layout.cols
-        local bx = bodyX + col * (layout.btnW + btnGapX)
+        local bx = layout.gridX + col * (layout.btnW + btnGapX)
         local by = layout.btnY + row * (layout.btnH + btnGapY)
         local hot = isMouseIn(bx, by, layout.btnW, layout.btnH)
         if hot then hoveredChoice = c end
@@ -7785,21 +7982,26 @@ function existingRuntimeSetupMenuTick()
             gfx.rect(bx + 1, by + topH + 1, layout.btnW - 2, layout.btnH - topH - 2, 1)
         end
 
+        local titleLines = layout.titleByChoice[i] or { c.label }
         local subLines = layout.subByChoice[i] or {}
-        local contentH = layout.labelH + ((#subLines > 0) and (layout.innerGap + (#subLines * layout.subH)) or 0)
+        local contentH = layout.labelBlockH + ((layout.subtitleBlock > 0) and (layout.innerGap + layout.subtitleBlock) or 0)
         local contentY = by + math.max(6, math.floor((layout.btnH - contentH) / 2))
 
         gfx.setfont(1, "Arial Bold", linuxFontSize(14))
         gfx.set(themeText[1], themeText[2], themeText[3], 1)
-        local lw = gfx.measurestr(c.label)
-        gfx.x = bx + math.floor((layout.btnW - lw) / 2)
-        gfx.y = contentY
-        gfx.drawstr(c.label)
+        local titleY = contentY
+        for _, line in ipairs(titleLines) do
+            local lw = gfx.measurestr(line)
+            gfx.x = bx + math.floor((layout.btnW - lw) / 2)
+            gfx.y = titleY
+            gfx.drawstr(line)
+            titleY = titleY + layout.labelH
+        end
 
         if #subLines > 0 then
             gfx.setfont(1, "Arial", linuxFontSize(10))
-            gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], hot and 0.98 or 0.80)
-            local subY = contentY + layout.labelH + layout.innerGap
+            gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], hot and 1.0 or 0.92)
+            local subY = contentY + layout.labelBlockH + layout.innerGap
             for _, line in ipairs(subLines) do
                 local sw = gfx.measurestr(line)
                 gfx.x = bx + math.floor((layout.btnW - sw) / 2)
@@ -8005,7 +8207,7 @@ function existingRuntimeSetupMenuTick()
             for i, c in ipairs(choices) do
                 local row = math.floor((i - 1) / layout.cols)
                 local col = (i - 1) % layout.cols
-                local bx = bodyX + col * (layout.btnW + btnGapX)
+                local bx = layout.gridX + col * (layout.btnW + btnGapX)
                 local by = layout.btnY + row * (layout.btnH + btnGapY)
                 if isMouseIn(bx, by, layout.btnW, layout.btnH) then
                     chosen = c.id
@@ -8213,7 +8415,12 @@ function buildSetupMenuChoices(runtime, state)
         if drumsepRuntimeLabelCapability == "rocm" then
             drumsepRuntimeLabelCapability = "cpu"
         end
-        choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 }, linuxGpuCapability = drumsepRuntimeLabelCapability }
+        -- Drum Kit Split is unsupported on Intel macOS (Apple Silicon macOS
+        -- and all Linux architectures are unaffected): do not offer an
+        -- install/repair action for a runtime that can never be used here.
+        if not isIntelMacDksUnsupported() then
+            choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 }, linuxGpuCapability = drumsepRuntimeLabelCapability }
+        end
         if OS == "Linux" and machineCapability == "rocm" then
             choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
         end
