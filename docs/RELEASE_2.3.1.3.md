@@ -24,6 +24,17 @@ validation.
   the stable pinned FFmpeg release-asset URL, so a fresh build can retrieve
   the expected archive reproducibly.
 
+## Installer interface improvements
+
+- Windows setup wizard: refreshed welcome and finish pages, native light/dark theme handling, theme-aware text, and STEMwerk-branded imagery for both appearances.
+- macOS PKG installers: STEMwerk artwork in the native installer interface, with dedicated asset/branding validation.
+
+## Related issues and scope
+
+- #127: the increased DrumSep verification window addresses a potential false-negative setup path, but final confirmation on the reporter's machine is still outstanding. Do not claim the full issue resolved.
+- #118: Windows NVIDIA Blackwell/CUDA compatibility fixes were delivered in 2.3.1.2 and are retained, rather than introduced, in 2.3.1.3.
+- #123 and #128: no blanket claim of resolution is made by this release documentation update.
+
 ## Supported release artifacts
 
 The public release matrix is exactly five installer artifacts plus one
