@@ -39,6 +39,16 @@ For full release notes, asset checksums, and current download details, use the p
 - An explicit CPU choice for Windows NVIDIA DrumSep and Kit Split is preserved end to end instead of being redirected back to CUDA.
 - The bundled Windows installer now downloads the pinned FFmpeg archive through the stable release-asset URL, restoring reproducible fresh builds.
 
+### Installer interface improvements
+
+- **Windows installer:** Refreshed the welcome and finish pages, with native light/dark theme support, theme-aware text and consistent STEMwerk wizard artwork in both appearances.
+- **macOS PKG installers:** Added STEMwerk artwork to the native installer window, with dedicated branding validation.
+
+### Related issue context
+
+- **#127 (Drum Kit Separation Fail):** The DrumSep runtime verification timeout was increased to 120 seconds to reduce false failures on slow but healthy startups. A final retest on the reporter's machine is still pending; the entire issue is not claimed resolved.
+- **#118 (Windows NVIDIA/Blackwell):** CUDA runtime compatibility was addressed in 2.3.1.2 and remains included in 2.3.1.3. See the historical section below.
+
 ## Historical: what was new in 2.3.1.2
 Windows NVIDIA Blackwell (RTX 50-series) hotfix (issue #118):
 - The Windows CUDA backend now installs `torch==2.7.1+cu128` / `torchvision==0.22.1+cu128` / `torchaudio==2.7.1+cu128` (previously `2.4.1+cu121`), adding the compiled kernels Blackwell (sm_120) GPUs need. Validated on real Blackwell hardware and on this line's regression machine (RTX 3060, sm_86); Windows CPU and DirectML keep their existing, independently-pinned torch stacks.
