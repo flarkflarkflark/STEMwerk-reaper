@@ -34,10 +34,20 @@ For full release notes, asset checksums, and current download details, use the p
 ## What's new in 2.3.1.3
 
 - Windows Setup/Repair and Rebuild requests launched from inside REAPER now hand off safely instead of attempting repair work in the REAPER process.
-- On Linux AMD gfx1031 systems, the selected ROCm architecture override now reaches single-item workers as well as multi-item processing.
+- On Linux AMD Radeon RX 6700-series (Navi 22 / `gfx1031`) GPUs, the ROCm compatibility override now reaches single-item workers as well as multi-item processing. This is a compatibility workaround, not an AMD-officially-supported ROCm configuration.
 - DrumSep runtime verification now allows up to 120 seconds, avoiding false setup failures on slow but healthy startup.
 - An explicit CPU choice for Windows NVIDIA DrumSep and Kit Split is preserved end to end instead of being redirected back to CUDA.
 - The bundled Windows installer now downloads the pinned FFmpeg archive through the stable release-asset URL, restoring reproducible fresh builds.
+
+### Installer interface improvements
+
+- **Windows installer:** Refreshed the welcome and finish pages, with native light/dark theme support, theme-aware text and consistent STEMwerk wizard artwork in both appearances.
+- **macOS PKG installers:** Added STEMwerk artwork to the native installer window, with dedicated branding validation.
+
+### Related issue context
+
+- **#127 (Drum Kit Separation Fail):** The DrumSep runtime verification timeout was increased to 120 seconds to reduce false failures on slow but healthy startups. A final retest on the reporter's machine is still pending; the entire issue is not claimed resolved.
+- **#118 (Windows NVIDIA/Blackwell):** CUDA runtime compatibility was addressed in 2.3.1.2 and remains included in 2.3.1.3. See the historical section below.
 
 ## Historical: what was new in 2.3.1.2
 Windows NVIDIA Blackwell (RTX 50-series) hotfix (issue #118):
@@ -121,6 +131,23 @@ Recommended free space:
 - Windows NVIDIA CUDA and Linux ROCm setups may need more
 - Bundled installers include Python and FFmpeg, but can still require backend package and model downloads
 - Large offline allmodels installers need additional free space for the installer itself, extracted assets, cache, and output stems
+
+### GPU compatibility and tested hardware (2.3.1.3)
+
+STEMwerk supports CPU processing on the platforms listed below. GPU acceleration depends on the operating system, driver, installed runtime and selected separation method. **This is a tested-hardware reference, not an exhaustive GPU certification list**; supported backend does not mean that every GPU model and every workflow has been validated.
+
+| Platform | Backend | Named hardware with validation evidence | Scope / qualification |
+|---|---|---|---|
+| Windows | NVIDIA CUDA | GeForce RTX 3060; GeForce RTX 50-series / Blackwell (real-hardware validation for the #118 fix) | CUDA runtime and affected processing routes tested; other models require a compatible NVIDIA driver and runtime |
+| Windows | AMD DirectML | Radeon RX 9070; Radeon 780M integrated graphics | Tested processing and scheduler cases; integrated GPUs may require lower concurrency |
+| Linux | NVIDIA CUDA | GeForce RTX 3060 Laptop GPU | Tested normal and drum workflows on NVIDIA Linux hardware |
+| Linux | AMD ROCm | Radeon RX 9070 | Tested ROCm processing; compatible ROCm/driver installation required |
+| macOS Apple Silicon | Apple MPS | Apple M1 (8 GB) | Tested GPU processing; memory-dependent concurrency limits apply |
+| macOS Intel | CPU | Intel Mac (CPU path) | Normal Stems supported; Direct Kit / Kit Split unsupported by design |
+
+**Additional compatibility case (not officially supported by AMD ROCm):** AMD Radeon RX 6700-series / Navi 22 (`gfx1031`) on Linux may use STEMwerk's narrowly scoped `HSA_OVERRIDE_GFX_VERSION=10.3.0` workaround. It has issue #123 validation evidence, but should **not** be described as officially ROCm-supported or guaranteed to work across drivers and models.
+
+Other compatible hardware may work, but absence from this table means **not individually certified by these release notes**, not automatically incompatible. CPU fallback is available where the selected workflow supports it.
 
 ## Backend support
 
