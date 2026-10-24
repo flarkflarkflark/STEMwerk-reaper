@@ -5,13 +5,36 @@
       "model_id": "htdemucs",
       "label": "Fast",
       "capability_id": "normal_stems_4",
-      "output_semantic_ids": ["vocals", "drums", "bass", "other"]
+      "output_semantic_ids": ["vocals", "drums", "bass", "other"],
+      "role": "user_selectable"
     },
     {
       "model_id": "htdemucs_ft",
       "label": "Quality",
       "capability_id": "normal_stems_4",
-      "output_semantic_ids": ["vocals", "drums", "bass", "other"]
+      "output_semantic_ids": ["vocals", "drums", "bass", "other"],
+      "role": "user_selectable"
+    },
+    {
+      "model_id": "htdemucs_6s",
+      "label": "6-Stem",
+      "capability_id": "normal_stems_6",
+      "output_semantic_ids": ["vocals", "drums", "bass", "other", "guitar", "piano"],
+      "role": "user_selectable"
+    },
+    {
+      "model_id": "hdemucs_mmi",
+      "label": "MMI",
+      "capability_id": "normal_stems_4",
+      "output_semantic_ids": ["vocals", "drums", "bass", "other"],
+      "role": "internal"
+    },
+    {
+      "model_id": "drumsep_mdx23c",
+      "label": "DrumSep",
+      "capability_id": "drum_kit_6",
+      "output_semantic_ids": ["kick", "snare", "toms", "hi-hat", "ride", "crash"],
+      "role": "internal"
     }
   ]
 }

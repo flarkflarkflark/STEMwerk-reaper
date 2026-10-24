@@ -20,6 +20,16 @@ _DESTINATIONS = frozenset({"new_tracks", "in_place_takes"})
 _GROUPINGS = frozenset({"per_item", "source_track"})
 _SOURCE_AFTER = frozenset({"keep", "mute_item", "delete_item", "mute_track", "delete_track"})
 
+# The v1 catalogs are a closed, deliberately-complete set covering every 2.3
+# production separation route relevant to runtime resolution (Slice 2). This
+# mirrors Slice 0's original minimality lock: growing the catalog requires a
+# conscious update here, not silent drift.
+_KNOWN_CAPABILITY_IDS = frozenset({"normal_stems_4", "normal_stems_6", "drum_kit_6"})
+_KNOWN_MODEL_IDS = frozenset({"htdemucs", "htdemucs_ft", "htdemucs_6s", "hdemucs_mmi", "drumsep_mdx23c"})
+_KNOWN_WORKFLOW_IDS = frozenset({"normal_stems", "drum_kit_direct", "drum_kit_split"})
+_BACKEND_KINDS = frozenset({"cpu", "cuda", "rocm", "mps", "directml"})
+_MODEL_ROLES = frozenset({"user_selectable", "internal"})
+
 
 class ContractError(ValueError):
     """Raised when untrusted contract data violates the v1 boundary."""
@@ -382,8 +392,88 @@ def validate_bundle(document: Any) -> Mapping[str, Any]:
     return bundle
 
 
+def _validate_capability_entry(entry: Any, where: str) -> Mapping[str, Any]:
+    capability = _mapping(entry, where)
+    _only_keys(
+        capability,
+        {"capability_id", "label", "input_kind", "output_semantic_ids", "permitted_backends"},
+        where,
+    )
+    _stable_id(capability.get("capability_id"), f"{where}.capability_id")
+    _string(capability.get("label"), f"{where}.label")
+    if capability.get("input_kind") != "audio":
+        raise ContractError(f"{where}.input_kind must be audio")
+    outputs = [
+        _stable_id(item, f"{where}.output_semantic_ids item")
+        for item in _list(capability.get("output_semantic_ids"), f"{where}.output_semantic_ids")
+    ]
+    if not outputs or len(set(outputs)) != len(outputs):
+        raise ContractError(f"{where}.output_semantic_ids must be a non-empty list of unique semantic ids")
+    backends = [
+        _string(item, f"{where}.permitted_backends item")
+        for item in _list(capability.get("permitted_backends"), f"{where}.permitted_backends")
+    ]
+    if not backends or len(set(backends)) != len(backends):
+        raise ContractError(f"{where}.permitted_backends must be a non-empty list of unique backend kinds")
+    for backend in backends:
+        if backend not in _BACKEND_KINDS:
+            raise ContractError(f"{where}.permitted_backends contains unknown backend kind: {backend}")
+    return capability
+
+
+def _validate_model_entry(entry: Any, where: str) -> Mapping[str, Any]:
+    model = _mapping(entry, where)
+    _only_keys(model, {"model_id", "label", "capability_id", "output_semantic_ids", "role"}, where)
+    _stable_id(model.get("model_id"), f"{where}.model_id")
+    _string(model.get("label"), f"{where}.label")
+    _stable_id(model.get("capability_id"), f"{where}.capability_id")
+    outputs = [
+        _stable_id(item, f"{where}.output_semantic_ids item")
+        for item in _list(model.get("output_semantic_ids"), f"{where}.output_semantic_ids")
+    ]
+    if not outputs or len(set(outputs)) != len(outputs):
+        raise ContractError(f"{where}.output_semantic_ids must be a non-empty list of unique semantic ids")
+    if model.get("role") not in _MODEL_ROLES:
+        raise ContractError(f"{where}.role must be one of {sorted(_MODEL_ROLES)}")
+    return model
+
+
+def _validate_workflow_stage_entry(entry: Any, where: str) -> Mapping[str, Any]:
+    stage = _mapping(entry, where)
+    kind = stage.get("input_kind")
+    if kind == "source":
+        _only_keys(stage, {"order", "stage_id", "capability_ids", "input_kind", "input_artifact_kind"}, where)
+    elif kind == "stage_output":
+        _only_keys(
+            stage,
+            {
+                "order", "stage_id", "capability_ids", "input_kind", "input_artifact_kind",
+                "input_stage_id", "input_port_id",
+            },
+            where,
+        )
+    else:
+        raise ContractError(f"{where}.input_kind must be source or stage_output")
+    order = stage.get("order")
+    if not isinstance(order, int) or isinstance(order, bool) or order < 1:
+        raise ContractError(f"{where}.order must be a positive integer")
+    _stable_id(stage.get("stage_id"), f"{where}.stage_id")
+    capability_ids = [
+        _stable_id(item, f"{where}.capability_ids item")
+        for item in _list(stage.get("capability_ids"), f"{where}.capability_ids")
+    ]
+    if not capability_ids or len(set(capability_ids)) != len(capability_ids):
+        raise ContractError(f"{where}.capability_ids must be a non-empty list of unique capability ids")
+    if stage.get("input_artifact_kind") != "audio":
+        raise ContractError(f"{where}.input_artifact_kind must be audio")
+    if kind == "stage_output":
+        _stable_id(stage.get("input_stage_id"), f"{where}.input_stage_id")
+        _stable_id(stage.get("input_port_id"), f"{where}.input_port_id")
+    return stage
+
+
 def validate_catalogs(catalog_dir: str | Path) -> dict[str, list[Mapping[str, Any]]]:
-    """Load the three v1 catalogs and enforce the Normal Stems-only boundary."""
+    """Load the three v1 catalogs and enforce the v1 completeness boundary."""
 
     root = Path(catalog_dir)
     documents = {
@@ -402,18 +492,75 @@ def validate_catalogs(catalog_dir: str | Path) -> dict[str, list[Mapping[str, An
     capabilities = documents["capabilities"]["capabilities"]
     models = documents["models"]["models"]
     workflows = documents["workflows"]["workflows"]
-    _unique(capabilities, "capability_id", "capabilities")
-    _unique(models, "model_id", "models")
-    _unique(workflows, "workflow_id", "workflows")
-    if [entry["capability_id"] for entry in capabilities] != ["normal_stems_4"]:
-        raise ContractError("v1 capability catalog must contain only normal_stems_4")
-    if [entry["model_id"] for entry in models] != ["htdemucs", "htdemucs_ft"]:
-        raise ContractError("v1 model catalog must contain only htdemucs and htdemucs_ft")
-    if [entry["workflow_id"] for entry in workflows] != ["normal_stems"]:
-        raise ContractError("v1 workflow catalog must contain only normal_stems")
-    expected = ["vocals", "drums", "bass", "other"]
-    if capabilities[0].get("output_semantic_ids") != expected:
-        raise ContractError("normal_stems_4 outputs are invalid")
-    if workflows[0].get("deliverable_ids") != expected:
-        raise ContractError("normal_stems deliverables are invalid")
+
+    capabilities_by_id = _unique(capabilities, "capability_id", "capabilities")
+    models_by_id = _unique(models, "model_id", "models")
+    workflows_by_id = _unique(workflows, "workflow_id", "workflows")
+
+    if set(capabilities_by_id) != _KNOWN_CAPABILITY_IDS:
+        raise ContractError(f"v1 capability catalog must contain exactly: {sorted(_KNOWN_CAPABILITY_IDS)}")
+    if set(models_by_id) != _KNOWN_MODEL_IDS:
+        raise ContractError(f"v1 model catalog must contain exactly: {sorted(_KNOWN_MODEL_IDS)}")
+    if set(workflows_by_id) != _KNOWN_WORKFLOW_IDS:
+        raise ContractError(f"v1 workflow catalog must contain exactly: {sorted(_KNOWN_WORKFLOW_IDS)}")
+
+    for capability_id, entry in capabilities_by_id.items():
+        _validate_capability_entry(entry, f"capabilities.{capability_id}")
+
+    for model_id, entry in models_by_id.items():
+        validated = _validate_model_entry(entry, f"models.{model_id}")
+        capability_id = validated["capability_id"]
+        if capability_id not in capabilities_by_id:
+            raise ContractError(f"models.{model_id}.capability_id references unknown capability: {capability_id}")
+        if list(validated["output_semantic_ids"]) != list(capabilities_by_id[capability_id]["output_semantic_ids"]):
+            raise ContractError(
+                f"models.{model_id}.output_semantic_ids must match capability {capability_id} output_semantic_ids"
+            )
+
+    for workflow_id, workflow in workflows_by_id.items():
+        where = f"workflows.{workflow_id}"
+        _only_keys(workflow, {"workflow_id", "label", "ordered_stages", "deliverable_ids"}, where)
+        _string(workflow.get("label"), f"{where}.label")
+        stages = _list(workflow.get("ordered_stages"), f"{where}.ordered_stages")
+        if not stages:
+            raise ContractError(f"{where}.ordered_stages must not be empty")
+
+        validated_stages: dict[str, Mapping[str, Any]] = {}
+        for index, raw_stage in enumerate(stages, start=1):
+            stage = _validate_workflow_stage_entry(raw_stage, f"{where}.ordered_stages[{index}]")
+            if stage["order"] != index:
+                raise ContractError(f"{where}.ordered_stages must be in contiguous order")
+            stage_id = stage["stage_id"]
+            if stage_id in validated_stages:
+                raise ContractError(f"duplicate stage_id in workflow {workflow_id}: {stage_id}")
+            for capability_id in stage["capability_ids"]:
+                if capability_id not in capabilities_by_id:
+                    raise ContractError(
+                        f"{where}.ordered_stages[{index}] references unknown capability: {capability_id}"
+                    )
+            if stage.get("input_kind") == "stage_output":
+                producer_stage_id = stage["input_stage_id"]
+                producer = validated_stages.get(producer_stage_id)
+                if producer is None:
+                    raise ContractError(
+                        f"{where}.ordered_stages[{index}].input_stage_id must reference an earlier "
+                        f"stage in the same workflow: {producer_stage_id}"
+                    )
+                producer_outputs: set[str] = set()
+                for producer_capability_id in producer["capability_ids"]:
+                    producer_outputs.update(capabilities_by_id[producer_capability_id]["output_semantic_ids"])
+                if stage["input_port_id"] not in producer_outputs:
+                    raise ContractError(
+                        f"{where}.ordered_stages[{index}].input_port_id "
+                        f"{stage['input_port_id']!r} is not produced by stage {producer_stage_id!r}"
+                    )
+            validated_stages[stage_id] = stage
+
+        deliverables = [
+            _stable_id(item, f"{where}.deliverable_ids item")
+            for item in _list(workflow.get("deliverable_ids"), f"{where}.deliverable_ids")
+        ]
+        if not deliverables or len(set(deliverables)) != len(deliverables):
+            raise ContractError(f"{where}.deliverable_ids must be a non-empty list of unique semantic ids")
+
     return {name: document[name] for name, document in documents.items()}

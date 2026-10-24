@@ -8,12 +8,49 @@
         {
           "order": 1,
           "stage_id": "separate_normal",
-          "capability_id": "normal_stems_4",
+          "capability_ids": ["normal_stems_4", "normal_stems_6"],
           "input_kind": "source",
           "input_artifact_kind": "audio"
         }
       ],
       "deliverable_ids": ["vocals", "drums", "bass", "other"]
+    },
+    {
+      "workflow_id": "drum_kit_direct",
+      "label": "Direct Kit",
+      "ordered_stages": [
+        {
+          "order": 1,
+          "stage_id": "drumsep_direct",
+          "capability_ids": ["drum_kit_6"],
+          "input_kind": "source",
+          "input_artifact_kind": "audio"
+        }
+      ],
+      "deliverable_ids": ["kick", "snare", "toms", "hi-hat", "ride", "crash"]
+    },
+    {
+      "workflow_id": "drum_kit_split",
+      "label": "Drum Split",
+      "ordered_stages": [
+        {
+          "order": 1,
+          "stage_id": "separate_normal_for_kit",
+          "capability_ids": ["normal_stems_4", "normal_stems_6"],
+          "input_kind": "source",
+          "input_artifact_kind": "audio"
+        },
+        {
+          "order": 2,
+          "stage_id": "drumsep_kit",
+          "capability_ids": ["drum_kit_6"],
+          "input_kind": "stage_output",
+          "input_stage_id": "separate_normal_for_kit",
+          "input_port_id": "drums",
+          "input_artifact_kind": "audio"
+        }
+      ],
+      "deliverable_ids": ["kick", "snare", "toms", "hi-hat", "ride", "crash"]
     }
   ]
 }

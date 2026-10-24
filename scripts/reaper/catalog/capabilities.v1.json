@@ -5,7 +5,22 @@
       "capability_id": "normal_stems_4",
       "label": "Normal Stems",
       "input_kind": "audio",
-      "output_semantic_ids": ["vocals", "drums", "bass", "other"]
+      "output_semantic_ids": ["vocals", "drums", "bass", "other"],
+      "permitted_backends": ["cpu", "cuda", "rocm", "mps", "directml"]
+    },
+    {
+      "capability_id": "normal_stems_6",
+      "label": "Normal Stems (6-Stem)",
+      "input_kind": "audio",
+      "output_semantic_ids": ["vocals", "drums", "bass", "other", "guitar", "piano"],
+      "permitted_backends": ["cpu", "cuda", "rocm", "mps", "directml"]
+    },
+    {
+      "capability_id": "drum_kit_6",
+      "label": "Drum Kit (6-Piece)",
+      "input_kind": "audio",
+      "output_semantic_ids": ["kick", "snare", "toms", "hi-hat", "ride", "crash"],
+      "permitted_backends": ["cpu", "cuda", "rocm", "mps", "directml"]
     }
   ]
 }
