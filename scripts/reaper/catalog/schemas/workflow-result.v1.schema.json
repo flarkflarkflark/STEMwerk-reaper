@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.invalid/schemas/workflow-result.v1.schema.json",
+  "title": "WorkflowResult v1",
+  "type": "object",
+  "required": ["schema_version", "request_id", "workflow_id", "state", "actual_runtime", "artifacts", "deliverables"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "request_id": {"type": "string"},
+    "workflow_id": {"type": "string"},
+    "state": {"enum": ["queued", "running", "succeeded", "failed", "cancelled", "blocked"]},
+    "actual_runtime": {
+      "type": "object",
+      "required": ["model_id", "requested_device", "actual_device", "fallback_applied"],
+      "properties": {
+        "model_id": {"type": "string"},
+        "requested_device": {"type": "string"},
+        "actual_device": {"type": "string"},
+        "fallback_applied": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {"type": "array"},
+    "deliverables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["semantic_id", "artifact_id"],
+        "properties": {"semantic_id": {"type": "string"}, "artifact_id": {"type": "string"}},
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

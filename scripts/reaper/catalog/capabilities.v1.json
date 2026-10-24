@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0.0",
+  "capabilities": [
+    {
+      "capability_id": "normal_stems_4",
+      "label": "Normal Stems",
+      "input_kind": "audio",
+      "output_semantic_ids": ["vocals", "drums", "bass", "other"]
+    }
+  ]
+}

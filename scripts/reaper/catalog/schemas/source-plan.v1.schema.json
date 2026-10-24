@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.invalid/schemas/source-plan.v1.schema.json",
+  "title": "SourcePlan v1",
+  "type": "object",
+  "required": ["schema_version", "source_plan_id", "sources"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "source_plan_id": {"type": "string"},
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["source_id", "order", "kind", "project_identity", "track_identity", "item_identity"],
+        "properties": {
+          "source_id": {"type": "string"},
+          "order": {"type": "integer", "minimum": 1},
+          "kind": {"const": "selected_item"},
+          "project_identity": {"type": "string"},
+          "track_identity": {"type": "string"},
+          "item_identity": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

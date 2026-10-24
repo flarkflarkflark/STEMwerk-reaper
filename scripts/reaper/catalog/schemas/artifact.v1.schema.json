@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.invalid/schemas/artifact.v1.schema.json",
+  "title": "Artifact v1",
+  "type": "object",
+  "required": ["schema_version", "artifact_id", "kind", "semantic_id", "relative_path", "producer"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "artifact_id": {"type": "string"},
+    "kind": {"const": "audio"},
+    "semantic_id": {"type": "string"},
+    "relative_path": {"type": "string"},
+    "producer": {
+      "type": "object",
+      "required": ["kind", "stage_id", "port_id"],
+      "properties": {"kind": {"const": "stage_output"}, "stage_id": {"type": "string"}, "port_id": {"type": "string"}},
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
