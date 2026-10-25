@@ -5,6 +5,7 @@ local scriptDir = arg[0]:match("^(.*)[/\\][^/\\]*$") or "."
 local repoRoot = scriptDir .. "/../.."
 local modulePath = repoRoot .. "/scripts/reaper/_internal/STEMwerk_Workflow_Contracts.lua"
 local fixtures = repoRoot .. "/tests/fixtures/golden_2310"
+local parityCorpus = repoRoot .. "/tests/fixtures/workflow_result_validator_parity.v1.json"
 
 local CONTRACTS = dofile(modulePath)
 local failures = 0
@@ -290,6 +291,34 @@ do
     check("unpaired low surrogate is rejected, not silently emitted",
         decoded == nil and tostring(err):find("unpaired UTF-16 surrogate", 1, true) ~= nil,
         err)
+end
+
+-- Shared raw-JSON corpus: Python, Lua and JSON Schema consume the same cases.
+-- Loading both the corpus and referenced goldens through CONTRACTS.loadJson
+-- is essential here; preconstructed Lua tables cannot reproduce the empty
+-- JSON array/object identity bug.
+do
+    local corpus, corpusErr = CONTRACTS.loadJson(parityCorpus)
+    check("load shared workflow-result parity corpus", corpus ~= nil, corpusErr)
+    if corpus then
+        for _, case in ipairs(corpus.cases) do
+            local document = case.document
+            if case.fixture then
+                local payload, fixtureErr = CONTRACTS.loadJson(repoRoot .. "/tests/fixtures/" .. case.fixture)
+                check("load shared fixture " .. case.id, payload ~= nil, fixtureErr)
+                if payload then
+                    document = payload
+                    for _, key in ipairs(case.document_path) do document = document[key] end
+                end
+            end
+            if document then
+                local accepted = CONTRACTS.validateWorkflowResult(document) ~= nil
+                check("shared workflow-result parity " .. case.id,
+                    accepted == case.expected.lua,
+                    "expected " .. tostring(case.expected.lua) .. ", got " .. tostring(accepted))
+            end
+        end
+    end
 end
 
 if failures > 0 then

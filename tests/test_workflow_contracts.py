@@ -7,6 +7,14 @@ from pathlib import Path
 
 import pytest
 
+try:
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
+    from referencing import Registry, Resource
+except ImportError:
+    Draft202012Validator = None
+    import fastjsonschema
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_SRC = ROOT / "scripts" / "reaper" / "vendor" / "stemwerk-core" / "src"
@@ -21,6 +29,7 @@ from stemwerk_core.workflow_contracts import (  # noqa: E402
     validate_bundle,
     validate_catalogs,
     validate_workflow_request,
+    validate_workflow_result,
 )
 
 
@@ -28,6 +37,8 @@ GOLDENS = (
     FIXTURES / "golden_2310" / "normal_stems_new_tracks.json",
     FIXTURES / "golden_2310" / "normal_stems_in_place.json",
 )
+
+PARITY_CORPUS = FIXTURES / "workflow_result_validator_parity.v1.json"
 
 
 def _bundle() -> dict:
@@ -527,6 +538,10 @@ _VALIDATOR_FIELDS = {
     "import-plan.v1.schema.json": {"schema_version", "request_id", "workflow_id", "destination", "grouping", "create_folder", "source_after", "origin_project_policy", "imports"},
 }
 
+_CONDITIONALLY_REQUIRED_FIELDS = {
+    "workflow-result.v1.schema.json": {"actual_runtime"},
+}
+
 
 def test_schema_field_vocabulary_matches_hand_validators():
     schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
@@ -534,7 +549,8 @@ def test_schema_field_vocabulary_matches_hand_validators():
         schema = json.loads((schema_dir / filename).read_text(encoding="utf-8"))
         schema_fields = set(schema["properties"])
         assert schema_fields == expected_fields, f"{filename}: schema properties {schema_fields} != validator fields {expected_fields}"
-        assert set(schema["required"]) == expected_fields, f"{filename}: not every property is required"
+        conditional = _CONDITIONALLY_REQUIRED_FIELDS.get(filename, set())
+        assert set(schema["required"]) == expected_fields - conditional, f"{filename}: required fields drifted"
         assert schema["additionalProperties"] is False, f"{filename}: must reject unknown fields like the hand validators do"
 
 
@@ -552,3 +568,58 @@ def test_source_plan_schema_matches_slice0_single_source_restriction():
     schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
     schema = json.loads((schema_dir / "source-plan.v1.schema.json").read_text(encoding="utf-8"))
     assert schema["properties"]["sources"]["maxItems"] == 1
+
+
+def _shared_parity_document(case: dict) -> dict:
+    if "document" in case:
+        return case["document"]
+    payload = load_json(FIXTURES / case["fixture"])
+    for key in case["document_path"]:
+        payload = payload[key]
+    return payload
+
+
+def _workflow_result_schema_validator():
+    schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
+    schema = json.loads((schema_dir / "workflow-result.v1.schema.json").read_text(encoding="utf-8"))
+
+    if Draft202012Validator is not None:
+        resources = []
+        for path in schema_dir.glob("*.schema.json"):
+            document = json.loads(path.read_text(encoding="utf-8"))
+            resources.append((document["$id"], Resource.from_contents(document)))
+        validator = Draft202012Validator(schema, registry=Registry().with_resources(resources))
+        return validator.validate, JsonSchemaValidationError
+
+    def load_schema(uri: str) -> dict:
+        return json.loads((schema_dir / uri.rsplit("/", 1)[-1]).read_text(encoding="utf-8"))
+
+    return (
+        fastjsonschema.compile(schema, handlers={"https": load_schema}),
+        fastjsonschema.JsonSchemaException,
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    load_json(PARITY_CORPUS)["cases"],
+    ids=lambda case: case["id"],
+)
+def test_shared_workflow_result_corpus_matches_python_and_json_schema(case):
+    document = _shared_parity_document(case)
+
+    try:
+        validate_workflow_result(document)
+        python_accepted = True
+    except ContractError:
+        python_accepted = False
+
+    schema_validator, schema_error = _workflow_result_schema_validator()
+    try:
+        schema_validator(document)
+        schema_accepted = True
+    except schema_error:
+        schema_accepted = False
+
+    assert python_accepted is case["expected"]["python"]
+    assert schema_accepted is case["expected"]["schema"]

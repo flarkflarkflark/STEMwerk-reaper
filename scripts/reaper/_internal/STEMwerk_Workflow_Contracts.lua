@@ -4,6 +4,8 @@
 local M = {}
 local SCHEMA_VERSION = "1.0.0"
 local JSON_NULL = {}
+local JSON_ARRAY_METATABLE = {}
+local JSON_OBJECT_METATABLE = {}
 M.JSON_NULL = JSON_NULL
 
 local function fail(message)
@@ -108,7 +110,7 @@ local function decodeJson(text)
     local function parseArray()
         pos = pos + 1
         skipSpace()
-        local result = {}
+        local result = setmetatable({}, JSON_ARRAY_METATABLE)
         if text:sub(pos, pos) == "]" then pos = pos + 1; return result end
         while true do
             result[#result + 1] = parseValue()
@@ -124,7 +126,7 @@ local function decodeJson(text)
     local function parseObject()
         pos = pos + 1
         skipSpace()
-        local result, seen = {}, {}
+        local result, seen = setmetatable({}, JSON_OBJECT_METATABLE), {}
         if text:sub(pos, pos) == "}" then pos = pos + 1; return result end
         while true do
             local key = parseString()
@@ -174,12 +176,20 @@ function M.loadJson(path)
 end
 
 local function object(value, where)
-    if type(value) ~= "table" or value == JSON_NULL then fail(where .. " must be an object") end
+    if type(value) ~= "table" or value == JSON_NULL
+        or getmetatable(value) == JSON_ARRAY_METATABLE
+    then
+        fail(where .. " must be an object")
+    end
     return value
 end
 
 local function array(value, where)
-    object(value, where)
+    if type(value) ~= "table" or value == JSON_NULL
+        or getmetatable(value) == JSON_OBJECT_METATABLE
+    then
+        fail(where .. " must be an array")
+    end
     local count = #value
     for key in pairs(value) do
         if type(key) ~= "number" or key < 1 or key > count or key % 1 ~= 0 then

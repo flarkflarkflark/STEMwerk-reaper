@@ -2,16 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stemwerk.invalid/schemas/workflow-result.v1.schema.json",
   "title": "WorkflowResult v1",
-  "description": "Shape/type reference only. Stateful invariants this schema cannot express (e.g. actual_runtime is required only when state=succeeded, deliverables must be empty otherwise, import eligibility gating) are enforced by the authoritative hand validators: scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/workflow_contracts.py (Python, authoritative) and scripts/reaper/_internal/STEMwerk_Workflow_Contracts.lua (Lua, kept equivalent).",
+  "description": "Structural reference with the state-dependent actual_runtime requirement. Semantic invariants that require cross-contract or catalog context (for example deliverable ordering and import eligibility gating) are enforced by the authoritative hand validators: scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/workflow_contracts.py (Python, authoritative) and scripts/reaper/_internal/STEMwerk_Workflow_Contracts.lua (Lua, kept equivalent).",
   "type": "object",
-  "required": ["schema_version", "request_id", "workflow_id", "state", "actual_runtime", "artifacts", "deliverables"],
+  "required": ["schema_version", "request_id", "workflow_id", "state", "artifacts", "deliverables"],
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "request_id": {"type": "string"},
     "workflow_id": {"type": "string"},
     "state": {"enum": ["queued", "running", "succeeded", "failed", "cancelled", "blocked"]},
     "actual_runtime": {
-      "type": "object",
+      "type": ["object", "null"],
       "required": ["model_id", "requested_device", "actual_device", "fallback_applied"],
       "properties": {
         "model_id": {"type": "string"},
@@ -32,5 +32,17 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"state": {"const": "succeeded"}},
+        "required": ["state"]
+      },
+      "then": {
+        "required": ["actual_runtime"],
+        "properties": {"actual_runtime": {"type": "object"}}
+      }
+    }
+  ],
   "additionalProperties": false
 }
