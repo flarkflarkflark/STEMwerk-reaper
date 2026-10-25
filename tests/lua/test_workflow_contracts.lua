@@ -147,6 +147,151 @@ expectInvalid("predicate is outside stage v1", function(b)
     b.workflow_request.stages[1].predicate = "always"
 end, "unsupported field")
 
+-- -----------------------------------------------------------------------
+-- Astra Slice-0 hardening regressions
+-- -----------------------------------------------------------------------
+
+local catalogDir = repoRoot .. "/scripts/reaper/catalog"
+local function loadCatalogs()
+    local capabilities = CONTRACTS.loadJson(catalogDir .. "/capabilities.v1.json")
+    local models = CONTRACTS.loadJson(catalogDir .. "/models.v1.json")
+    local workflows = CONTRACTS.loadJson(catalogDir .. "/workflows.v1.json")
+    return {
+        capabilities = capabilities.capabilities,
+        models = models.models,
+        workflows = workflows.workflows,
+    }
+end
+local REAL_CATALOGS = loadCatalogs()
+
+do
+    local bundle = loadBundle("normal_stems_new_tracks.json")
+    local ok, err = CONTRACTS.validateBundle(bundle, REAL_CATALOGS)
+    check("golden bundle validates against real catalog relational closure", ok == true, err)
+end
+
+do
+    local bundle = loadBundle("normal_stems_new_tracks.json")
+    bundle.workflow_request.stages[1].model_id = "totally_unknown_model"
+    local ok, err = CONTRACTS.validateBundle(bundle, REAL_CATALOGS)
+    check("stage unknown model_id rejected WITH catalogs",
+        ok == nil and tostring(err):find("unknown model_id", 1, true) ~= nil, err)
+end
+
+do
+    local bundle = loadBundle("normal_stems_new_tracks.json")
+    bundle.workflow_request.stages[1].capability_id = "totally_unknown_capability"
+    local ok, err = CONTRACTS.validateBundle(bundle, REAL_CATALOGS)
+    check("stage unknown capability_id rejected WITH catalogs",
+        ok == nil and tostring(err):find("unknown capability_id", 1, true) ~= nil, err)
+end
+
+do
+    local bundle = loadBundle("normal_stems_new_tracks.json")
+    bundle.workflow_request.stages[1].model_id = "totally_unknown_model"
+    local ok, err = CONTRACTS.validateBundle(bundle)
+    check("stage unknown model_id still ACCEPTED without catalogs (legacy structural-only mode)",
+        ok == true, err)
+end
+
+expectInvalid("actual_runtime.model_id disagrees with requested_runtime.model_id without fallback", function(b)
+    b.workflow_result.actual_runtime.model_id = "htdemucs_ft"
+end, "actual_runtime.model_id disagrees")
+
+do
+    local bundle = loadBundle("normal_stems_new_tracks.json")
+    bundle.workflow_result.actual_runtime.model_id = "htdemucs_ft"
+    bundle.workflow_result.actual_runtime.fallback_applied = true
+    local ok, err = CONTRACTS.validateBundle(bundle)
+    check("actual_runtime.model_id disagreement allowed when fallback_applied=true", ok == true, err)
+end
+
+for _, state in ipairs({ "failed", "cancelled", "running", "queued", "blocked" }) do
+    expectInvalid("non-succeeded state (" .. state .. ") with nonempty import plan is rejected", function(b)
+        b.workflow_result.state = state
+    end, "must be empty")
+end
+
+for _, state in ipairs({ "failed", "cancelled", "running", "queued", "blocked" }) do
+    local bundle = loadBundle("normal_stems_new_tracks.json")
+    bundle.workflow_result.state = state
+    bundle.workflow_result.actual_runtime = nil
+    bundle.workflow_result.deliverables = {}
+    bundle.workflow_result.artifacts = {}
+    bundle.import_plan.imports = {}
+    local ok, err = CONTRACTS.validateBundle(bundle)
+    check(state .. " result is representable without fabricated runtime/outputs", ok == true, err)
+end
+
+expectInvalid("succeeded result still requires actual_runtime", function(b)
+    b.workflow_result.actual_runtime = nil
+end, "actual_runtime")
+
+expectInvalid("workflow_request.deliverable_ids must not be empty", function(b)
+    b.workflow_request.deliverable_ids = {}
+end, "deliverable_ids must not be empty")
+
+expectInvalid("source_plan.sources supports exactly one source in Slice-0", function(b)
+    local sources = b.workflow_request.source_plan.sources
+    local second = {
+        source_id = "source_002",
+        order = 2,
+        kind = "selected_item",
+        project_identity = sources[1].project_identity,
+        track_identity = sources[1].track_identity,
+        item_identity = "source_item_002",
+    }
+    sources[#sources + 1] = second
+end, "exactly one source")
+
+expectInvalid("import order must match array position exactly", function(b)
+    local imports = b.import_plan.imports
+    imports[1].order, imports[2].order = imports[2].order, imports[1].order
+end, "import order must match array position")
+
+-- -----------------------------------------------------------------------
+-- Astra: Lua JSON decoder must reassemble UTF-16 surrogate pairs into a
+-- single non-BMP UTF-8 codepoint, matching Python's json.loads, instead of
+-- emitting two separate invalid 3-byte sequences for the raw surrogate
+-- halves. Fixture: U+1F600 (grinning face emoji) as "😀".
+-- -----------------------------------------------------------------------
+do
+    local tmpPath = os.tmpname()
+    local f = assert(io.open(tmpPath, "wb"))
+    f:write('{"label":"\\ud83d\\ude00"}')
+    f:close()
+    local decoded, err = CONTRACTS.loadJson(tmpPath)
+    os.remove(tmpPath)
+    local expected = string.char(0xF0, 0x9F, 0x98, 0x80) -- U+1F600 in correct UTF-8
+    check("surrogate pair decodes to correct non-BMP UTF-8 bytes",
+        decoded ~= nil and decoded.label == expected,
+        decoded and ("got " .. #decoded.label .. " bytes") or err)
+end
+
+do
+    local tmpPath = os.tmpname()
+    local f = assert(io.open(tmpPath, "wb"))
+    f:write('{"label":"\\ud83d"}')
+    f:close()
+    local decoded, err = CONTRACTS.loadJson(tmpPath)
+    os.remove(tmpPath)
+    check("unpaired high surrogate is rejected, not silently emitted",
+        decoded == nil and tostring(err):find("unpaired UTF-16 surrogate", 1, true) ~= nil,
+        err)
+end
+
+do
+    local tmpPath = os.tmpname()
+    local f = assert(io.open(tmpPath, "wb"))
+    f:write('{"label":"\\ude00"}')
+    f:close()
+    local decoded, err = CONTRACTS.loadJson(tmpPath)
+    os.remove(tmpPath)
+    check("unpaired low surrogate is rejected, not silently emitted",
+        decoded == nil and tostring(err):find("unpaired UTF-16 surrogate", 1, true) ~= nil,
+        err)
+end
+
 if failures > 0 then
     print(string.format("RESULT: %d failure(s)", failures))
     os.exit(1)

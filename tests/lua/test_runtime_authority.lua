@@ -303,6 +303,31 @@ do
 end
 
 -- ---------------------------------------------------------------------
+-- Test 11: getCapabilityPath()/readCapabilities() are defined exactly once
+-- in STEMwerk_Runtime_Setup.lua (issue: byte-identical duplicate definitions
+-- were found at two locations, silently overwriting each other with no
+-- behavior difference). This locks in the observable behavior so the
+-- duplicate can be removed safely.
+-- ---------------------------------------------------------------------
+resetWorld()
+do
+    local capPath = RUNTIME_SETUP.getCapabilityPath()
+    check("test11: getCapabilityPath returns the state-dir capabilities.env path",
+        capPath == stateDir .. sep .. "capabilities.env", tostring(capPath))
+
+    check("test11: readCapabilities returns nil when the file does not exist",
+        RUNTIME_SETUP.readCapabilities() == nil)
+
+    writeStateFile("capabilities.env", { VERIFICATION = "ok", PYTHON_PATH = venvPython })
+    local caps = RUNTIME_SETUP.readCapabilities()
+    check("test11: readCapabilities parses KEY=VALUE lines from capabilities.env",
+        caps ~= nil and caps.kv.VERIFICATION == "ok" and caps.kv.PYTHON_PATH == venvPython,
+        caps and table.concat({ tostring(caps.kv.VERIFICATION), tostring(caps.kv.PYTHON_PATH) }, ",") or "nil")
+    check("test11: readCapabilities reports the same path as getCapabilityPath",
+        caps.path == capPath, tostring(caps.path))
+end
+
+-- ---------------------------------------------------------------------
 -- Cleanup
 -- ---------------------------------------------------------------------
 os.remove(venvPython)

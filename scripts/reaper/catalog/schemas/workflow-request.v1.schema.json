@@ -8,8 +8,8 @@
     "schema_version": {"const": "1.0.0"},
     "request_id": {"type": "string"},
     "workflow_id": {"type": "string"},
-    "source_plan": {"type": "object"},
-    "stages": {"type": "array", "minItems": 1},
+    "source_plan": {"$ref": "source-plan.v1.schema.json"},
+    "stages": {"type": "array", "minItems": 1, "items": {"$ref": "stage-spec.v1.schema.json"}},
     "deliverable_ids": {"type": "array", "minItems": 1, "uniqueItems": true},
     "requested_runtime": {
       "type": "object",

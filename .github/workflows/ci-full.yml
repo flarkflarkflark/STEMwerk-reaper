@@ -54,7 +54,20 @@ jobs:
             tests/test_linux_package_portability_2306.py \
             tests/test_macos_intel_dks_diagnostics_2306.py \
             tests/test_2306_narrow_hotfix.py \
+            tests/test_workflow_contracts.py \
+            tests/test_runtime_resolution.py \
+            tests/test_normal_stems_authoritative_contract_gate.py \
+            tests/test_dks_authoritative_contract_gate.py \
+            tests/test_drum_kit_capability_probe.py \
+            tests/test_linux_drumsep_rocm_fallback_chain.py \
             tests/i18n/test_languages.py
+
+      - name: Run portable runtime diagnostics harness tests
+        # Only the opt-in @pytest.mark.portable subset: fully controlled
+        # inputs, no managed-runtime/hardware discovery. The real-* tests
+        # require this repo's bootstrapped managed runtime and actual
+        # hardware and stay runnable separately, outside portable CI.
+        run: python -m pytest -q -m portable tests/test_stemwerk_runtime_diagnostics_harness.py
 
       - name: Test i18n completeness
         run: |
@@ -63,3 +76,11 @@ jobs:
             echo "Language file validation failed"
             exit 1
           fi
+
+      - name: Install Lua
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+
+      - name: Run Lua workflow contract tests
+        run: |
+          lua5.4 tests/lua/test_workflow_contracts.lua
+          lua5.4 tests/lua/test_runtime_authority.lua

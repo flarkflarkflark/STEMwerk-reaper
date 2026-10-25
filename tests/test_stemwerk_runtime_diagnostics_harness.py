@@ -13,6 +13,18 @@ Real vs mocked evidence, explicitly:
   structure* correctly represents those shapes, by feeding it fake probe
   data through the same code paths ambient probing would use.
 - everything else is a structural/state test that needs no real hardware.
+
+CI selection: @pytest.mark.portable marks exactly the tests whose inputs are
+fully controlled (mocks, fixtures, tmp_path, or the ambient interpreter used
+only as a deterministic subprocess vehicle) -- no discovery of or dependence
+on the actual machine's managed runtimes, GPU, or OS. CI runs only
+`-m portable`; the mark is opt-in so a new test is excluded from portable CI
+until someone classifies it deliberately. Note that three
+test_run_real_*_fixture_* tests ARE portable (they drive the --real fixture
+path against monkeypatched empty caches), while
+test_collect_contracts_reports_fail_on_resolution_error is NOT (its drum-kit
+sections invoke the real _select_drumsep_runtime discovery). Names alone do
+not determine portability; the mark does.
 """
 
 from __future__ import annotations
@@ -34,6 +46,7 @@ import stemwerk_runtime_diagnostics as diag  # noqa: E402
 # Verdict vocabulary
 # ---------------------------------------------------------------------------
 
+@pytest.mark.portable
 def test_verdict_constants_are_the_five_distinct_states():
     verdicts = {diag.PASS, diag.FAIL, diag.SKIPPED, diag.UNAVAILABLE, diag.NOT_APPLICABLE}
     assert verdicts == {"PASS", "FAIL", "SKIPPED", "UNAVAILABLE", "NOT_APPLICABLE"}
@@ -60,6 +73,7 @@ def test_real_report_is_json_serializable_round_trip():
     assert reloaded["schema_version"] == diag.SCHEMA_VERSION
 
 
+@pytest.mark.portable
 def test_json_and_markdown_render_from_the_same_report_object(tmp_path):
     """Section 5's 'do not maintain two independent reporting
     implementations' -- to_markdown() must be a pure function of the report
@@ -156,6 +170,7 @@ def test_backend_matrix_marks_other_platforms_not_applicable_on_linux():
 # Mocked platform shapes that cannot exist on this machine
 # ---------------------------------------------------------------------------
 
+@pytest.mark.portable
 def test_mocked_platform_shape_windows_cuda_backend_matrix_row():
     """Cannot run on real Windows/CUDA hardware from this Linux machine --
     this proves the backend_matrix ROW SHAPE for a Windows/CUDA machine
@@ -174,6 +189,7 @@ def test_mocked_platform_shape_windows_cuda_backend_matrix_row():
     assert row == {"cuda": diag.PASS, "directml": diag.UNAVAILABLE, "cpu": diag.PASS}
 
 
+@pytest.mark.portable
 def test_mocked_platform_shape_windows_directml_backend_matrix_row():
     fake_hardware_main = {"status": diag.PASS, "auto_selected_backend": "directml"}
     fake_drumsep_pythons: dict = {}
@@ -188,6 +204,7 @@ def test_mocked_platform_shape_windows_directml_backend_matrix_row():
     assert row == {"cuda": diag.UNAVAILABLE, "directml": diag.PASS, "cpu": diag.PASS}
 
 
+@pytest.mark.portable
 def test_mocked_platform_shape_macos_mps_runtime_fields():
     """Structural proof that a macOS/MPS-shaped runtime probe result (as
     the _RUNTIME_PROBE_SRC script would emit on real macOS) is represented
@@ -213,6 +230,7 @@ def test_mocked_platform_shape_macos_mps_runtime_fields():
     assert "torch_version: 2.5.1" in markdown
 
 
+@pytest.mark.portable
 def test_mocked_platform_shape_cpu_only_machine_backend_matrix_row():
     fake_hardware_main = {"status": diag.PASS, "auto_selected_backend": "cpu"}
     row = {}
@@ -230,12 +248,14 @@ def test_mocked_platform_shape_cpu_only_machine_backend_matrix_row():
 # Missing torch / missing model / missing interpreter
 # ---------------------------------------------------------------------------
 
+@pytest.mark.portable
 def test_collect_runtime_reports_unavailable_when_no_interpreter_found():
     result = diag.collect_runtime(None, source_label="managed")
     assert result["status"] == diag.UNAVAILABLE
     assert "no managed interpreter found" in result["reason"]
 
 
+@pytest.mark.portable
 def test_collect_runtime_reports_fail_when_interpreter_lacks_torch(tmp_path):
     """A real interpreter that exists but genuinely has no torch installed
     -- uses the actual Python running this test (guaranteed to lack a
@@ -247,6 +267,7 @@ def test_collect_runtime_reports_fail_when_interpreter_lacks_torch(tmp_path):
     assert "probe_error" in result
 
 
+@pytest.mark.portable
 def test_run_real_normal_stems_fixture_skips_when_model_not_locally_available(tmp_path, monkeypatch):
     monkeypatch.setattr(diag, "managed_model_cache_dir", lambda: tmp_path / "empty_models")
     result = diag.run_real_normal_stems_fixture("cpu", Path(sys.executable))
@@ -254,6 +275,7 @@ def test_run_real_normal_stems_fixture_skips_when_model_not_locally_available(tm
     assert "not locally available" in result["reason"]
 
 
+@pytest.mark.portable
 def test_run_real_drum_kit_direct_fixture_skips_when_checkpoint_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(diag, "managed_model_cache_dir", lambda: tmp_path / "empty_models")
     result = diag.run_real_drum_kit_direct_fixture("rocm", Path(sys.executable))
@@ -261,6 +283,7 @@ def test_run_real_drum_kit_direct_fixture_skips_when_checkpoint_missing(tmp_path
     assert "not locally available" in result["reason"]
 
 
+@pytest.mark.portable
 def test_run_real_normal_stems_fixture_unavailable_without_managed_python():
     result = diag.run_real_normal_stems_fixture("cpu", None)
     assert result["status"] == diag.UNAVAILABLE
@@ -270,6 +293,7 @@ def test_run_real_normal_stems_fixture_unavailable_without_managed_python():
 # Model-cache / environment safety
 # ---------------------------------------------------------------------------
 
+@pytest.mark.portable
 def test_model_cache_mtime_diff_detects_a_changed_file(tmp_path, monkeypatch):
     cache = tmp_path / "models"
     cache.mkdir()
@@ -284,6 +308,7 @@ def test_model_cache_mtime_diff_detects_a_changed_file(tmp_path, monkeypatch):
     assert any("htdemucs.yaml" in key for key in result["changed_files"])
 
 
+@pytest.mark.portable
 def test_model_cache_mtime_diff_reports_unchanged_when_nothing_moved(tmp_path, monkeypatch):
     cache = tmp_path / "models"
     cache.mkdir()
@@ -296,6 +321,7 @@ def test_model_cache_mtime_diff_reports_unchanged_when_nothing_moved(tmp_path, m
     assert result["changed_files"] == {}
 
 
+@pytest.mark.portable
 def test_run_real_normal_stems_fixture_does_not_mutate_process_environment(tmp_path, monkeypatch):
     """AUDIO_SEPARATOR_MODEL_DIR and TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD must
     only be set on the subprocess's own env copy, never on this process's
@@ -312,6 +338,7 @@ def test_run_real_normal_stems_fixture_does_not_mutate_process_environment(tmp_p
     assert "AUDIO_SEPARATOR_MODEL_DIR" not in os.environ or os.environ.get("AUDIO_SEPARATOR_MODEL_DIR") == before_keys.get("AUDIO_SEPARATOR_MODEL_DIR")
 
 
+@pytest.mark.portable
 def test_stage_model_copy_never_writes_outside_dest_dir(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()
@@ -354,6 +381,7 @@ def test_collect_contracts_reports_fail_on_resolution_error(monkeypatch):
     assert "reason" in contracts["normal_stems"]
 
 
+@pytest.mark.portable
 def test_collect_contracts_unavailable_when_seam_module_not_importable(monkeypatch):
     import builtins
 
@@ -423,6 +451,7 @@ def _patch_normal_stems_verbatim(monkeypatch):
     )
 
 
+@pytest.mark.portable
 def test_drum_kit_contracts_accept_linux_attributed_cpu_fallback(monkeypatch):
     """Accepted Slice-4 exception, Linux scope: an explicit cuda:N request
     whose selector delivered the attributed CPU fallback (selection_policy
@@ -456,6 +485,7 @@ def test_drum_kit_contracts_accept_linux_attributed_cpu_fallback(monkeypatch):
     assert contracts["normal_stems"]["plan"]["resolved_backend"] == "cuda"
 
 
+@pytest.mark.portable
 def test_drum_kit_contracts_fail_when_runtime_missing_or_broken(monkeypatch):
     """A selector that found nothing usable (python_path None, kind
     'missing'/'broken') must still surface FAIL with the resolver's exact
@@ -474,6 +504,7 @@ def test_drum_kit_contracts_fail_when_runtime_missing_or_broken(monkeypatch):
     assert "backend_unavailable" in direct["reason"]
 
 
+@pytest.mark.portable
 def test_drum_kit_contracts_reject_attributed_cpu_fallback_off_linux(monkeypatch):
     """The Slice-4 exception carries an explicit sys.platform guard: the
     identical fallback attribution on a non-Linux platform must be rejected
@@ -493,6 +524,7 @@ def test_drum_kit_contracts_reject_attributed_cpu_fallback_off_linux(monkeypatch
     assert "backend_unavailable" in direct["reason"]
 
 
+@pytest.mark.portable
 def test_drum_kit_split_stage1_rejection_not_bypassed_by_stage2_exception(monkeypatch):
     """Kit Split resolves stage 1 (Demucs) first; a stage-1 rejection must
     FAIL the whole workflow even when the stage-2 DrumSep selector would

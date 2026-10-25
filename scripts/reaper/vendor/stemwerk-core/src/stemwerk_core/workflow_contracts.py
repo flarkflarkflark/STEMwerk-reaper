@@ -149,6 +149,11 @@ def validate_source_plan(document: Any) -> Mapping[str, Any]:
     if not sources:
         raise ContractError("source_plan.sources must not be empty")
     identities = _unique(sources, "source_id", "source_plan.sources")
+    if len(sources) > 1:
+        raise ContractError(
+            "source_plan.sources supports exactly one source in Slice-0; "
+            "multi-source attribution is not yet representable"
+        )
     orders: set[int] = set()
     for source_id, source in identities.items():
         _only_keys(source, {"source_id", "order", "kind", "project_identity", "track_identity", "item_identity"}, f"source {source_id}")
@@ -236,18 +241,27 @@ def validate_workflow_result(document: Any) -> Mapping[str, Any]:
     state = _string(result.get("state"), "workflow_result.state")
     if state not in _PROCESSING_STATES:
         raise ContractError(f"invalid processing state: {state}")
-    runtime = _mapping(result.get("actual_runtime"), "workflow_result.actual_runtime")
-    _only_keys(runtime, {"model_id", "requested_device", "actual_device", "fallback_applied"}, "workflow_result.actual_runtime")
-    _stable_id(runtime.get("model_id"), "workflow_result.actual_runtime.model_id")
-    _string(runtime.get("requested_device"), "workflow_result.actual_runtime.requested_device")
-    _string(runtime.get("actual_device"), "workflow_result.actual_runtime.actual_device")
-    _boolean(runtime.get("fallback_applied"), "workflow_result.actual_runtime.fallback_applied")
+    runtime_value = result.get("actual_runtime")
+    if runtime_value is None and state != "succeeded":
+        # Failure/cancel/block/queued/running states must remain representable
+        # without fabricating runtime evidence that may never have existed
+        # (e.g. a pre-runtime failure before a model/device was ever chosen).
+        pass
+    else:
+        runtime = _mapping(runtime_value, "workflow_result.actual_runtime")
+        _only_keys(runtime, {"model_id", "requested_device", "actual_device", "fallback_applied"}, "workflow_result.actual_runtime")
+        _stable_id(runtime.get("model_id"), "workflow_result.actual_runtime.model_id")
+        _string(runtime.get("requested_device"), "workflow_result.actual_runtime.requested_device")
+        _string(runtime.get("actual_device"), "workflow_result.actual_runtime.actual_device")
+        _boolean(runtime.get("fallback_applied"), "workflow_result.actual_runtime.fallback_applied")
     artifacts = [_mapping(item, "workflow_result.artifacts item") for item in _list(result.get("artifacts"), "workflow_result.artifacts")]
     _unique(artifacts, "artifact_id", "workflow_result.artifacts")
     for artifact in artifacts:
         validate_artifact(artifact)
     deliverables = [_mapping(item, "workflow_result.deliverables item") for item in _list(result.get("deliverables"), "workflow_result.deliverables")]
     _unique(deliverables, "semantic_id", "workflow_result.deliverables")
+    if deliverables and state != "succeeded":
+        raise ContractError("workflow_result.deliverables must be empty unless state is succeeded")
     for item in deliverables:
         _only_keys(item, {"semantic_id", "artifact_id"}, "workflow_result.deliverable")
         _stable_id(item.get("artifact_id"), "workflow_result.deliverable.artifact_id")
@@ -271,17 +285,16 @@ def validate_import_plan(document: Any) -> Mapping[str, Any]:
         raise ContractError("import_plan.origin_project_policy must be fail_closed")
     imports = [_mapping(item, "import_plan.imports item") for item in _list(plan.get("imports"), "import_plan.imports")]
     semantics = _unique(imports, "semantic_id", "import_plan.imports")
-    orders: set[int] = set()
     for semantic_id, item in semantics.items():
         _only_keys(item, {"order", "semantic_id", "artifact_id", "name_template"}, f"import {semantic_id}")
         _stable_id(item.get("artifact_id"), f"import {semantic_id}.artifact_id")
         order = item.get("order")
-        if not isinstance(order, int) or isinstance(order, bool) or order < 1 or order in orders:
-            raise ContractError("import ordering must contain unique positive integers")
-        orders.add(order)
+        if not isinstance(order, int) or isinstance(order, bool) or order < 1:
+            raise ContractError("import order must be a positive integer")
         _string(item.get("name_template"), f"import {semantic_id}.name_template")
-    if orders != set(range(1, len(imports) + 1)):
-        raise ContractError("import ordering must be contiguous")
+    orders = [item.get("order") for item in imports]
+    if orders != list(range(1, len(imports) + 1)):
+        raise ContractError("import order must match array position exactly (array order is authoritative)")
     return plan
 
 
@@ -302,6 +315,8 @@ def validate_workflow_request(document: Any) -> Mapping[str, Any]:
     if orders != list(range(1, len(stages) + 1)):
         raise ContractError("stages must be in contiguous execution order")
     deliverables = [_stable_id(item, "workflow_request.deliverable_ids item") for item in _list(request.get("deliverable_ids"), "workflow_request.deliverable_ids")]
+    if not deliverables:
+        raise ContractError("workflow_request.deliverable_ids must not be empty")
     if len(set(deliverables)) != len(deliverables):
         raise ContractError("duplicate deliverable identity")
     runtime = _mapping(request.get("requested_runtime"), "workflow_request.requested_runtime")
@@ -313,8 +328,15 @@ def validate_workflow_request(document: Any) -> Mapping[str, Any]:
     return request
 
 
-def validate_bundle(document: Any) -> Mapping[str, Any]:
-    """Validate the six contracts together, including cross-references."""
+def validate_bundle(
+    document: Any, catalogs: Mapping[str, list[Mapping[str, Any]]] | None = None
+) -> Mapping[str, Any]:
+    """Validate the six contracts together, including cross-references.
+
+    When ``catalogs`` (as returned by :func:`validate_catalogs`) is supplied,
+    stage/model/capability references are additionally checked for relational
+    closure against the real catalog rather than only structural id shape.
+    """
 
     bundle = _mapping(document, "bundle")
     _reject_reaper_pointers(bundle)
@@ -329,6 +351,15 @@ def validate_bundle(document: Any) -> Mapping[str, Any]:
         raise ContractError("request identity mismatch")
     if result["workflow_id"] != workflow_id or import_plan["workflow_id"] != workflow_id:
         raise ContractError("workflow identity mismatch")
+
+    requested_runtime = request["requested_runtime"]
+    actual_runtime = result.get("actual_runtime")
+    if actual_runtime is not None and not actual_runtime["fallback_applied"]:
+        if actual_runtime["model_id"] != requested_runtime["model_id"]:
+            raise ContractError(
+                "actual_runtime.model_id disagrees with requested_runtime.model_id "
+                "and fallback_applied is false"
+            )
 
     source_ids = {source["source_id"] for source in request["source_plan"]["sources"]}
     stages = request["stages"]
@@ -350,6 +381,22 @@ def validate_bundle(document: Any) -> Mapping[str, Any]:
             if input_ref["port_id"] not in output_ports[producer]:
                 raise ContractError(f"missing producer output port: {input_ref['port_id']}")
 
+    if catalogs is not None:
+        capability_ids = {c["capability_id"] for c in catalogs["capabilities"]}
+        models_by_id = {m["model_id"]: m for m in catalogs["models"]}
+        for stage in stages:
+            if stage["capability_id"] not in capability_ids:
+                raise ContractError(f"stage references unknown capability_id: {stage['capability_id']}")
+            model = models_by_id.get(stage["model_id"])
+            if model is None:
+                raise ContractError(f"stage references unknown model_id: {stage['model_id']}")
+            if model["capability_id"] != stage["capability_id"]:
+                raise ContractError(
+                    f"stage model_id {stage['model_id']} does not implement capability_id {stage['capability_id']}"
+                )
+        if requested_runtime["model_id"] not in models_by_id:
+            raise ContractError(f"requested_runtime references unknown model_id: {requested_runtime['model_id']}")
+
     artifacts = {artifact["artifact_id"]: artifact for artifact in result["artifacts"]}
     for artifact in artifacts.values():
         producer = artifact["producer"]
@@ -369,6 +416,17 @@ def validate_bundle(document: Any) -> Mapping[str, Any]:
 
     declared = request["deliverable_ids"]
     delivered = result["deliverables"]
+    imports = import_plan["imports"]
+
+    if result["state"] != "succeeded":
+        # Only a completed, successful result may authorize import. Failure,
+        # cancellation, and in-flight states are representable (deliverables
+        # are already required to be empty by validate_workflow_result), but
+        # the import plan attached to them must be inert.
+        if imports:
+            raise ContractError("import_plan.imports must be empty unless workflow_result.state is succeeded")
+        return bundle
+
     for item in delivered:
         if item["semantic_id"] not in declared:
             raise ContractError(f"undeclared deliverable: {item['semantic_id']}")
@@ -380,7 +438,6 @@ def validate_bundle(document: Any) -> Mapping[str, Any]:
     if [item["semantic_id"] for item in delivered] != declared:
         raise ContractError("deliverables must exactly preserve declared order")
 
-    imports = import_plan["imports"]
     if [item["semantic_id"] for item in imports] != declared:
         raise ContractError("imports must exactly preserve declared deliverable order")
     for item in imports:

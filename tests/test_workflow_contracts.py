@@ -20,6 +20,7 @@ from stemwerk_core.workflow_contracts import (  # noqa: E402
     load_json,
     validate_bundle,
     validate_catalogs,
+    validate_workflow_request,
 )
 
 
@@ -332,6 +333,170 @@ def test_missing_workflow_referenced_by_nothing_still_requires_known_set(tmp_pat
         validate_catalogs(catalog_dir)
 
 
+def _catalog_copy(tmp_path: Path, **overrides) -> Path:
+    """Write a mutable copy of the real v1 catalog dir, applying overrides.
+
+    Each keyword is one of "capabilities" | "models" | "workflows" mapped to
+    a callable that mutates the parsed document in place.
+    """
+
+    catalog_dir = ROOT / "scripts" / "reaper" / "catalog"
+    dest = tmp_path / "catalog"
+    dest.mkdir()
+    for name in ("capabilities", "models", "workflows"):
+        doc = json.loads((catalog_dir / f"{name}.v1.json").read_text(encoding="utf-8"))
+        if name in overrides:
+            overrides[name](doc)
+        (dest / f"{name}.v1.json").write_text(json.dumps(doc), encoding="utf-8")
+    return dest
+
+
+# ---------------------------------------------------------------------------
+# Astra Slice-0 hardening regressions
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_rejects_model_referencing_unknown_capability_id(tmp_path):
+    catalog_dir = _catalog_copy(
+        tmp_path, models=lambda doc: doc["models"][0].__setitem__("capability_id", "no_such_capability")
+    )
+    # s2 wording: "models.<id>.capability_id references unknown capability: ..."
+    with pytest.raises(ContractError, match="references unknown capability"):
+        validate_catalogs(catalog_dir)
+
+
+def test_catalog_rejects_model_output_semantic_ids_disagreeing_with_capability(tmp_path):
+    catalog_dir = _catalog_copy(
+        tmp_path, models=lambda doc: doc["models"][0].__setitem__("output_semantic_ids", ["vocals"])
+    )
+    # s2 wording: "models.<id>.output_semantic_ids must match capability ..."
+    with pytest.raises(ContractError, match="output_semantic_ids must match capability"):
+        validate_catalogs(catalog_dir)
+
+
+def test_catalog_rejects_workflow_with_zero_ordered_stages(tmp_path):
+    catalog_dir = _catalog_copy(
+        tmp_path, workflows=lambda doc: doc["workflows"][0].__setitem__("ordered_stages", [])
+    )
+    with pytest.raises(ContractError, match="ordered_stages must not be empty"):
+        validate_catalogs(catalog_dir)
+
+
+def test_catalog_rejects_workflow_stage_referencing_unknown_capability_id(tmp_path):
+    # s2 workflow-stage schema uses capability_ids (a list of stable ids).
+    catalog_dir = _catalog_copy(
+        tmp_path,
+        workflows=lambda doc: doc["workflows"][0]["ordered_stages"][0].__setitem__(
+            "capability_ids", ["no_such_capability"]
+        ),
+    )
+    with pytest.raises(ContractError, match="references unknown capability"):
+        validate_catalogs(catalog_dir)
+
+
+def test_bundle_accepts_golden_fixture_against_real_catalog_relational_closure():
+    catalog_dir = ROOT / "scripts" / "reaper" / "catalog"
+    catalogs = validate_catalogs(catalog_dir)
+    for path in GOLDENS:
+        payload = load_json(path)
+        validate_bundle(payload["contracts"], catalogs=catalogs)
+
+
+def test_bundle_rejects_stage_unknown_model_id_when_catalogs_supplied():
+    catalogs = validate_catalogs(ROOT / "scripts" / "reaper" / "catalog")
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_request"]["stages"][0]["model_id"] = "totally_unknown_model"
+    with pytest.raises(ContractError, match="unknown model_id"):
+        validate_bundle(bundle, catalogs=catalogs)
+
+
+def test_bundle_rejects_stage_unknown_capability_id_when_catalogs_supplied():
+    catalogs = validate_catalogs(ROOT / "scripts" / "reaper" / "catalog")
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_request"]["stages"][0]["capability_id"] = "totally_unknown_capability"
+    with pytest.raises(ContractError, match="unknown capability_id"):
+        validate_bundle(bundle, catalogs=catalogs)
+
+
+def test_bundle_without_catalogs_stays_structural_only_for_stage_ids():
+    # Documents the current, deliberate legacy behavior: relational closure is
+    # opt-in via the `catalogs=` parameter so bundle validation stays pure and
+    # catalog-agnostic when a caller has none available.
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_request"]["stages"][0]["model_id"] = "totally_unknown_model"
+    validate_bundle(bundle)
+
+
+def test_bundle_rejects_actual_runtime_model_disagreement_without_fallback():
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_result"]["actual_runtime"]["model_id"] = "htdemucs_ft"
+    with pytest.raises(ContractError, match="actual_runtime.model_id disagrees"):
+        validate_bundle(bundle)
+
+
+def test_bundle_allows_actual_runtime_model_disagreement_with_fallback_applied():
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_result"]["actual_runtime"]["model_id"] = "htdemucs_ft"
+    bundle["workflow_result"]["actual_runtime"]["fallback_applied"] = True
+    validate_bundle(bundle)
+
+
+@pytest.mark.parametrize("state", ["failed", "cancelled", "running", "queued", "blocked"])
+def test_bundle_rejects_non_succeeded_state_with_nonempty_import_plan(state):
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_result"]["state"] = state
+    with pytest.raises(ContractError, match="deliverables must be empty|imports must be empty"):
+        validate_bundle(bundle)
+
+
+@pytest.mark.parametrize("state", ["failed", "cancelled", "running", "queued", "blocked"])
+def test_non_succeeded_result_is_representable_without_fabricated_runtime_or_outputs(state):
+    """Core invariant: only a completed, successful result may authorize
+    import, but every other state must remain representable without
+    fabricating execution/runtime evidence that never existed."""
+
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_result"]["state"] = state
+    del bundle["workflow_result"]["actual_runtime"]
+    bundle["workflow_result"]["deliverables"] = []
+    bundle["workflow_result"]["artifacts"] = []
+    bundle["import_plan"]["imports"] = []
+    validate_bundle(bundle)
+
+
+def test_succeeded_result_still_requires_actual_runtime():
+    bundle = copy.deepcopy(_bundle())
+    del bundle["workflow_result"]["actual_runtime"]
+    with pytest.raises(ContractError, match="actual_runtime"):
+        validate_bundle(bundle)
+
+
+def test_workflow_request_rejects_empty_deliverable_ids():
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_request"]["deliverable_ids"] = []
+    with pytest.raises(ContractError, match="deliverable_ids must not be empty"):
+        validate_workflow_request(bundle["workflow_request"])
+
+
+def test_source_plan_rejects_more_than_one_source():
+    bundle = copy.deepcopy(_bundle())
+    second = copy.deepcopy(bundle["workflow_request"]["source_plan"]["sources"][0])
+    second["source_id"] = "source_002"
+    second["order"] = 2
+    second["item_identity"] = "source_item_002"
+    bundle["workflow_request"]["source_plan"]["sources"].append(second)
+    with pytest.raises(ContractError, match="exactly one source"):
+        validate_bundle(bundle)
+
+
+def test_import_plan_rejects_order_field_disagreeing_with_array_position():
+    bundle = copy.deepcopy(_bundle())
+    imports = bundle["import_plan"]["imports"]
+    imports[0]["order"], imports[1]["order"] = imports[1]["order"], imports[0]["order"]
+    with pytest.raises(ContractError, match="import order must match array position"):
+        validate_bundle(bundle)
+
+
 def test_schemas_are_valid_json_and_cover_exactly_six_contracts():
     schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
     names = sorted(path.name for path in schema_dir.glob("*.schema.json"))
@@ -347,3 +512,43 @@ def test_schemas_are_valid_json_and_cover_exactly_six_contracts():
         schema = json.loads(path.read_text(encoding="utf-8"))
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
         assert schema["properties"]["schema_version"]["const"] == "1.0.0"
+
+
+# Field vocabularies the hand validators accept via their `_only_keys(...)`
+# calls in workflow_contracts.py. Kept here as an explicit cross-check so a
+# field added to one representation but not the other is caught, closing the
+# gap where "schemas are valid JSON" was previously the only schema test.
+_VALIDATOR_FIELDS = {
+    "source-plan.v1.schema.json": {"schema_version", "source_plan_id", "sources"},
+    "stage-spec.v1.schema.json": {"schema_version", "stage_id", "order", "capability_id", "model_id", "input", "outputs"},
+    "artifact.v1.schema.json": {"schema_version", "artifact_id", "kind", "semantic_id", "relative_path", "producer"},
+    "workflow-request.v1.schema.json": {"schema_version", "request_id", "workflow_id", "source_plan", "stages", "deliverable_ids", "requested_runtime"},
+    "workflow-result.v1.schema.json": {"schema_version", "request_id", "workflow_id", "state", "actual_runtime", "artifacts", "deliverables"},
+    "import-plan.v1.schema.json": {"schema_version", "request_id", "workflow_id", "destination", "grouping", "create_folder", "source_after", "origin_project_policy", "imports"},
+}
+
+
+def test_schema_field_vocabulary_matches_hand_validators():
+    schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
+    for filename, expected_fields in _VALIDATOR_FIELDS.items():
+        schema = json.loads((schema_dir / filename).read_text(encoding="utf-8"))
+        schema_fields = set(schema["properties"])
+        assert schema_fields == expected_fields, f"{filename}: schema properties {schema_fields} != validator fields {expected_fields}"
+        assert set(schema["required"]) == expected_fields, f"{filename}: not every property is required"
+        assert schema["additionalProperties"] is False, f"{filename}: must reject unknown fields like the hand validators do"
+
+
+def test_workflow_request_schema_composes_nested_contract_schemas():
+    schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
+    request_schema = json.loads((schema_dir / "workflow-request.v1.schema.json").read_text(encoding="utf-8"))
+    assert request_schema["properties"]["source_plan"]["$ref"] == "source-plan.v1.schema.json"
+    assert request_schema["properties"]["stages"]["items"]["$ref"] == "stage-spec.v1.schema.json"
+
+    result_schema = json.loads((schema_dir / "workflow-result.v1.schema.json").read_text(encoding="utf-8"))
+    assert result_schema["properties"]["artifacts"]["items"]["$ref"] == "artifact.v1.schema.json"
+
+
+def test_source_plan_schema_matches_slice0_single_source_restriction():
+    schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
+    schema = json.loads((schema_dir / "source-plan.v1.schema.json").read_text(encoding="utf-8"))
+    assert schema["properties"]["sources"]["maxItems"] == 1

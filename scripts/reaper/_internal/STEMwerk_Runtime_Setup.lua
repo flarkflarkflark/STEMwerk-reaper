@@ -538,34 +538,6 @@ function M.readCapabilities(readOnly)
     }
 end
 
-function M.getCapabilityPath(readOnly)
-    local paths = M.getRuntimePaths(readOnly)
-    local PATH_SEP = C.PATH_SEP or "/"
-    local stateDir = paths.runtimeState or (paths.runtimeRoot .. PATH_SEP .. "state")
-    return stateDir .. PATH_SEP .. "capabilities.env"
-end
-
-function M.readCapabilities(readOnly)
-    local capPath = M.getCapabilityPath(readOnly)
-    local f = io.open(capPath, "r")
-    if not f then return nil end
-    local raw = f:read("*a") or ""
-    f:close()
-    if raw == "" then return nil end
-    local kv = {}
-    for line in raw:gmatch("[^\r\n]+") do
-        local k, v = line:match("^([A-Z0-9_]+)=(.*)$")
-        if k and v then
-            kv[k] = v
-        end
-    end
-    return {
-        path = capPath,
-        raw = raw,
-        kv = kv,
-    }
-end
-
 function M.resolveCommandPath(cmd)
     if not cmd or cmd == "" then return nil end
     if type(C.isAbsolutePath) == "function" and C.isAbsolutePath(cmd) then

@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stemwerk.invalid/schemas/source-plan.v1.schema.json",
   "title": "SourcePlan v1",
+  "description": "Slice-0 supports exactly one source (maxItems 1): the result/artifact/deliverable/import model has no mechanism to attribute a semantic deliverable to a specific source, so multi-source is fail-closed until a later slice adds that attribution.",
   "type": "object",
   "required": ["schema_version", "source_plan_id", "sources"],
   "properties": {
@@ -10,6 +11,7 @@
     "sources": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 1,
       "items": {
         "type": "object",
         "required": ["source_id", "order", "kind", "project_identity", "track_identity", "item_identity"],

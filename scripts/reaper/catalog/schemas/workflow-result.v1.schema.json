@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stemwerk.invalid/schemas/workflow-result.v1.schema.json",
   "title": "WorkflowResult v1",
+  "description": "Shape/type reference only. Stateful invariants this schema cannot express (e.g. actual_runtime is required only when state=succeeded, deliverables must be empty otherwise, import eligibility gating) are enforced by the authoritative hand validators: scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/workflow_contracts.py (Python, authoritative) and scripts/reaper/_internal/STEMwerk_Workflow_Contracts.lua (Lua, kept equivalent).",
   "type": "object",
   "required": ["schema_version", "request_id", "workflow_id", "state", "actual_runtime", "artifacts", "deliverables"],
   "properties": {
@@ -20,7 +21,7 @@
       },
       "additionalProperties": false
     },
-    "artifacts": {"type": "array"},
+    "artifacts": {"type": "array", "items": {"$ref": "artifact.v1.schema.json"}},
     "deliverables": {
       "type": "array",
       "items": {

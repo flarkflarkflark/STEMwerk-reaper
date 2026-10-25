@@ -44,8 +44,28 @@ local function decodeJson(text)
                     if not hex:match("^%x%x%x%x$") then fail("invalid JSON unicode escape") end
                     local codepoint = tonumber(hex, 16)
                     if not utf8 or not utf8.char then fail("JSON unicode escape unsupported") end
+                    if codepoint >= 0xD800 and codepoint <= 0xDBFF then
+                        -- High surrogate: must be immediately followed by a low
+                        -- surrogate escape so the pair can be combined into the
+                        -- single non-BMP codepoint it represents (JSON encodes
+                        -- non-BMP characters as UTF-16 surrogate pairs).
+                        if text:sub(pos + 6, pos + 7) ~= "\\u" then
+                            fail("unpaired UTF-16 surrogate in JSON string")
+                        end
+                        local lowHex = text:sub(pos + 8, pos + 11)
+                        if not lowHex:match("^%x%x%x%x$") then fail("invalid JSON unicode escape") end
+                        local low = tonumber(lowHex, 16)
+                        if low < 0xDC00 or low > 0xDFFF then
+                            fail("unpaired UTF-16 surrogate in JSON string")
+                        end
+                        codepoint = 0x10000 + (codepoint - 0xD800) * 0x400 + (low - 0xDC00)
+                        pos = pos + 12
+                    elseif codepoint >= 0xDC00 and codepoint <= 0xDFFF then
+                        fail("unpaired UTF-16 surrogate in JSON string")
+                    else
+                        pos = pos + 6
+                    end
                     parts[#parts + 1] = utf8.char(codepoint)
-                    pos = pos + 6
                 else
                     fail("invalid JSON escape")
                 end
@@ -257,6 +277,9 @@ local function validateSourcePlan(plan)
     local sources = array(plan.sources, "source_plan.sources")
     if #sources == 0 then fail("source_plan.sources must not be empty") end
     local identities = unique(sources, "source_id", "source_plan.sources")
+    if #sources > 1 then
+        fail("source_plan.sources supports exactly one source in Slice-0; multi-source attribution is not yet representable")
+    end
     local orders = {}
     for sourceId, source in pairs(identities) do
         onlyKeys(source, { source_id = true, order = true, kind = true, project_identity = true, track_identity = true, item_identity = true }, "source " .. sourceId)
@@ -345,6 +368,7 @@ local function validateWorkflowRequest(request)
         if stage.order ~= index then fail("stages must be in contiguous execution order") end
     end
     local deliverables = array(request.deliverable_ids, "workflow_request.deliverable_ids")
+    if #deliverables == 0 then fail("workflow_request.deliverable_ids must not be empty") end
     local seen = {}
     for _, semantic in ipairs(deliverables) do
         semantic = stableId(semantic, "workflow_request.deliverable_ids item")
@@ -371,17 +395,29 @@ local function validateWorkflowResult(result)
     if type(result.state) ~= "string" or not PROCESSING_STATES[result.state] then
         fail("invalid processing state: " .. tostring(result.state))
     end
-    local runtime = object(result.actual_runtime, "workflow_result.actual_runtime")
-    onlyKeys(runtime, { model_id = true, requested_device = true, actual_device = true, fallback_applied = true }, "workflow_result.actual_runtime")
-    stableId(runtime.model_id, "workflow_result.actual_runtime.model_id")
-    stringValue(runtime.requested_device, "workflow_result.actual_runtime.requested_device")
-    stringValue(runtime.actual_device, "workflow_result.actual_runtime.actual_device")
-    booleanValue(runtime.fallback_applied, "workflow_result.actual_runtime.fallback_applied")
+    -- Failure/cancel/block/queued/running states must remain representable
+    -- without fabricating runtime evidence that may never have existed (e.g.
+    -- a pre-runtime failure before a model/device was ever chosen).
+    local hasRuntime = result.actual_runtime ~= nil and result.actual_runtime ~= JSON_NULL
+    if not hasRuntime and result.state == "succeeded" then
+        fail("workflow_result.actual_runtime is required when state is succeeded")
+    end
+    if hasRuntime then
+        local runtime = object(result.actual_runtime, "workflow_result.actual_runtime")
+        onlyKeys(runtime, { model_id = true, requested_device = true, actual_device = true, fallback_applied = true }, "workflow_result.actual_runtime")
+        stableId(runtime.model_id, "workflow_result.actual_runtime.model_id")
+        stringValue(runtime.requested_device, "workflow_result.actual_runtime.requested_device")
+        stringValue(runtime.actual_device, "workflow_result.actual_runtime.actual_device")
+        booleanValue(runtime.fallback_applied, "workflow_result.actual_runtime.fallback_applied")
+    end
     local artifacts = array(result.artifacts, "workflow_result.artifacts")
     unique(artifacts, "artifact_id", "workflow_result.artifacts")
     for _, artifact in ipairs(artifacts) do validateArtifact(artifact) end
     local deliverables = array(result.deliverables, "workflow_result.deliverables")
     unique(deliverables, "semantic_id", "workflow_result.deliverables")
+    if #deliverables > 0 and result.state ~= "succeeded" then
+        fail("workflow_result.deliverables must be empty unless state is succeeded")
+    end
     for _, item in ipairs(deliverables) do
         onlyKeys(item, { semantic_id = true, artifact_id = true }, "workflow_result.deliverable")
         stableId(item.artifact_id, "workflow_result.deliverable.artifact_id")
@@ -405,21 +441,21 @@ local function validateImportPlan(plan)
     if plan.origin_project_policy ~= "fail_closed" then fail("import_plan.origin_project_policy must be fail_closed") end
     local imports = array(plan.imports, "import_plan.imports")
     unique(imports, "semantic_id", "import_plan.imports")
-    local orders = {}
-    for _, item in ipairs(imports) do
+    for index, item in ipairs(imports) do
         onlyKeys(item, { order = true, semantic_id = true, artifact_id = true, name_template = true }, "import")
         stableId(item.artifact_id, "import artifact_id")
-        if type(item.order) ~= "number" or item.order % 1 ~= 0 or item.order < 1 or orders[item.order] then
-            fail("import ordering must contain unique positive integers")
+        if type(item.order) ~= "number" or item.order % 1 ~= 0 or item.order < 1 then
+            fail("import order must be a positive integer")
         end
-        orders[item.order] = true
+        if item.order ~= index then
+            fail("import order must match array position exactly (array order is authoritative)")
+        end
         stringValue(item.name_template, "import name_template")
     end
-    for index = 1, #imports do if not orders[index] then fail("import ordering must be contiguous") end end
     return plan
 end
 
-local function validateBundle(bundle)
+local function validateBundle(bundle, catalogs)
     object(bundle, "bundle")
     rejectReaperPointers(bundle, "contract")
     onlyKeys(bundle, { workflow_request = true, workflow_result = true, import_plan = true }, "bundle")
@@ -431,6 +467,13 @@ local function validateBundle(bundle)
     end
     if result.workflow_id ~= request.workflow_id or importPlan.workflow_id ~= request.workflow_id then
         fail("workflow identity mismatch")
+    end
+
+    local hasActualRuntime = result.actual_runtime ~= nil and result.actual_runtime ~= JSON_NULL
+    if hasActualRuntime and not result.actual_runtime.fallback_applied then
+        if result.actual_runtime.model_id ~= request.requested_runtime.model_id then
+            fail("actual_runtime.model_id disagrees with requested_runtime.model_id and fallback_applied is false")
+        end
     end
 
     local sourceIds = {}
@@ -454,6 +497,25 @@ local function validateBundle(bundle)
         end
     end
 
+    if catalogs ~= nil then
+        local capabilityIds, modelsById = {}, {}
+        for _, c in ipairs(catalogs.capabilities) do capabilityIds[c.capability_id] = true end
+        for _, m in ipairs(catalogs.models) do modelsById[m.model_id] = m end
+        for _, stage in ipairs(stages) do
+            if not capabilityIds[stage.capability_id] then
+                fail("stage references unknown capability_id: " .. tostring(stage.capability_id))
+            end
+            local model = modelsById[stage.model_id]
+            if not model then fail("stage references unknown model_id: " .. tostring(stage.model_id)) end
+            if model.capability_id ~= stage.capability_id then
+                fail("stage model_id " .. stage.model_id .. " does not implement capability_id " .. stage.capability_id)
+            end
+        end
+        if not modelsById[request.requested_runtime.model_id] then
+            fail("requested_runtime references unknown model_id: " .. tostring(request.requested_runtime.model_id))
+        end
+    end
+
     local artifacts = {}
     for _, artifact in ipairs(result.artifacts) do
         artifacts[artifact.artifact_id] = artifact
@@ -462,6 +524,17 @@ local function validateBundle(bundle)
         local semantic = outputPorts[producer.stage_id][producer.port_id]
         if not semantic then fail("missing producer output port: " .. producer.port_id) end
         if artifact.semantic_id ~= semantic then fail("artifact semantic identity does not match producer port") end
+    end
+
+    -- Only a completed, successful result may authorize import. Failure,
+    -- cancellation, and in-flight states are representable (deliverables are
+    -- already required to be empty by validateWorkflowResult), but the
+    -- import plan attached to them must be inert.
+    if result.state ~= "succeeded" then
+        if #importPlan.imports > 0 then
+            fail("import_plan.imports must be empty unless workflow_result.state is succeeded")
+        end
+        return true
     end
 
     for index, item in ipairs(result.deliverables) do
@@ -488,8 +561,8 @@ local function validateBundle(bundle)
 end
 
 local function publicValidator(validator)
-    return function(value)
-        local ok, result = pcall(validator, value)
+    return function(...)
+        local ok, result = pcall(validator, ...)
         if not ok then return nil, tostring(result) end
         return result
     end
