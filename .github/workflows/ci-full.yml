@@ -67,7 +67,13 @@ jobs:
         # inputs, no managed-runtime/hardware discovery. The real-* tests
         # require this repo's bootstrapped managed runtime and actual
         # hardware and stay runnable separately, outside portable CI.
-        run: python -m pytest -q -m portable tests/test_stemwerk_runtime_diagnostics_harness.py
+        run: >-
+          python -m pytest -q -m portable
+          tests/test_stemwerk_runtime_diagnostics_harness.py
+          tests/test_core_readiness.py
+          tests/test_core_readiness_hardening.py
+          tests/test_core_catalog_sync.py
+          tests/test_dependency_constraints.py::test_audio_separator_process_consumes_shared_managed_ffmpeg_candidates
 
       - name: Test i18n completeness
         run: |

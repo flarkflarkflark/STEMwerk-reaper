@@ -341,7 +341,25 @@ _LEGACY_TO_CONTRACT_DRUMSEP_MODEL_ID = {
     "MDX23C-DrumSep-aufr33-jarredou.ckpt": "drumsep_mdx23c",
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt": "drumsep_mdx23c",
 }
-_DRUMSEP_RUNTIME_KINDS = frozenset({"cpu", "cuda", "rocm", "mps", "directml"})
+
+
+def _device_policy():
+    """Lazy access to the shared selection-policy module (single home for
+    the Auto-selection / CPU-downgrade / fallback rules that used to live
+    here; do not re-add local copies). Uses only the vendored-path setup --
+    deliberately NOT _require_core(), so this module's monkeypatchable
+    globals (get_available_devices/select_device/...) are never reset."""
+    _prefer_vendored_stemwerk_core()
+    from stemwerk_core import device_policy
+    return device_policy
+
+
+def _managed_runtime():
+    """Lazy access to the shared managed-runtime discovery module (same
+    no-_require_core rationale as _device_policy)."""
+    _prefer_vendored_stemwerk_core()
+    from stemwerk_core import managed_runtime
+    return managed_runtime
 
 
 def _contract_drumsep_model_id(legacy_model_id: str) -> str:
@@ -349,8 +367,7 @@ def _contract_drumsep_model_id(legacy_model_id: str) -> str:
 
 
 def _drumsep_backend_classifier(device_id) -> str:
-    device = str(device_id or "")
-    return device if device in _DRUMSEP_RUNTIME_KINDS else "unavailable"
+    return _device_policy().drumsep_backend_classifier(device_id)
 
 
 def _normal_stems_capability_probe():
@@ -431,51 +448,19 @@ def _enforce_normal_stems_contract(model_id: str, requested_device: str, resolve
 
 
 def _drumsep_is_unexpected_cpu_downgrade(requested_device: str, resolved_device: str) -> bool:
-    requested = str(requested_device or "auto").strip().lower()
-    resolved = str(resolved_device or "").strip().lower()
-    if resolved not in ("cpu", "unavailable"):
-        return False
-    return requested not in ("", "auto", "cpu")
+    return _device_policy().drumsep_is_unexpected_cpu_downgrade(requested_device, resolved_device)
 
 
 def _drum_kit_is_unexpected_cpu_downgrade(selection_info):
     """Selection-aware downgrade check for the DKS contract gates.
 
-    Default is the source Slice-4 rule (_drumsep_is_unexpected_cpu_downgrade):
-    any explicit non-cpu request resolving to cpu/unavailable is rejected.
-    One bounded exception, decided for the 2.4.0.0-r1 candidate: the
-    preserved 2.3.1.3 Linux explicit_cuda production chain may deliver its
-    *attributed* CPU fallback (explicit cuda/cuda:N request, no genuine
-    NVIDIA runtime, no provisioned ROCm runtime). That route stays
-    permitted and is reported truthfully (resolved_backend=cpu,
-    fallback_applied=True, real fallback_reason). The exception requires
-    the actual selector attribution -- selection_policy="fallback_cpu"
-    with a "cuda_skipped:" reason on an explicit cuda request resolving to
-    "cpu" -- and is guarded to Linux explicitly (same
-    sys.platform convention as the chain it preserves), not merely
-    relying on non-Linux selectors never emitting that attribution. A
-    bare non-empty fallback_reason, any other request, or an
-    "unavailable" result never qualifies: missing/broken runtimes and
-    unattributed downgrades remain fail-closed.
+    Implementation lives in stemwerk_core.device_policy.drum_kit_is_unexpected_cpu_downgrade
+    (single shared home; see its docstring for the rule and the bounded
+    Linux attributed-fallback exception). This wrapper preserves the
+    legacy call contract and monkeypatch surface.
     """
-    info = selection_info or {}
 
-    def _check(requested_device: str, resolved_device: str) -> bool:
-        if not _drumsep_is_unexpected_cpu_downgrade(requested_device, resolved_device):
-            return False
-        requested = str(requested_device or "").strip().lower()
-        resolved = str(resolved_device or "").strip().lower()
-        if (
-            sys.platform.startswith("linux")
-            and re.fullmatch(r"cuda(:\d+)?", requested)
-            and resolved == "cpu"
-            and info.get("selection_policy") == "fallback_cpu"
-            and str(info.get("fallback_reason") or "").startswith("cuda_skipped:")
-        ):
-            return False
-        return True
-
-    return _check
+    return _device_policy().drum_kit_is_unexpected_cpu_downgrade(selection_info)
 
 
 def _drum_kit_capability_probe_from_result(python_path, runtime_kind: str, selection_info=None):
@@ -501,7 +486,7 @@ def _drum_kit_capability_probe_from_result(python_path, runtime_kind: str, selec
     """
     from stemwerk_core.runtime_resolution import CapabilityProbe
 
-    resolved = runtime_kind if (python_path is not None and runtime_kind in _DRUMSEP_RUNTIME_KINDS) else "unavailable"
+    resolved = runtime_kind if (python_path is not None and runtime_kind in _device_policy().DRUMSEP_RUNTIME_KINDS) else "unavailable"
     already_resolved = {"id": resolved, "name": resolved}
 
     return CapabilityProbe(
@@ -2307,53 +2292,13 @@ def _write_worker_context(output_dir: Optional[str]) -> None:
 
 
 def _read_simple_env_file(path: Path) -> Dict[str, str]:
-    values: Dict[str, str] = {}
-    try:
-        text = path.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        return values
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"')
-        if key:
-            values[key] = value
-    return values
+    """Thin wrapper over stemwerk_core.managed_runtime.read_simple_env_file."""
+    return _managed_runtime().read_simple_env_file(path)
 
 
 def _runtime_base_candidates() -> List[Path]:
-    candidates: List[Path] = []
-    seen: Set[str] = set()
-
-    def add(path_value: Optional[Path | str]) -> None:
-        if not path_value:
-            return
-        try:
-            path = Path(path_value).expanduser()
-        except Exception:
-            return
-        key = str(path).lower()
-        if key in seen:
-            return
-        seen.add(key)
-        candidates.append(path)
-
-    if _is_windows_runtime():
-        local_appdata = os.environ.get("LOCALAPPDATA")
-        if local_appdata:
-            add(Path(local_appdata) / "STEMwerk")
-    elif sys.platform == "darwin":
-        add(Path.home() / "Library" / "Application Support" / "STEMwerk")
-    else:
-        xdg_data_home = os.environ.get("XDG_DATA_HOME")
-        if xdg_data_home:
-            add(Path(xdg_data_home) / "STEMwerk")
-        add(Path.home() / ".local" / "share" / "STEMwerk")
-
-    return candidates
+    """Thin wrapper over stemwerk_core.managed_runtime.runtime_base_candidates."""
+    return _managed_runtime().runtime_base_candidates()
 
 
 def _drumsep_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
@@ -3720,49 +3665,10 @@ def _ensure_runtime_ffmpeg_wrapper(runtime_base: Path, ffmpeg_path: Path) -> Opt
 
 
 def _candidate_ffmpeg_paths() -> List[Path]:
-    candidates: List[Path] = []
-    seen: Set[str] = set()
-
-    def add(path_value: Optional[str | Path]) -> None:
-        if not path_value:
-            return
-        try:
-            path = Path(path_value).expanduser()
-        except Exception:
-            return
-        key = str(path).lower()
-        if key in seen:
-            return
-        seen.add(key)
-        candidates.append(path)
-
-    for env_key in ("STEMWERK_FFMPEG_PATH", "FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE"):
-        add(os.environ.get(env_key))
-
-    for runtime_base in _runtime_base_candidates():
-        add(runtime_base / "ffmpeg" / "bin" / "ffmpeg.exe")
-        add(runtime_base / "ffmpeg" / "ffmpeg.exe")
-        add(runtime_base / "bin" / "ffmpeg.exe")
-        add(runtime_base / "ffmpeg" / "bin" / "ffmpeg")
-        add(runtime_base / "ffmpeg" / "ffmpeg")
-        add(runtime_base / "bin" / "ffmpeg")
-        bootstrap_values = _read_simple_env_file(runtime_base / "state" / "bootstrap.env")
-        add(bootstrap_values.get("FFMPEG_PATH"))
-        add(bootstrap_values.get("FFMPEG"))
-        add(bootstrap_values.get("MANAGED_FFMPEG_PATH"))
-        capabilities_values = _read_simple_env_file(runtime_base / "state" / "capabilities.env")
-        add(capabilities_values.get("FFMPEG_PATH"))
-        add(capabilities_values.get("FFMPEG"))
-        add(capabilities_values.get("MANAGED_FFMPEG_PATH"))
-
-    exe_dir = Path(sys.executable).resolve().parent
-    add(exe_dir / "ffmpeg.exe")
-    add(exe_dir.parent / "ffmpeg" / "bin" / "ffmpeg.exe")
-
-    found = shutil.which("ffmpeg")
-    add(found)
-
-    return candidates
+    """Thin wrapper over stemwerk_core.managed_runtime.candidate_ffmpeg_paths
+    (read-only candidate discovery; the wrapper-creation side stays in
+    _configure_ffmpeg_runtime below)."""
+    return _managed_runtime().candidate_ffmpeg_paths()
 
 
 def _configure_ffmpeg_runtime() -> Tuple[Optional[Path], Optional[Path], Optional[str]]:
@@ -3859,47 +3765,24 @@ def _split_list(value: Optional[str]) -> List[str]:
 
 
 def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, str, List[str]]:
-    requested = str(device_preference or "auto")
-    resolved = requested
-    live_devices = get_available_devices()
-    live_device_ids = [str(dev.get("id", "")) for dev in live_devices]
-    print(f"STEMWERK_DIAG requested_device={requested}", file=sys.stderr)
-
-    if requested == "auto":
-        preferred = None
-        if _is_darwin_arm64():
-            preferred = next((dev for dev in live_devices if str(dev.get("id", "")).strip().lower() == "mps"), None)
-        if sys.platform.startswith("linux"):
-            preferred = preferred or _prefer_linux_amd_device(live_devices, _get_skip_ids())
-        if preferred:
-            resolved = preferred.get("id") or "auto"
-            print(
-                f"STEMWERK_DIAG auto_selected_preferred={resolved} ({preferred.get('name','')})",
-                file=sys.stderr,
-            )
-        else:
-            try:
-                dev_id, dev_name = select_device("auto")
-                print(f"STEMWERK_DIAG auto_selected={dev_id} ({dev_name})", file=sys.stderr)
-                resolved = dev_id
-            except Exception:
-                resolved = "auto"
-    preview_device_id = resolved
-    preview_device_name = ""
-    try:
-        preview_device_id, preview_device_name = select_device(resolved)
-    except Exception as exc:
-        print(f"normal_workflow_backend_preview_error={type(exc).__name__}:{exc}", file=sys.stderr)
-
-    return requested, resolved, f"{preview_device_id}|{preview_device_name}", live_device_ids
+    """Thin wrapper over the shared implementation in
+    stemwerk_core.device_policy.resolve_normal_runtime_device, preserving
+    this script's STEMWERK_DIAG stderr output and monkeypatch surface:
+    the device-enumeration, selection, platform-preference and skip-id
+    callables are this module's own globals, resolved at call time."""
+    return _device_policy().resolve_normal_runtime_device(
+        device_preference,
+        emit=lambda line: print(line, file=sys.stderr),
+        get_devices=lambda: get_available_devices(),
+        select_device_fn=lambda requested: select_device(requested),
+        is_darwin_arm64_fn=_is_darwin_arm64,
+        prefer_linux_amd_fn=lambda live_devices, skip_ids: _prefer_linux_amd_device(live_devices, skip_ids),
+        skip_ids_fn=_get_skip_ids,
+    )
 
 
 def _is_unexpected_cpu_downgrade(requested_device: str, preview_device: str) -> bool:
-    requested = str(requested_device or "auto").strip().lower()
-    effective = str(preview_device or "").strip().lower()
-    if effective != "cpu":
-        return False
-    return requested not in ("", "auto", "cpu")
+    return _device_policy().is_unexpected_cpu_downgrade(requested_device, preview_device)
 
 
 def _map_reaper_stems_from_result(result: Any, output_root: Path) -> Dict[str, str]:
@@ -3945,26 +3828,9 @@ def _get_skip_ids() -> Set[str]:
 
 
 def _prefer_linux_amd_device(devices: List[Dict[str, str]], skip_ids: Set[str]) -> Optional[Dict[str, str]]:
-    if not devices:
-        return None
-    candidates = [d for d in devices if d.get("id") not in skip_ids]
-    if not candidates:
-        return None
-
-    def score(dev: Dict[str, str]) -> int:
-        name = (dev.get("name") or "").lower()
-        sc = 0
-        if "radeon rx" in name or " rx " in name or name.startswith("rx "):
-            sc += 3
-        if "radeon" in name and "graphics" not in name:
-            sc += 1
-        if "graphics" in name and "rx" not in name:
-            sc -= 1
-        if "780m" in name:
-            sc -= 2
-        return sc
-
-    return max(candidates, key=score)
+    """Thin wrapper over stemwerk_core.device_policy.prefer_linux_amd_device
+    (single shared home for the Linux AMD-name scoring Auto policy)."""
+    return _device_policy().prefer_linux_amd_device(devices, skip_ids)
 
 
 def _clean_env() -> Dict[str, str]:

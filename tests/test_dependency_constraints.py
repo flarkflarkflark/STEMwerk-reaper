@@ -3215,34 +3215,43 @@ def test_runtime_launcher_exports_managed_ffmpeg_for_unix_processing():
     assert 'script:write("PATH=\\"$FFMPEG_DIR:${PATH}\\"\\n")' in script
 
 
-def test_audio_separator_process_consumes_managed_ffmpeg_env_and_reports_it():
-    script = Path("scripts/reaper/audio_separator_process.py").read_text()
+@pytest.mark.portable
+def test_audio_separator_process_consumes_shared_managed_ffmpeg_candidates(
+    tmp_path, monkeypatch
+):
+    """Exercise the shared helper and the production wrapper, rather than
+    pinning the old inlined implementation's source text."""
+    core_src = Path("scripts/reaper/vendor/stemwerk-core/src")
+    if str(core_src.resolve()) not in sys.path:
+        sys.path.insert(0, str(core_src.resolve()))
+    from stemwerk_core import managed_runtime
 
-    assert 'for env_key in ("STEMWERK_FFMPEG_PATH", "FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE")' in script
-    assert "def _runtime_base_candidates() -> List[Path]:" in script
-    assert 'add(Path.home() / ".local" / "share" / "STEMwerk")' in script
-    assert 'bootstrap_values = _read_simple_env_file(runtime_base / "state" / "bootstrap.env")' in script
-    assert 'add(bootstrap_values.get("FFMPEG_PATH"))' in script
-    assert 'add(bootstrap_values.get("FFMPEG"))' in script
-    assert 'add(bootstrap_values.get("MANAGED_FFMPEG_PATH"))' in script
-    assert 'capabilities_values = _read_simple_env_file(runtime_base / "state" / "capabilities.env")' in script
-    assert 'add(capabilities_values.get("FFMPEG_PATH"))' in script
-    assert 'add(capabilities_values.get("FFMPEG"))' in script
-    assert 'add(capabilities_values.get("MANAGED_FFMPEG_PATH"))' in script
-    assert "def _ensure_runtime_ffmpeg_wrapper(runtime_base: Path, ffmpeg_path: Path) -> Optional[Path]:" in script
-    assert "wrapper_path = wrapper_dir / \"ffmpeg\"" in script
-    assert "os.symlink(target, wrapper_path)" in script
-    assert "exec " in script and '\\"$@\\"' in script
-    assert 'os.environ["PATH"] = path_value + (os.pathsep + current_path if current_path else "")' in script
-    assert "ffmpeg_path, ffmpeg_wrapper, ffmpeg_path_prefix = _configure_ffmpeg_runtime()" in script
-    assert 'os.environ["STEMWERK_FFMPEG_PATH"] = candidate_str' in script
-    assert 'os.environ["IMAGEIO_FFMPEG_EXE"] = candidate_str' in script
-    assert 'print(f"STEMWERK_DIAG ffmpeg_path={ffmpeg_path}", file=sys.stderr)' in script
-    assert "STEMWERK_DIAG ffmpeg_wrapper=" in script
-    assert "ffmpeg_wrapper if ffmpeg_wrapper is not None else 'none'" in script
-    assert "STEMWERK_DIAG path_prefix=" in script
-    assert "ffmpeg_path_prefix if ffmpeg_path_prefix else 'none'" in script
-    assert 'print("STEMWERK_DIAG ffmpeg_path=NOT_FOUND", file=sys.stderr)' in script
+    runtime_base = tmp_path / "runtime"
+    state = runtime_base / "state"
+    state.mkdir(parents=True)
+    env_ffmpeg = tmp_path / "from-env" / "ffmpeg"
+    bootstrap_ffmpeg = tmp_path / "from-bootstrap" / "ffmpeg"
+    capabilities_ffmpeg = tmp_path / "from-capabilities" / "ffmpeg"
+    state.joinpath("bootstrap.env").write_text(
+        f"FFMPEG_PATH={bootstrap_ffmpeg}\n", encoding="utf-8"
+    )
+    state.joinpath("capabilities.env").write_text(
+        f"MANAGED_FFMPEG_PATH={capabilities_ffmpeg}\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("STEMWERK_FFMPEG_PATH", str(env_ffmpeg))
+    monkeypatch.delenv("FFMPEG_PATH", raising=False)
+    monkeypatch.delenv("IMAGEIO_FFMPEG_EXE", raising=False)
+    monkeypatch.setattr(managed_runtime, "runtime_base_candidates", lambda: [runtime_base])
+    monkeypatch.setattr(managed_runtime.shutil, "which", lambda executable: None)
+
+    candidates = managed_runtime.candidate_ffmpeg_paths()
+    assert candidates[0] == env_ffmpeg
+    assert bootstrap_ffmpeg in candidates
+    assert capabilities_ffmpeg in candidates
+
+    module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module, "_managed_runtime", lambda: managed_runtime)
+    assert module._candidate_ffmpeg_paths() == candidates
 
 
 def test_audio_separator_process_enables_torch26_demucs_checkpoint_compatibility():

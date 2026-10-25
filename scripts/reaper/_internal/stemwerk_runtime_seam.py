@@ -2,22 +2,20 @@
 
 ``stemwerk_core.runtime_resolution`` is deliberately pure and knows nothing
 about ``audio_separator_process.py``. This module is the one place that
-bridges the two: it builds a ``CapabilityProbe`` whose Auto-device
-preference reproduces the *exact* existing Linux AMD-name-scoring policy
-from ``audio_separator_process._prefer_linux_amd_device`` /
-``_resolve_normal_runtime_device``, instead of re-deriving or approximating
-that priority order.
+bridges the two for callers that need the real legacy-backed probes.
 
-This is temporary compatibility glue, not a permanent architecture: a later
-slice should hoist ``_prefer_linux_amd_device`` and
-``_resolve_normal_runtime_device`` out of the monolithic
-``audio_separator_process.py`` script and into ``stemwerk_core.devices`` as
-a first-class, directly importable policy. Once that happens, this seam
-file can be deleted and ``stemwerk_core.runtime_resolution`` wired to it
-directly. Until then, this module loads ``audio_separator_process.py``
-dynamically via ``importlib`` -- the same mechanism the existing test suite
-already uses to reach its private functions (see e.g.
-``tests/test_windows_normal_route_matrix.py``).
+Normal Stems no longer needs the legacy module at all: the Auto-device
+preference (Linux AMD-name scoring, Darwin MPS preference) and the
+CPU-downgrade guard now live in ``stemwerk_core.device_policy`` (extracted
+verbatim from the legacy script, which delegates back to it), so
+:func:`build_normal_stems_capability_probe` composes them directly.
+
+DrumSep runtime selection still lives in the legacy script
+(``_select_drumsep_runtime`` and its verification chain); hoisting it is a
+named follow-up. Until then, :func:`build_drum_kit_capability_probe` loads
+``audio_separator_process.py`` dynamically via ``importlib`` -- the same
+mechanism the existing test suite already uses to reach its private
+functions (see e.g. ``tests/test_windows_normal_route_matrix.py``).
 """
 
 from __future__ import annotations
@@ -33,6 +31,8 @@ PROCESS_SCRIPT = Path(__file__).resolve().parents[1] / "audio_separator_process.
 if str(CORE_SRC) not in sys.path:
     sys.path.insert(0, str(CORE_SRC))
 
+from stemwerk_core import device_policy  # noqa: E402
+from stemwerk_core import devices as core_devices  # noqa: E402
 from stemwerk_core.runtime_resolution import CapabilityProbe  # noqa: E402
 
 _legacy_module = None
@@ -52,20 +52,19 @@ def _load_legacy_module():
 
 
 def build_normal_stems_capability_probe() -> CapabilityProbe:
-    """Return a CapabilityProbe backed by the real 2.3 normal-stems runtime."""
-
-    legacy = _load_legacy_module()
+    """Return a CapabilityProbe backed by the real 2.3 normal-stems runtime
+    policy (stemwerk_core.devices enumeration + device_policy selection)."""
 
     def resolve_auto_device(_live_devices: Sequence[Mapping[str, str]]) -> Optional[Mapping[str, str]]:
-        _requested, _resolved, preview, _live_ids = legacy._resolve_normal_runtime_device("auto")
+        _requested, _resolved, preview, _live_ids = device_policy.resolve_normal_runtime_device("auto")
         preview_id, _, preview_name = preview.partition("|")
         return {"id": preview_id, "name": preview_name}
 
     return CapabilityProbe(
-        get_available_devices=legacy.core_devices.get_available_devices,
-        select_device=legacy.select_device,
-        runtime_kind_for_device=legacy.core_devices.runtime_kind_for_device,
-        is_unexpected_cpu_downgrade=legacy._is_unexpected_cpu_downgrade,
+        get_available_devices=core_devices.get_available_devices,
+        select_device=core_devices.select_device,
+        runtime_kind_for_device=core_devices.runtime_kind_for_device,
+        is_unexpected_cpu_downgrade=device_policy.is_unexpected_cpu_downgrade,
         resolve_auto_device=resolve_auto_device,
     )
 
@@ -86,13 +85,13 @@ LEGACY_TO_CONTRACT_DRUMSEP_MODEL_ID = {
 # backend *kind* (cpu/cuda/rocm/mps/directml) plus a venv python path -- there is
 # no separate "device id" concept (no cuda:N GPU index) the way
 # stemwerk_core.devices has. The kind string doubles as both the resolved
-# device and the resolved backend for this probe.
-_DRUMSEP_RUNTIME_KINDS = frozenset({"cpu", "cuda", "rocm", "mps", "directml"})
+# device and the resolved backend for this probe. The kind set and the
+# downgrade/classifier rules are shared via stemwerk_core.device_policy.
 
 
 def _drumsep_select_device(legacy, requested: str) -> tuple:
     python_path, kind_or_reason, _info = legacy._select_drumsep_runtime(requested)
-    if python_path is not None and kind_or_reason in _DRUMSEP_RUNTIME_KINDS:
+    if python_path is not None and kind_or_reason in device_policy.DRUMSEP_RUNTIME_KINDS:
         return kind_or_reason, kind_or_reason
     # _select_drumsep_runtime returns (None, "missing"|"broken", info) when
     # nothing usable was found at all (not even a CPU fallback, for the
@@ -101,19 +100,6 @@ def _drumsep_select_device(legacy, requested: str) -> tuple:
     # existing fail-closed checks reject it without any DrumSep-specific
     # logic in stemwerk_core.runtime_resolution itself.
     return "unavailable", ""
-
-
-def _drumsep_runtime_kind_for_device(device_id) -> str:
-    device = str(device_id or "")
-    return device if device in _DRUMSEP_RUNTIME_KINDS else "unavailable"
-
-
-def _drumsep_is_unexpected_cpu_downgrade(requested_device: str, resolved_device: str) -> bool:
-    requested = str(requested_device or "auto").strip().lower()
-    resolved = str(resolved_device or "").strip().lower()
-    if resolved not in ("cpu", "unavailable"):
-        return False
-    return requested not in ("", "auto", "cpu")
 
 
 def build_drum_kit_capability_probe() -> CapabilityProbe:
@@ -126,6 +112,6 @@ def build_drum_kit_capability_probe() -> CapabilityProbe:
     return CapabilityProbe(
         get_available_devices=lambda: [],
         select_device=lambda requested: _drumsep_select_device(legacy, requested),
-        runtime_kind_for_device=_drumsep_runtime_kind_for_device,
-        is_unexpected_cpu_downgrade=_drumsep_is_unexpected_cpu_downgrade,
+        runtime_kind_for_device=device_policy.drumsep_backend_classifier,
+        is_unexpected_cpu_downgrade=device_policy.drumsep_is_unexpected_cpu_downgrade,
     )

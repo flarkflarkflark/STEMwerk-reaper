@@ -54,12 +54,6 @@ from typing import Any, Dict, List, Optional
 
 SCHEMA_VERSION = "1.0.0"
 
-PASS = "PASS"
-FAIL = "FAIL"
-SKIPPED = "SKIPPED"
-UNAVAILABLE = "UNAVAILABLE"
-NOT_APPLICABLE = "NOT_APPLICABLE"
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CORE_SRC = REPO_ROOT / "scripts" / "reaper" / "vendor" / "stemwerk-core" / "src"
 INTERNAL = REPO_ROOT / "scripts" / "reaper" / "_internal"
@@ -69,67 +63,38 @@ for _p in (CORE_SRC, INTERNAL):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+# Shared vocabulary + helpers: canonical homes are in stemwerk_core (this
+# harness re-exports some of these names for its existing tests).
+from stemwerk_core.verdicts import (  # noqa: E402
+    FAIL,
+    NOT_APPLICABLE,
+    PASS,
+    SKIPPED,
+    UNAVAILABLE,
+    combine_probe_statuses as _combine_probe_statuses,
+)
+from stemwerk_core.managed_runtime import (  # noqa: E402
+    _first_existing,
+    managed_drumsep_pythons,
+    managed_model_cache_dir,
+    managed_runtime_python,
+    managed_runtime_root,
+)
+from stemwerk_core.readiness_collect import (  # noqa: E402
+    _RUNTIME_PROBE_SRC,
+    _RUNTIME_REQUIRED_IMPORTS,
+    _run_probe,
+    evaluate_required_imports,
+)
+from stemwerk_core.model_assets import (  # noqa: E402
+    demucs_yaml_weight_prefixes as _referenced_model_hashes,
+)
+
 
 # ---------------------------------------------------------------------------
-# Managed runtime location
+# Managed runtime location -- canonical implementations now live in
+# stemwerk_core.managed_runtime (imported above); this section is gone.
 # ---------------------------------------------------------------------------
-
-def managed_runtime_root() -> Path:
-    """Per-user STEMwerk managed-runtime root on this platform. Mirrors
-    audio_separator_process.py's _default_model_cache_dir() root (that
-    function returns <this>/models; this returns <this>)."""
-    override = os.environ.get("STEMWERK_RUNTIME_ROOT")
-    if override:
-        return Path(override).expanduser()
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "STEMwerk"
-    if os.name == "nt":
-        local_appdata = os.environ.get("LOCALAPPDATA")
-        if local_appdata:
-            return Path(local_appdata) / "STEMwerk"
-        return Path.home() / "AppData" / "Local" / "STEMwerk"
-    xdg_data_home = os.environ.get("XDG_DATA_HOME")
-    if xdg_data_home:
-        return Path(xdg_data_home) / "STEMwerk"
-    return Path.home() / ".local" / "share" / "STEMwerk"
-
-
-def _first_existing(root: Path, venv_name: str) -> Optional[Path]:
-    for rel in ("bin/python3", "bin/python", "Scripts/python.exe"):
-        candidate = root / venv_name / rel
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def managed_runtime_python() -> Optional[Path]:
-    """The main STEMwerk managed venv's interpreter, if bootstrapped."""
-    return _first_existing(managed_runtime_root(), ".venv")
-
-
-def managed_drumsep_pythons() -> Dict[str, Path]:
-    """Every installed DrumSep venv on this machine, keyed by backend name.
-    Only backends that actually have a venv present are included -- this is
-    real filesystem state, not a claim about what *should* be installed."""
-    root = managed_runtime_root()
-    found: Dict[str, Path] = {}
-    for backend, venv_name in (
-        ("rocm", ".venv-drumsep-rocm"),
-        ("cuda", ".venv-drumsep-cuda"),
-        ("directml", ".venv-drumsep-directml"),
-        ("cpu", ".venv-drumsep"),
-    ):
-        python = _first_existing(root, venv_name)
-        if python is not None:
-            found[backend] = python
-    return found
-
-
-def managed_model_cache_dir() -> Path:
-    override = os.environ.get("AUDIO_SEPARATOR_MODEL_DIR")
-    if override:
-        return Path(override).expanduser()
-    return managed_runtime_root() / "models"
 
 
 # ---------------------------------------------------------------------------
@@ -154,120 +119,10 @@ def collect_identity() -> Dict[str, Any]:
 # Runtime (versions) -- probed via subprocess against the intended interpreter
 # ---------------------------------------------------------------------------
 
-_RUNTIME_PROBE_SRC = r"""
-import importlib
-import json
-from importlib.metadata import version as pkg_version
-
-result = {"imports": {}}
-modules = {}
-for module_name in (
-    "audio_separator",
-    "numpy",
-    "onnx",
-    "onnx2torch",
-    "onnxruntime",
-    "stemwerk_core",
-    "torch",
-    "torchaudio",
-    "torchvision",
-):
-    try:
-        modules[module_name] = importlib.import_module(module_name)
-        result["imports"][module_name] = {"ok": True}
-    except Exception as exc:
-        result["imports"][module_name] = {
-            "ok": False,
-            "error": "%s: %s" % (type(exc).__name__, exc),
-        }
-
-torch = modules.get("torch")
-if torch is not None:
-    result["torch_version"] = getattr(torch, "__version__", None)
-    result["torch_cuda_available"] = bool(torch.cuda.is_available())
-    result["torch_cuda_version"] = getattr(getattr(torch, "version", None), "cuda", None)
-    result["torch_hip_version"] = getattr(getattr(torch, "version", None), "hip", None)
-    count = torch.cuda.device_count() if result["torch_cuda_available"] else 0
-    result["torch_cuda_device_count"] = count
-    names = []
-    for i in range(count):
-        try:
-            names.append(torch.cuda.get_device_name(i))
-        except Exception:
-            pass
-    result["torch_cuda_device_names"] = names
-    try:
-        result["torch_mps_built"] = bool(torch.backends.mps.is_built())
-        result["torch_mps_available"] = bool(torch.backends.mps.is_available())
-    except Exception:
-        result["torch_mps_built"] = None
-        result["torch_mps_available"] = None
-else:
-    result["torch_version"] = None
-    result["torch_cuda_available"] = None
-    result["torch_cuda_version"] = None
-    result["torch_hip_version"] = None
-    result["torch_cuda_device_count"] = None
-    result["torch_cuda_device_names"] = []
-    result["torch_mps_built"] = None
-    result["torch_mps_available"] = None
-
-for module_name, key in (
-    ("torchaudio", "torchaudio_version"),
-    ("torchvision", "torchvision_version"),
-    ("numpy", "numpy_version"),
-    ("onnx", "onnx_version"),
-):
-    module = modules.get(module_name)
-    result[key] = getattr(module, "__version__", None) if module is not None else None
-
-try:
-    result["audio_separator_version"] = pkg_version("audio-separator")
-except Exception:
-    result["audio_separator_version"] = None
-
-onnxruntime = modules.get("onnxruntime")
-if onnxruntime is not None:
-    result["onnxruntime_version"] = getattr(onnxruntime, "__version__", None)
-    try:
-        result["onnxruntime_providers"] = list(onnxruntime.get_available_providers())
-    except Exception:
-        result["onnxruntime_providers"] = []
-else:
-    result["onnxruntime_version"] = None
-    result["onnxruntime_providers"] = []
-
-print(json.dumps(result))
-"""
-
-_RUNTIME_REQUIRED_IMPORTS = {
-    "main": ("audio_separator", "numpy", "onnxruntime", "stemwerk_core", "torch", "torchaudio"),
-    # Mirrors audio_separator_process._verify_drumsep_runtime. onnx2torch is
-    # intentionally optional there and remains optional here.
-    "drumsep": ("audio_separator", "numpy", "onnx", "onnxruntime", "torch"),
-}
-
-
-def _run_probe(python_exe: Path, src: str, timeout: int = 60) -> Dict[str, Any]:
-    try:
-        proc = subprocess.run(
-            [str(python_exe), "-c", src],
-            capture_output=True, text=True, timeout=timeout,
-        )
-    except Exception as exc:
-        return {"probe_error": f"{type(exc).__name__}: {exc}"}
-    if proc.returncode != 0:
-        return {"probe_error": (proc.stderr or proc.stdout).strip()[-2000:]}
-    lines = [line for line in proc.stdout.strip().splitlines() if line.strip()]
-    if not lines:
-        return {"probe_error": "probe produced no output"}
-    try:
-        payload = json.loads(lines[-1])
-    except Exception as exc:
-        return {"probe_error": f"could not parse probe output: {exc}", "raw_stdout": proc.stdout[-2000:]}
-    if not isinstance(payload, dict):
-        return {"probe_error": f"probe output must be a JSON object, got {type(payload).__name__}"}
-    return payload
+# Runtime-imports probe payload, required-import profiles, the bounded
+# _run_probe subprocess helper and the evaluate_required_imports verdict
+# evaluation are canonical in stemwerk_core.readiness_collect (imported
+# above). collect_runtime() below keeps this harness's report shape.
 
 
 def collect_runtime(
@@ -281,35 +136,12 @@ def collect_runtime(
     data["runtime_profile"] = runtime_profile
     data["evidence_kind"] = "required_imports"
 
-    required_imports = _RUNTIME_REQUIRED_IMPORTS.get(runtime_profile)
-    if required_imports is None:
-        data["status"] = FAIL
-        data["reason"] = f"unknown runtime profile: {runtime_profile}"
-        data["required_imports"] = []
-        data["failed_required_imports"] = {}
-        return data
-
-    failures: Dict[str, str] = {}
-    imports = data.get("imports")
-    if not isinstance(imports, dict):
-        imports = {}
-    for module_name in required_imports:
-        evidence = imports.get(module_name)
-        if not isinstance(evidence, dict):
-            failures[module_name] = "no import evidence"
-        elif evidence.get("ok") is not True:
-            failures[module_name] = str(evidence.get("error") or "import did not succeed")
-
-    data["required_imports"] = list(required_imports)
+    failures, required_imports, status, reason = evaluate_required_imports(data, runtime_profile)
+    data["required_imports"] = required_imports
     data["failed_required_imports"] = failures
-    if "probe_error" in data:
-        data["status"] = FAIL
-        data["reason"] = f"runtime probe failed: {data['probe_error']}"
-    elif failures:
-        data["status"] = FAIL
-        data["reason"] = "required package import validation failed"
-    else:
-        data["status"] = PASS
+    data["status"] = status
+    if reason:
+        data["reason"] = reason
     return data
 
 
@@ -505,11 +337,9 @@ def collect_drumsep_hardware(
 # Contracts -- real probe resolution, reusing Slice 1-4's own machinery
 # ---------------------------------------------------------------------------
 
-_WORKFLOW_DEFAULT_MODEL = {
-    "normal_stems": "htdemucs",
-    "drum_kit_direct": "drumsep_mdx23c",
-    "drum_kit_split": ("htdemucs", "drumsep_mdx23c"),
-}
+# Workflow/model defaults are Core-owned (stemwerk_core.readiness); this
+# harness imports them back rather than maintaining a parallel copy.
+from stemwerk_core.readiness import DEFAULT_MODEL_BY_WORKFLOW as _WORKFLOW_DEFAULT_MODEL  # noqa: E402
 
 
 def _legacy_authoritative_gates_present() -> Dict[str, bool]:
@@ -657,16 +487,6 @@ def collect_contracts(requested_device: str = "auto") -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Execution agreement (real fixture) -- optional, --real only
 # ---------------------------------------------------------------------------
-
-def _referenced_model_hashes(yaml_path: Path) -> List[str]:
-    import re
-
-    text = yaml_path.read_text(encoding="utf-8")
-    match = re.search(r"models:\s*\[([^\]]*)\]", text)
-    if not match:
-        return []
-    return [h.strip("'\" ") for h in match.group(1).split(",") if h.strip("'\" ")]
-
 
 def _stage_model_copy(source_dir: Path, model_name: str, dest_dir: Path) -> Optional[Path]:
     """Copies only the yaml + referenced .th weight file(s) into a
@@ -878,16 +698,6 @@ BACKEND_MATRIX = {
 }
 
 _PLATFORM_KEY = {"Linux": "linux", "Windows": "windows", "Darwin": "darwin"}
-
-
-def _combine_probe_statuses(*statuses: str) -> str:
-    if FAIL in statuses:
-        return FAIL
-    if not statuses or UNAVAILABLE in statuses:
-        return UNAVAILABLE
-    if SKIPPED in statuses:
-        return SKIPPED
-    return PASS if all(status == PASS for status in statuses) else UNAVAILABLE
 
 
 def _build_backend_matrix(
