@@ -29,7 +29,7 @@ for _path in (str(CORE_SRC), str(INTERNAL)):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from stemwerk_core import readiness  # noqa: E402
+from stemwerk_core import readiness, readiness_collect  # noqa: E402
 from stemwerk_core.readiness import ReadinessError, ReadinessRequest  # noqa: E402
 from stemwerk_core.verdicts import FAIL, PASS, SKIPPED, UNAVAILABLE  # noqa: E402
 
@@ -677,13 +677,6 @@ def test_api_cli_adapter_equivalence(tmp_path, monkeypatch):
         workflow_id="drum_kit_split", requested_device="auto", evidence_mode="fixture"
     )
 
-    # Fixture evaluation through the adapter must never touch the legacy
-    # processor, regardless of what other suites already imported.
-    def _forbidden_legacy_load():
-        raise AssertionError("fixture evaluation loaded the legacy module")
-
-    monkeypatch.setattr(adapter, "_load_legacy_module", _forbidden_legacy_load)
-
     api_report = readiness.assess_readiness(request, fixture=fixture, catalog_dir=CATALOG_DIR)
 
     adapter_report = adapter.assess(request, fixture=fixture)
@@ -794,20 +787,52 @@ def test_live_model_assets_missing_fails(canned_live, tmp_path, monkeypatch):
 
 
 @pytest.mark.portable
-def test_standalone_drumsep_live_collection_unavailable(canned_live):
-    """Standalone Core (no adapter collectors) must report DrumSep as
-    UNAVAILABLE with the stable reason -- never substituting ambient CPU."""
+def test_standalone_drumsep_live_collection_uses_core_collector(
+    canned_live, tmp_path, monkeypatch
+):
+    """Standalone Core uses its own collector without an adapter injection."""
+    asset = tmp_path / "drumsep.ckpt"
+    asset.write_bytes(b"controlled")
+    monkeypatch.setattr(
+        readiness.model_assets,
+        "drumsep_asset_evidence",
+        lambda: {
+            "base_dir": str(tmp_path),
+            "assets": [
+                {"name": asset.name, "sha256": hashlib.sha256(b"controlled").hexdigest()}
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        readiness_collect,
+        "build_drum_kit_collector",
+        lambda: lambda requested: {
+            "capability": {
+                "verdict": PASS,
+                "resolution": {
+                    "requested": requested,
+                    "resolved_device_id": "cpu",
+                    "resolved_device_name": "cpu",
+                    "resolved_backend": "cpu",
+                    "selection_info": {"selection_policy": "explicit_cpu"},
+                },
+                "evidence": {
+                    "source": "collected",
+                    "evidence_kind": "production_selector_result",
+                    "selector_provenance": readiness_collect.SELECTOR_PROVENANCE,
+                },
+            },
+            "runtime": {"verdict": PASS, "evidence": {"source": "collected"}},
+        },
+    )
     report = readiness.assess_readiness(
         ReadinessRequest(workflow_id="drum_kit_direct"), catalog_dir=CATALOG_DIR
     )
     assert report["evaluation_mode"] == "live"
-    assert report["readiness"]["verdict"] == UNAVAILABLE
+    assert report["readiness"]["verdict"] == PASS
     capability = report["stages"][0]["components"]["capability"]
-    assert capability["reason_code"] == readiness.REASON_DRUMSEP_LIVE_COLLECTION_UNSUPPORTED
-    assert report["components"]["feasibility"]["reason_code"] == (
-        readiness.REASON_DRUMSEP_LIVE_COLLECTION_UNSUPPORTED
-    )
-    assert readiness.exit_code_for_report(report) == readiness.EXIT_UNAVAILABLE_OR_ERROR
+    assert capability["evidence"]["selector_provenance"] == readiness_collect.SELECTOR_PROVENANCE
+    assert readiness.exit_code_for_report(report) == readiness.EXIT_LIVE_READY
 
 
 @pytest.mark.portable
@@ -860,11 +885,61 @@ def test_drumsep_model_integrity_via_provider(canned_live, tmp_path):
     model = bad["stages"][0]["components"]["model"]
     assert model["verdict"] == FAIL
     assert model["reason_code"] == readiness.REASON_ASSET_INTEGRITY_MISMATCH
+    assert bad["stages"][0]["components"]["runtime"]["verdict"] == PASS
+    assert bad["stages"][0]["components"]["capability"]["verdict"] == PASS
 
     missing = run(assets, tmp_path / "elsewhere")
     model = missing["stages"][0]["components"]["model"]
     assert model["verdict"] == FAIL
     assert model["reason_code"] == readiness.REASON_MODEL_ASSETS_MISSING
+
+
+@pytest.mark.portable
+def test_drumsep_ffmpeg_failure_is_independent_of_runtime_and_model(
+    canned_live, tmp_path, monkeypatch
+):
+    asset = tmp_path / "model.ckpt"
+    asset.write_bytes(b"model")
+    collector = lambda requested: {
+        "capability": {
+            "verdict": PASS,
+            "resolution": {
+                "requested": requested,
+                "resolved_device_id": "cpu",
+                "resolved_device_name": "cpu",
+                "resolved_backend": "cpu",
+                "selection_info": {"selection_policy": "explicit_cpu"},
+            },
+            "evidence": {"source": "collected"},
+        },
+        "runtime": {"verdict": PASS, "evidence": {"source": "collected"}},
+    }
+    monkeypatch.setattr(
+        readiness_collect,
+        "collect_ffmpeg",
+        lambda: {
+            "verdict": FAIL,
+            "reason": "controlled ffmpeg failure",
+            "evidence": {"source": "collected", "evidence_kind": "ffmpeg_usability_probe"},
+        },
+    )
+    report = readiness.assess_readiness(
+        ReadinessRequest(workflow_id="drum_kit_direct"),
+        catalog_dir=CATALOG_DIR,
+        collectors={"drum_kit": collector},
+        model_asset_providers={
+            "drumsep_mdx23c": lambda: {
+                "base_dir": str(tmp_path),
+                "assets": [
+                    {"name": asset.name, "sha256": hashlib.sha256(b"model").hexdigest()}
+                ],
+            }
+        },
+    )
+    assert report["stages"][0]["components"]["runtime"]["verdict"] == PASS
+    assert report["stages"][0]["components"]["model"]["verdict"] == PASS
+    assert report["components"]["ffmpeg"]["verdict"] == FAIL
+    assert report["readiness"]["verdict"] == FAIL
 
 
 @pytest.mark.portable

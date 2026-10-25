@@ -394,17 +394,24 @@ def _adapter_live_report(
     digest = hashlib.sha256(b"checkpoint").hexdigest()
     calls = []
 
-    def select(device, runtime_base):
-        calls.append((device, runtime_base))
-        if runtime_kind in {"missing", "broken"}:
-            return None, runtime_kind, dict(selection_info or {})
-        return Path(sys.executable), runtime_kind, dict(selection_info or {})
+    def core_probe(python_exe, src, timeout=60, **kwargs):
+        calls.append((requested, tmp_path / "runtime"))
+        return {
+            "selected_python": (
+                "" if runtime_kind in {"missing", "broken"} else str(sys.executable)
+            ),
+            "runtime_kind": runtime_kind,
+            "selection_info": dict(selection_info or {}),
+            "core_origin": str(CORE_SRC / "stemwerk_core" / "__init__.py"),
+            "python_executable": str(python_exe),
+        }
 
-    legacy = SimpleNamespace(
-        _select_drumsep_runtime=select,
-        DIRECT_DKS_MODEL_EXPECTED_SHA256={checkpoint.name: digest},
+    monkeypatch.setattr(readiness_collect, "_run_core_probe", core_probe)
+    monkeypatch.setattr(
+        adapter.model_assets,
+        "DIRECT_DKS_MODEL_EXPECTED_SHA256",
+        {checkpoint.name: digest},
     )
-    monkeypatch.setattr(adapter, "_load_legacy_module", lambda: legacy)
     monkeypatch.setattr(
         readiness_collect,
         "collect_runtime_imports",

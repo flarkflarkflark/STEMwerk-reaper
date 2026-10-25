@@ -10,12 +10,11 @@ CPU-downgrade guard now live in ``stemwerk_core.device_policy`` (extracted
 verbatim from the legacy script, which delegates back to it), so
 :func:`build_normal_stems_capability_probe` composes them directly.
 
-DrumSep runtime selection still lives in the legacy script
-(``_select_drumsep_runtime`` and its verification chain); hoisting it is a
-named follow-up. Until then, :func:`build_drum_kit_capability_probe` loads
-``audio_separator_process.py`` dynamically via ``importlib`` -- the same
-mechanism the existing test suite already uses to reach its private
-functions (see e.g. ``tests/test_windows_normal_route_matrix.py``).
+DrumSep runtime selection now lives in ``stemwerk_core.drumsep_runtime``.
+This older resolver seam still reaches it through the processor's thin
+``_select_drumsep_runtime`` compatibility wrapper so existing processing and
+monkeypatch surfaces remain intact; standalone readiness does not use this
+seam or import the processor.
 """
 
 from __future__ import annotations
@@ -81,7 +80,8 @@ LEGACY_TO_CONTRACT_DRUMSEP_MODEL_ID = {
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt": "drumsep_mdx23c",
 }
 
-# DrumSep's runtime selector (_select_drumsep_runtime) resolves directly to a
+# DrumSep's Core-owned selector, exposed here through the legacy compatibility
+# wrapper, resolves directly to a
 # backend *kind* (cpu/cuda/rocm/mps/directml) plus a venv python path -- there is
 # no separate "device id" concept (no cuda:N GPU index) the way
 # stemwerk_core.devices has. The kind string doubles as both the resolved
@@ -103,8 +103,8 @@ def _drumsep_select_device(legacy, requested: str) -> tuple:
 
 
 def build_drum_kit_capability_probe() -> CapabilityProbe:
-    """Return a CapabilityProbe backed by the real 2.3 DrumSep runtime
-    (_select_drumsep_runtime), used by both Direct Kit and Drum Split stage 2.
+    """Return a CapabilityProbe backed by the Core-owned DrumSep selector via
+    its legacy wrapper, used by both Direct Kit and Drum Split stage 2.
     """
 
     legacy = _load_legacy_module()

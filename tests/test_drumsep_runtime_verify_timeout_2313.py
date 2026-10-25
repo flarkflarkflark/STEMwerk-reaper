@@ -19,6 +19,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIO_PROCESS = ROOT / "scripts" / "reaper" / "audio_separator_process.py"
+CORE_RUNTIME = ROOT / "scripts" / "reaper" / "vendor" / "stemwerk-core" / "src" / "stemwerk_core" / "drumsep_runtime.py"
 MAIN_LUA = ROOT / "scripts" / "reaper" / "STEMwerk.lua"
 
 OK_PAYLOAD = {
@@ -87,9 +88,10 @@ def test_verification_timeout_is_named_finite_and_separate_from_the_watchdog():
     module = _load_module()
     assert module.DRUMSEP_RUNTIME_VERIFY_TIMEOUT_SECONDS == 120
     assert module.DRUMSEP_HELPER_NO_OUTPUT_STALL_SECONDS == 60 * 60
-    source = AUDIO_PROCESS.read_text(encoding="utf-8")
-    verify = source[source.index("def _verify_drumsep_runtime("):source.index("def _clean_env(")]
-    assert "timeout=DRUMSEP_RUNTIME_VERIFY_TIMEOUT_SECONDS" in verify
+    source = CORE_RUNTIME.read_text(encoding="utf-8")
+    verify = source[source.index("def _verify_drumsep_runtime("):source.index("def _select_drumsep_runtime(")]
+    assert 'DRUMSEP_RUNTIME_VERIFY_TIMEOUT_SECONDS' in verify
+    assert '"-I", "-B", "-c"' in verify
     assert "timeout=30" not in verify
 
 

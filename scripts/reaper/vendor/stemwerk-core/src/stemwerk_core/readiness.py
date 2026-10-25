@@ -17,12 +17,9 @@ Boundary contract
     ``device_policy.resolve_normal_runtime_device`` runs inside the *intended*
     interpreter via a bounded subprocess (``readiness_collect``); this module
     only receives its result.
-  - DrumSep stages: production ``_select_drumsep_runtime`` stays behind the
-    REAPER-side adapter. Core never locates or imports
-    ``audio_separator_process.py``. Without an adapter-supplied
-    ``collectors["drum_kit"]``, live DrumSep collection is reported
-    UNAVAILABLE with ``drumsep_live_collection_unsupported`` -- never
-    silently substituted with ambient CPU.
+  - DrumSep stages: the Core-owned production selector runs in the intended
+    interpreter and the selected interpreter is validated separately. Core
+    never locates or imports ``audio_separator_process.py``.
 
 - Evidence modes are explicit. ``evaluation_mode="live"`` means every
   component verdict is backed by evidence collected on this machine just now
@@ -580,15 +577,12 @@ def _live_model_component(
                 evidence={**evidence_base, "evidence_kind": "model_asset_integrity"},
             )
         return _verify_supplied_assets(model_id, supplied, evidence_base)
+    if flavor == "drumsep":
+        return _verify_supplied_assets(
+            model_id, model_assets.drumsep_asset_evidence(), evidence_base
+        )
     if model_id in DEMUCS_AUDIO_SEPARATOR_MODEL_IDS:
         return _demucs_presence_component(model_id, evidence_base)
-    if flavor == "drumsep":
-        return _unavailable(
-            REASON_DRUMSEP_LIVE_COLLECTION_UNSUPPORTED,
-            "DrumSep model asset pins ship with the REAPER-side adapter; standalone live "
-            "DrumSep model verification is not supported in this slice",
-            evidence={**evidence_base, "evidence_kind": "model_asset_integrity"},
-        )
     return _unavailable(
         REASON_RUNTIME_EVIDENCE_MISSING,
         f"no model asset evidence source for model {model_id!r}",
@@ -794,55 +788,40 @@ def _live_stage_components(
             reason_code=REASON_RUNTIME_EVIDENCE_MISSING,
         )
     else:
-        collector = (collectors or {}).get("drum_kit")
-        if collector is None:
-            unsupported = {
-                "source": "collected",
-                "evidence_kind": "live_collection_unsupported",
-                "observed_at_utc": _utc_now(),
-            }
-            reason = (
-                "no supported live DrumSep collector: production DrumSep runtime selection "
-                "is only available through the REAPER-side adapter in this slice"
+        collector = (collectors or {}).get("drum_kit") or readiness_collect.build_drum_kit_collector()
+        if "drum_kit" not in collector_cache:
+            try:
+                collector_cache["drum_kit"] = collector(requested_device)
+            except Exception as exc:
+                collector_cache["drum_kit"] = exc
+        collected = collector_cache["drum_kit"]
+        if isinstance(collected, Exception) or not isinstance(collected, Mapping):
+            detail = (
+                f"drum_kit collector raised {type(collected).__name__}: {collected}"
+                if isinstance(collected, Exception)
+                else "drum_kit collector returned malformed evidence"
             )
-            runtime = _unavailable(REASON_DRUMSEP_LIVE_COLLECTION_UNSUPPORTED, reason, evidence=unsupported)
-            capability = _unavailable(
-                REASON_DRUMSEP_LIVE_COLLECTION_UNSUPPORTED, reason, evidence=dict(unsupported)
-            )
+            runtime = _unavailable(REASON_RUNTIME_EVIDENCE_MISSING, detail)
+            capability = _unavailable(REASON_RUNTIME_EVIDENCE_MISSING, detail)
         else:
-            if "drum_kit" not in collector_cache:
-                try:
-                    collector_cache["drum_kit"] = collector(requested_device)
-                except Exception as exc:
-                    collector_cache["drum_kit"] = exc
-            collected = collector_cache["drum_kit"]
-            if isinstance(collected, Exception) or not isinstance(collected, Mapping):
-                detail = (
-                    f"drum_kit collector raised {type(collected).__name__}: {collected}"
-                    if isinstance(collected, Exception)
-                    else "drum_kit collector returned malformed evidence"
+            runtime_raw = collected.get("runtime")
+            capability_raw = collected.get("capability")
+            runtime = (
+                _finalize_collected(runtime_raw, reason_code=REASON_RUNTIME_EVIDENCE_MISSING)
+                if isinstance(runtime_raw, Mapping)
+                else _unavailable(
+                    REASON_RUNTIME_EVIDENCE_MISSING,
+                    "drum_kit collector supplied no runtime-imports evidence",
                 )
-                runtime = _unavailable(REASON_RUNTIME_EVIDENCE_MISSING, detail)
-                capability = _unavailable(REASON_RUNTIME_EVIDENCE_MISSING, detail)
-            else:
-                runtime_raw = collected.get("runtime")
-                capability_raw = collected.get("capability")
-                runtime = (
-                    _finalize_collected(runtime_raw, reason_code=REASON_RUNTIME_EVIDENCE_MISSING)
-                    if isinstance(runtime_raw, Mapping)
-                    else _unavailable(
-                        REASON_RUNTIME_EVIDENCE_MISSING,
-                        "drum_kit collector supplied no runtime-imports evidence",
-                    )
+            )
+            capability = (
+                _finalize_collected(capability_raw, reason_code=REASON_RUNTIME_EVIDENCE_MISSING)
+                if isinstance(capability_raw, Mapping)
+                else _unavailable(
+                    REASON_RUNTIME_EVIDENCE_MISSING,
+                    "drum_kit collector supplied no capability evidence",
                 )
-                capability = (
-                    _finalize_collected(capability_raw, reason_code=REASON_RUNTIME_EVIDENCE_MISSING)
-                    if isinstance(capability_raw, Mapping)
-                    else _unavailable(
-                        REASON_RUNTIME_EVIDENCE_MISSING,
-                        "drum_kit collector supplied no capability evidence",
-                    )
-                )
+            )
     model = _live_model_component(info["model_id"], info["flavor"], providers)
     return {"stage_id": stage_id, "runtime": runtime, "capability": capability, "model": model}
 
@@ -1007,8 +986,8 @@ def assess_readiness(
     ``fixture`` is a parsed fixture document (see module docstring); when
     supplied, the request's evidence_mode must be "fixture" and the whole
     evaluation is labeled simulated. ``collectors``/``model_asset_providers``
-    are the explicit REAPER-adapter injection points; Core never locates the
-    legacy processor itself.
+    are explicit override points for clients and controlled tests; Core never
+    locates the legacy processor itself.
     """
 
     coerced = _coerce_request(request)

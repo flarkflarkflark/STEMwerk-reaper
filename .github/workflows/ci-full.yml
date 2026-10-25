@@ -70,6 +70,7 @@ jobs:
         run: >-
           python -m pytest -q -m portable
           tests/test_stemwerk_runtime_diagnostics_harness.py
+          tests/test_core_drumsep_runtime.py
           tests/test_core_readiness.py
           tests/test_core_readiness_hardening.py
           tests/test_core_catalog_sync.py

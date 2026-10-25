@@ -10,9 +10,9 @@ never probes real hardware itself, and never encodes GPU backend-priority
 policy. All hardware-facing behaviour is supplied by the caller through a
 ``CapabilityProbe`` -- production wiring that reproduces the exact legacy
 Auto device-preference policy (e.g. the Linux AMD-name scoring in
-``audio_separator_process._prefer_linux_amd_device``, or the DrumSep
-runtime-selection policy in ``audio_separator_process._select_drumsep_runtime``)
-lives in ``scripts/reaper/_internal/stemwerk_runtime_seam.py``, not here.
+``device_policy.prefer_linux_amd_device`` or the DrumSep runtime-selection
+policy in ``drumsep_runtime.select_drumsep_runtime``) lives in sibling Core
+modules, not here.
 
 Backend permission (``permitted_backends``) is read directly from each
 resolved capability's catalog entry -- there is no separate Python-side

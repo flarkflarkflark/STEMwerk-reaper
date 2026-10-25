@@ -1812,6 +1812,7 @@ def test_drumsep_cpu_fallback_scheduler_prediction_is_logged_and_uses_cpu_policy
 def test_drumsep_benchmark_helper_device_override_is_probe_only_and_scheduler_visible():
     script = _read_utf8("scripts/reaper/STEMwerk.lua")
     process = _read_utf8("scripts/reaper/audio_separator_process.py")
+    core_runtime = _read_utf8("scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/drumsep_runtime.py")
     helper = _read_utf8("scripts/reaper/_internal/stemwerk_drumsep_process.py")
     support = _read_utf8("scripts/reaper/STEMwerk_Save_Support_Bundle.lua")
 
@@ -1830,7 +1831,7 @@ def test_drumsep_benchmark_helper_device_override_is_probe_only_and_scheduler_vi
     assert 'schedulerBackend = "gpu"' in script
     assert 'BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV = "STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE"' in process
     assert 'return "cpu", "not_requested"' in process
-    assert 'require_cuda=True' in process
+    assert 'require_cuda=True' in core_runtime
     assert 'route="direct-demix" if use_direct_demix else "wrapper"' in process
     assert "use_managed_wrapper = direct_demix_reason == DRUMSEP_UVR_EQUIVALENT_WRAPPER_REASON" in process
     assert 'device=direct_demix_device if use_direct_demix else (managed_wrapper_device or helper_device)' in process
@@ -3267,6 +3268,9 @@ def test_audio_separator_process_enables_torch26_demucs_checkpoint_compatibility
 
 def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     script = Path("scripts/reaper/audio_separator_process.py").read_text()
+    core_runtime = Path(
+        "scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/drumsep_runtime.py"
+    ).read_text()
     _, after_direct_route = script.split("if _is_direct_dks_source(args.workflow_mode, args.workflow_source):", 1)
 
     assert 'parser.add_argument("--workflow-mode", default=""' in script
@@ -3314,8 +3318,8 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "def _drumsep_runtime_python_path(" in script
     assert "def _main_runtime_python_path(" in script
     assert "def _macos_ready_drumsep_main_runtime_candidates(" in script
-    assert "DRUMSEP_READY_RUNTIME_STATUS" in script
-    assert "DRUMSEP_READY_MODEL_STATUS" in script
+    assert "DRUMSEP_READY_RUNTIME_STATUS" in core_runtime
+    assert "DRUMSEP_READY_MODEL_STATUS" in core_runtime
     assert "def _drumsep_rocm_runtime_python_path(" in script
     assert "def _verify_drumsep_runtime(" in script
     assert "def _select_drumsep_runtime(" in script
@@ -3332,12 +3336,12 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "_direct_dks_preflight_check(" in script
     assert "runtime_info=runtime_info" in script
     assert after_direct_route.index("drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)") < after_direct_route.index("_direct_dks_preflight_check(")
-    assert "drumsep_runtime_selection_policy=explicit_cpu" in script
-    assert 'selection_policy = "gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm"' in script
-    assert "drumsep_runtime_selection_policy=explicit_cuda" in script
-    assert 'cuda_selection_policy = "gpu_prefer_cuda" if normalized_request == "gpu" else "auto_prefer_cuda"' in script
-    assert "normalized_device_request=" in script
-    assert 'info["selection_policy"] = "fallback_cpu"' in script
+    assert "drumsep_runtime_selection_policy=explicit_cpu" in core_runtime
+    assert 'selection_policy = "gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm"' in core_runtime
+    assert "drumsep_runtime_selection_policy=explicit_cuda" in core_runtime
+    assert 'cuda_selection_policy = "gpu_prefer_cuda" if normalized_request == "gpu" else "auto_prefer_cuda"' in core_runtime
+    assert "normalized_device_request=" in core_runtime
+    assert 'info["selection_policy"] = "fallback_cpu"' in core_runtime
     assert after_direct_route.index("_direct_dks_preflight_check(") < after_direct_route.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(")
     assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
     assert 'print(f"error_reason={reason}", file=sys.stderr)' in script
@@ -8660,14 +8664,17 @@ def test_i18n_device_copy_matches_normal_auto_mps_behavior_without_experimental_
 
 def test_drumsep_runtime_selector_reads_state_python_candidates_before_dedicated_runtime_paths():
     script = Path("scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
+    core_runtime = Path(
+        "scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/drumsep_runtime.py"
+    ).read_text(encoding="utf-8")
 
     assert "def _drumsep_runtime_state(" in script
     assert "def _drumsep_state_python_candidates(" in script
-    assert 'add(state.get("PYTHON_PATH"))' in script
-    assert 'add(state.get("VENV_PYTHON_PATH"))' in script
-    assert 'add(state.get("VENV_PYTHON"))' in script
-    assert "selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(cpu_candidates, require_gpu=False)" in script
-    assert "selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(rocm_candidates, require_gpu=True)" in script
+    assert 'add(state.get("PYTHON_PATH"))' in core_runtime
+    assert 'add(state.get("VENV_PYTHON_PATH"))' in core_runtime
+    assert 'add(state.get("VENV_PYTHON"))' in core_runtime
+    assert "selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(cpu_candidates, require_gpu=False)" in core_runtime
+    assert "selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(rocm_candidates, require_gpu=True)" in core_runtime
 
 
 def test_cached_capability_devices_ignore_stale_raw_gpu_blocks_when_runtime_is_cpu_only():

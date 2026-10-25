@@ -19,11 +19,10 @@ Bounded side-effect contract:
 
 The runtime-imports probe payload and required-import profiles are the
 canonical copies moved from ``tools/stemwerk_runtime_diagnostics.py``; that
-harness imports them back from here. DrumSep *selection* evidence is NOT
-collected here: production DrumSep runtime selection
-(``audio_separator_process._select_drumsep_runtime``) stays behind the
-REAPER-side adapter boundary, so this module can answer DrumSep readiness
-only as "unsupported live collection" (see stemwerk_core.readiness).
+harness imports them back from here. DrumSep selection is also Core-owned:
+the selector runs in the intended interpreter through the same validated
+Core-origin boundary, then the selected interpreter gets its own required-
+imports probe. Neither path imports the REAPER processor.
 """
 
 from __future__ import annotations
@@ -34,9 +33,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from . import managed_runtime
+from . import device_policy
 from .verdicts import FAIL, PASS, UNAVAILABLE
 
 # ---------------------------------------------------------------------------
@@ -312,6 +312,179 @@ def collect_runtime_imports(
     if status == FAIL and "probe_error" not in data:
         result.setdefault("reason", "required package import validation failed")
     return result
+
+
+# ---------------------------------------------------------------------------
+# DrumSep runtime/backend resolution evidence
+# ---------------------------------------------------------------------------
+
+SELECTOR_PROVENANCE = "core_select_drumsep_runtime"
+
+_DRUMSEP_SELECTION_PROBE_SRC = r"""
+import json
+from pathlib import Path
+
+from stemwerk_core import drumsep_runtime
+
+try:
+    selected, runtime_kind, selection_info = drumsep_runtime.select_drumsep_runtime(
+        %(requested)r,
+        Path(%(runtime_base)r) if %(runtime_base)r else None,
+    )
+    result = {
+        "selected_python": str(selected) if selected is not None else "",
+        "runtime_kind": runtime_kind,
+        "selection_info": selection_info,
+    }
+except Exception as exc:
+    result = {"error": "%%s: %%s" %% (type(exc).__name__, exc)}
+
+print(json.dumps(result, sort_keys=True))
+"""
+
+
+def collect_drum_kit_resolution(
+    requested_device: str,
+    python_exe: Optional[Path],
+    *,
+    source_label: str,
+    runtime_base: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Collect selector, capability, and selected-runtime import evidence."""
+
+    evidence = {
+        "source": "collected",
+        "evidence_kind": "production_selector_result",
+        "runtime_source": source_label,
+        "selector_provenance": SELECTOR_PROVENANCE,
+    }
+    if python_exe is None:
+        unavailable = {
+            "verdict": UNAVAILABLE,
+            "reason": f"no {source_label} interpreter found",
+            "evidence": evidence,
+        }
+        return {"capability": unavailable, "runtime": dict(unavailable)}
+
+    src = _DRUMSEP_SELECTION_PROBE_SRC % {
+        "requested": str(requested_device or "auto"),
+        "runtime_base": str(runtime_base) if runtime_base is not None else "",
+    }
+    data = _run_core_probe(python_exe, src, timeout=DRUMSEP_RUNTIME_SELECTION_TIMEOUT_SECONDS)
+    error = data.get("probe_error") or data.get("error")
+    if error:
+        capability = {
+            "verdict": FAIL,
+            "reason_code": "runtime_evidence_broken",
+            "reason": f"DrumSep runtime selection probe failed: {error}",
+            "evidence": {
+                **evidence,
+                "python_executable": str(python_exe),
+                "core_origin": data.get("core_origin"),
+            },
+        }
+        runtime = {
+            "verdict": UNAVAILABLE,
+            "reason_code": "runtime_evidence_broken",
+            "reason": "DrumSep selection supplied no interpreter",
+            "evidence": {
+                "source": "collected",
+                "evidence_kind": "required_imports",
+                "runtime_source": "managed_drumsep",
+                "runtime_profile": "drumsep",
+            },
+        }
+        return {"capability": capability, "runtime": runtime}
+
+    runtime_kind = str(data.get("runtime_kind") or "")
+    selected_text = str(data.get("selected_python") or "")
+    raw_info = data.get("selection_info")
+    if not isinstance(raw_info, dict):
+        raw_info = {}
+    resolved = (
+        runtime_kind
+        if selected_text and runtime_kind in device_policy.DRUMSEP_RUNTIME_KINDS
+        else "unavailable"
+    )
+    resolution = {
+        "requested": str(requested_device or "auto"),
+        "resolved_device_id": resolved,
+        "resolved_device_name": resolved,
+        "resolved_backend": resolved,
+        "selection_info": dict(raw_info),
+    }
+    if resolved == "unavailable":
+        detail = str(raw_info.get("detail") or runtime_kind or "malformed selector result")
+        reason_code = (
+            "runtime_evidence_missing"
+            if runtime_kind == "missing"
+            else "runtime_evidence_broken"
+        )
+        capability = {
+            "verdict": FAIL,
+            "reason_code": reason_code,
+            "reason": f"production DrumSep runtime selection found no usable runtime: {detail}",
+            "resolution": resolution,
+            "evidence": {
+                **evidence,
+                "python_executable": str(python_exe),
+                "core_origin": data.get("core_origin"),
+            },
+        }
+        runtime = {
+            "verdict": UNAVAILABLE,
+            "reason_code": reason_code,
+            "reason": f"no usable DrumSep interpreter ({runtime_kind or 'malformed'})",
+            "evidence": {
+                "source": "collected",
+                "evidence_kind": "required_imports",
+                "runtime_source": "managed_drumsep",
+                "runtime_profile": "drumsep",
+            },
+        }
+        return {"capability": capability, "runtime": runtime}
+
+    selected_python = Path(selected_text)
+    capability = {
+        "verdict": PASS,
+        "resolution": resolution,
+        "evidence": {
+            **evidence,
+            "python_executable": str(selected_python),
+            "selector_python_executable": str(data.get("python_executable") or python_exe),
+            "core_origin": data.get("core_origin"),
+        },
+    }
+    runtime = collect_runtime_imports(
+        selected_python, source_label="managed_drumsep", runtime_profile="drumsep"
+    )
+    return {"capability": capability, "runtime": runtime}
+
+
+# The selector can inspect several ordered runtime families and each candidate
+# retains its established 120-second cold-import bound. This aggregate guard
+# bounds the subprocess without imposing a shorter policy on valid fallback
+# chains.
+DRUMSEP_RUNTIME_SELECTION_TIMEOUT_SECONDS = 60 * 60
+
+
+def build_drum_kit_collector(
+    runtime_base: Optional[Path] = None,
+) -> "Callable[[str], Dict[str, Any]]":
+    """Build the client-neutral live DrumSep collector used by all clients."""
+
+    def collect(requested_device: str) -> Dict[str, Any]:
+        managed = managed_runtime.managed_runtime_python()
+        python_exe = managed if managed is not None else Path(sys.executable)
+        source_label = "managed" if managed is not None else "ambient"
+        return collect_drum_kit_resolution(
+            requested_device,
+            python_exe,
+            source_label=source_label,
+            runtime_base=runtime_base,
+        )
+
+    return collect
 
 
 # ---------------------------------------------------------------------------
