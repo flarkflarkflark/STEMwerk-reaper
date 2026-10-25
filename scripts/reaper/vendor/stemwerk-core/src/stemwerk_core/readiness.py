@@ -70,7 +70,7 @@ import argparse
 import json
 import os
 import sys
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import resources as importlib_resources
@@ -240,19 +240,20 @@ def _catalog_dir(explicit: Optional[str | Path]) -> Iterator[tuple[Path, str]]:
     if env_value:
         yield Path(env_value).expanduser(), "environment"
         return
-    try:
-        resource = importlib_resources.files("stemwerk_core").joinpath("catalog")
-        with importlib_resources.as_file(resource) as packaged:
-            if packaged.is_dir():
-                yield packaged, "package"
-                return
-    except Exception:
-        pass
-    raise ReadinessError(
-        REASON_CATALOG_UNAVAILABLE,
+    unavailable_message = (
         "no workflow catalog available: no --catalog-dir/STEMWERK_CATALOG_DIR and no "
-        "packaged stemwerk_core catalog resource",
+        "packaged stemwerk_core catalog resource"
     )
+    with ExitStack() as resource_stack:
+        try:
+            resource = importlib_resources.files("stemwerk_core").joinpath("catalog")
+            packaged = resource_stack.enter_context(importlib_resources.as_file(resource))
+            is_directory = packaged.is_dir()
+        except Exception as exc:
+            raise ReadinessError(REASON_CATALOG_UNAVAILABLE, unavailable_message) from exc
+        if not is_directory:
+            raise ReadinessError(REASON_CATALOG_UNAVAILABLE, unavailable_message)
+        yield packaged, "package"
 
 
 def _load_catalogs(catalog_dir: Path) -> Mapping[str, Any]:

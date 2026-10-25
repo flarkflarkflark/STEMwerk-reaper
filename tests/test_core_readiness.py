@@ -210,6 +210,105 @@ def test_isolated_package_catalog_loading(tmp_path):
     assert report["readiness"]["scope"] == "simulated_policy_evaluation"
 
 
+@pytest.mark.portable
+def test_packaged_catalog_preserves_malformed_fixture_error(monkeypatch):
+    """Errors from readiness processing must cross the resource context unchanged."""
+    monkeypatch.delenv("STEMWERK_CATALOG_DIR", raising=False)
+    fixture = _fixture_normal_stems()
+    fixture["stages"][0]["runtime"]["verdict"] = "MAYBE"
+
+    with pytest.raises(ReadinessError) as excinfo:
+        readiness.assess_readiness(
+            ReadinessRequest(workflow_id="normal_stems", evidence_mode="fixture"),
+            fixture=fixture,
+        )
+
+    assert excinfo.value.code == readiness.REASON_FIXTURE_INVALID
+
+
+@pytest.mark.portable
+def test_packaged_catalog_context_preserves_body_error_and_cleans_up(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("STEMWERK_CATALOG_DIR", raising=False)
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    events = []
+
+    class Resource:
+        def joinpath(self, name):
+            assert name == "catalog"
+            return self
+
+    class MaterializedResource:
+        def __enter__(self):
+            events.append(("enter", None))
+            return catalog
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            events.append(("exit", exc_type))
+            return False
+
+    monkeypatch.setattr(readiness.importlib_resources, "files", lambda package: Resource())
+    monkeypatch.setattr(
+        readiness.importlib_resources,
+        "as_file",
+        lambda resource: MaterializedResource(),
+    )
+
+    with readiness._catalog_dir(None) as (resolved, source):
+        assert resolved == catalog
+        assert source == "package"
+    assert events == [("enter", None), ("exit", None)]
+
+    events.clear()
+    sentinel = RuntimeError("sentinel from readiness processing")
+    with pytest.raises(RuntimeError) as excinfo:
+        with readiness._catalog_dir(None):
+            raise sentinel
+    assert excinfo.value is sentinel
+    assert events == [("enter", None), ("exit", RuntimeError)]
+
+
+@pytest.mark.portable
+@pytest.mark.parametrize("failure_point", ["discovery", "materialization"])
+def test_packaged_catalog_resource_failures_are_catalog_unavailable(
+    tmp_path, monkeypatch, failure_point
+):
+    monkeypatch.delenv("STEMWERK_CATALOG_DIR", raising=False)
+
+    class Resource:
+        def joinpath(self, name):
+            assert name == "catalog"
+            return self
+
+    class FailedMaterialization:
+        def __enter__(self):
+            raise OSError("controlled materialization failure")
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    if failure_point == "discovery":
+        def fail_discovery(package):
+            raise FileNotFoundError("controlled discovery failure")
+
+        monkeypatch.setattr(readiness.importlib_resources, "files", fail_discovery)
+    else:
+        monkeypatch.setattr(readiness.importlib_resources, "files", lambda package: Resource())
+        monkeypatch.setattr(
+            readiness.importlib_resources,
+            "as_file",
+            lambda resource: FailedMaterialization(),
+        )
+
+    with pytest.raises(ReadinessError) as excinfo:
+        with readiness._catalog_dir(None):
+            raise AssertionError("catalog context unexpectedly entered")
+
+    assert excinfo.value.code == readiness.REASON_CATALOG_UNAVAILABLE
+
+
 # ---------------------------------------------------------------------------
 # Simulated (fixture) evaluations across all three workflows
 # ---------------------------------------------------------------------------
