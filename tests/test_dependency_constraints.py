@@ -289,12 +289,61 @@ def _linux_rocm7_gfx1201_profile_applies():
     return re.search(r"gfx1201|rx 9070|radeon rx 9070", proc.stdout or "", re.IGNORECASE) is not None
 
 
-def _select_torch_stack_profile(system, machine, gfx1201_applies):
+def _read_profile_record(path):
+    values = {}
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _managed_runtime_profile_evidence(runtime_python):
+    """Read provisioning evidence only from the selected main runtime.
+
+    The bootstrap record is accepted only when both its runtime root and
+    recorded venv interpreter identify ``runtime_python``.  This prevents a
+    Main-runtime validation from borrowing DrumSep or another installation's
+    profile record.
+    """
+    def absolute_without_resolving_symlinks(path):
+        return Path(os.path.abspath(Path(path).expanduser()))
+
+    runtime_python = absolute_without_resolving_symlinks(runtime_python)
+    try:
+        runtime_root = runtime_python.parents[2]
+    except IndexError:
+        return None, f"selected runtime interpreter has no runtime root: {runtime_python}"
+    record_path = runtime_root / "state" / "bootstrap.env"
+    if not record_path.is_file():
+        return None, f"provisioning profile evidence is missing: {record_path}"
+    evidence = _read_profile_record(record_path)
+    recorded_root = evidence.get("RUNTIME_BASE", "")
+    recorded_python = evidence.get("VENV_PYTHON_PATH") or evidence.get("VENV_PYTHON")
+    if not recorded_root or not recorded_python:
+        return None, "provisioning profile evidence lacks RUNTIME_BASE or VENV_PYTHON_PATH"
+    if absolute_without_resolving_symlinks(recorded_root) != runtime_root:
+        return None, "provisioning profile evidence belongs to a different runtime root"
+    if absolute_without_resolving_symlinks(recorded_python).parent.parent != runtime_python.parent.parent:
+        return None, "provisioning profile evidence belongs to a different runtime interpreter"
+    python_path = evidence.get("PYTHON_PATH")
+    if (
+        python_path
+        and absolute_without_resolving_symlinks(python_path).parent.parent
+        != runtime_python.parent.parent
+    ):
+        return None, "provisioning profile evidence contains contradictory runtime interpreter paths"
+    return evidence, ""
+
+
+def _select_torch_stack_profile(system, machine, profile_evidence=None):
     """Select the intended torch-stack pin profile the way the canonical
     bootstrap scripts do, from the SELECTED RUNTIME's own platform and
     architecture (probed inside that runtime, not the ambient host) plus
-    the bootstrap's hardware profile gate -- never from installed package
-    versions.
+    the provisioning profile recorded for that exact runtime -- never from
+    installed package versions, import success, or current hardware alone.
 
     Returns (profile_name, {package: pin}) or None when the profile cannot
     be established reliably; the caller must then report validation
@@ -304,11 +353,11 @@ def _select_torch_stack_profile(system, machine, gfx1201_applies):
       unrecognized architecture maps to nothing here (the bootstrap's
       else-branch assumes arm64; validation must not silently inherit that
       assumption for an arch it cannot identify).
-    - STEMwerk_Bootstrap_Linux.sh: ROCM7_GFX1201_* only under the gfx1201
-      ROCm-path gate (TORCH_RUNTIME_POLICY rocm_gfx1201_allow_2_10_rocm7),
-      base PINNED_* otherwise (service_line_default_torch_lt_2_6; CPU,
-      CUDA and non-gfx1201 ROCm installs all share these pin values and
-      differ only in wheel index).
+    - STEMwerk_Bootstrap_Linux.sh: ROCM7_GFX1201_* only for a successful,
+      internally consistent linux-rocm record carrying both the gfx1201
+      runtime policy and selected-device evidence. Base PINNED_* applies to
+      coherent successful CPU, CUDA and non-gfx1201 ROCm records carrying
+      service_line_default_torch_lt_2_6.
     Windows is deliberately not selected: STEMwerk_Bootstrap_Windows.ps1
     carries backend-dependent profiles (CPU/DirectML torch 2.4.1 vs CUDA
     torch 2.7.1) that this check does not yet discriminate."""
@@ -329,12 +378,39 @@ def _select_torch_stack_profile(system, machine, gfx1201_applies):
         return None
     if system == "Linux":
         script = "scripts/reaper/STEMwerk_Bootstrap_Linux.sh"
-        if gfx1201_applies:
-            return "linux_rocm7_gfx1201", {
-                "torch": _bootstrap_var(script, "ROCM7_GFX1201_TORCH_VERSION"),
-                "torchvision": _bootstrap_var(script, "ROCM7_GFX1201_TORCHVISION_VERSION"),
-                "torchaudio": _bootstrap_var(script, "ROCM7_GFX1201_TORCHAUDIO_VERSION"),
-            }
+        evidence = profile_evidence or {}
+        status = evidence.get("STATUS")
+        profile = evidence.get("PROFILE")
+        backend = evidence.get("BACKEND")
+        policy = evidence.get("TORCH_RUNTIME_POLICY")
+        selected_device = evidence.get("ROCM_SELECTED_DEVICE", "")
+        fallback_reason = evidence.get("ROCM_FALLBACK_REASON", "")
+        if status != "ok":
+            return None
+        if policy == "rocm_gfx1201_allow_2_10_rocm7":
+            if (
+                machine == "x86_64"
+                and profile == "linux-rocm"
+                and backend == "rocm"
+                and selected_device == "rx9070_gfx1201"
+                and not fallback_reason
+            ):
+                return "linux_rocm7_gfx1201", {
+                    "torch": _bootstrap_var(script, "ROCM7_GFX1201_TORCH_VERSION"),
+                    "torchvision": _bootstrap_var(script, "ROCM7_GFX1201_TORCHVISION_VERSION"),
+                    "torchaudio": _bootstrap_var(script, "ROCM7_GFX1201_TORCHAUDIO_VERSION"),
+                }
+            return None
+        if policy != "service_line_default_torch_lt_2_6":
+            return None
+        if (profile, backend) not in {
+            ("linux-cpu", "cpu"),
+            ("linux-cuda", "cuda"),
+            ("linux-rocm", "rocm"),
+        }:
+            return None
+        if selected_device:
+            return None
         return "linux_base", {
             "torch": _bootstrap_var(script, "PINNED_TORCH_VERSION"),
             "torchvision": _bootstrap_var(script, "PINNED_TORCHVISION_VERSION"),
@@ -384,6 +460,36 @@ def _managed_torch_stack_errors(data, expected):
     return errors
 
 
+def _validate_managed_torch_stack(data, profile_evidence=None):
+    """Validate installed stack data against independently selected pins."""
+    system = data.get("system")
+    machine = data.get("machine")
+    selected = _select_torch_stack_profile(system, machine, profile_evidence)
+    if selected is None:
+        if system == "Linux":
+            evidence = profile_evidence or {}
+            detail = (
+                "cannot establish a coherent provisioning profile for the selected Linux runtime "
+                f"(status={evidence.get('STATUS')!r}, profile={evidence.get('PROFILE')!r}, "
+                f"backend={evidence.get('BACKEND')!r}, policy={evidence.get('TORCH_RUNTIME_POLICY')!r})"
+            )
+        else:
+            detail = f"torch-stack pin profile is not established for {system!r}/{machine!r}"
+        return {"status": "INDETERMINATE", "profile": None, "errors": [detail]}
+    profile_name, expected = selected
+    errors = _managed_torch_stack_errors(data, expected)
+    if profile_name == "linux_rocm7_gfx1201" and not data.get("torch_hip"):
+        errors.append(
+            "profile linux_rocm7_gfx1201 requires a ROCm torch build, but the selected runtime's "
+            "torch reports no HIP build (torch.version.hip is empty)"
+        )
+    return {
+        "status": "FAIL" if errors else "PASS",
+        "profile": profile_name,
+        "errors": errors,
+    }
+
+
 def test_managed_runtime_torch_stack_matches_applicable_pins_and_abi():
     """Class-B runtime check, in the INTENDED runtime: probes STEMwerk's
     own bootstrapped managed venv (located via managed_runtime_python(),
@@ -391,8 +497,8 @@ def test_managed_runtime_torch_stack_matches_applicable_pins_and_abi():
     torch/torchvision/torchaudio versions, import health, and the
     torchvision->torch / torchaudio->torch ABI declarations, then
     cross-checks them against the pin profile the canonical bootstrap
-    scripts select for that runtime's platform/architecture and this
-    machine's hardware profile gate (_select_torch_stack_profile).
+    scripts recorded for that exact runtime, plus the runtime's own
+    platform/architecture (_select_torch_stack_profile).
     Expected pins are derived independently of the installed package
     versions. Skips with a precise reason when no managed runtime exists
     or the intended profile cannot be established reliably; a bootstrapped
@@ -406,30 +512,19 @@ def test_managed_runtime_torch_stack_matches_applicable_pins_and_abi():
         )
     data = _run_probe(python, _TORCH_STACK_PROBE_SRC)
     assert "probe_error" not in data, f"managed runtime torch-stack probe failed: {data['probe_error']}"
-    system = data.get("system")
-    machine = data.get("machine")
-    if system not in ("Linux", "Darwin"):
+    profile_evidence = None
+    if data.get("system") == "Linux":
+        profile_evidence, evidence_error = _managed_runtime_profile_evidence(python)
+        if evidence_error:
+            pytest.skip(f"{evidence_error}; managed-runtime torch-stack validation INDETERMINATE")
+    result = _validate_managed_torch_stack(data, profile_evidence)
+    if result["status"] == "INDETERMINATE":
         pytest.skip(
-            f"managed-runtime torch-stack pin profiles are not established by this check for "
-            f"{system!r}; Windows runtimes have backend-dependent pin profiles in "
-            "STEMwerk_Bootstrap_Windows.ps1 (CPU/DirectML vs CUDA) that are not discriminated here; "
-            "validation incomplete"
+            f"{result['errors'][0]}; managed-runtime torch-stack validation INDETERMINATE"
         )
-    gfx1201_applies = _linux_rocm7_gfx1201_profile_applies() if system == "Linux" else False
-    selected = _select_torch_stack_profile(system, machine, gfx1201_applies)
-    if selected is None:
-        pytest.skip(
-            f"cannot reliably establish the intended torch-stack pin profile for the selected "
-            f"runtime's platform ({system!r}/{machine!r}); validation incomplete"
-        )
-    profile_name, expected = selected
-    errors = _managed_torch_stack_errors(data, expected)
-    if profile_name == "linux_rocm7_gfx1201" and not data.get("torch_hip"):
-        errors.append(
-            "profile linux_rocm7_gfx1201 requires a ROCm torch build, but the selected runtime's "
-            "torch reports no HIP build (torch.version.hip is empty)"
-        )
-    assert errors == [], f"profile {profile_name}: " + "; ".join(errors)
+    assert result["status"] == "PASS", (
+        f"profile {result['profile']}: " + "; ".join(result["errors"])
+    )
 
 
 def _stack_data(versions, imports=None, requires=None):
@@ -516,11 +611,29 @@ def test_torch_stack_profile_distinguishes_macos_arm64_from_intel():
 
 
 def test_torch_stack_profile_gates_gfx1201_override():
-    """The ROCM7_GFX1201_* override applies only when the bootstrap's
-    gfx1201 ROCm-path gate does; other supported Linux profiles (CPU, CUDA,
-    non-gfx1201 ROCm) keep the base PINNED_* values."""
-    gfx1201 = _select_torch_stack_profile("Linux", "x86_64", True)
-    base = _select_torch_stack_profile("Linux", "x86_64", False)
+    """The ROCM7_GFX1201_* override requires the bootstrap's recorded
+    successful ROCm profile; other Linux profiles keep the base pins."""
+    gfx1201 = _select_torch_stack_profile(
+        "Linux",
+        "x86_64",
+        {
+            "STATUS": "ok",
+            "PROFILE": "linux-rocm",
+            "BACKEND": "rocm",
+            "TORCH_RUNTIME_POLICY": "rocm_gfx1201_allow_2_10_rocm7",
+            "ROCM_SELECTED_DEVICE": "rx9070_gfx1201",
+        },
+    )
+    base = _select_torch_stack_profile(
+        "Linux",
+        "x86_64",
+        {
+            "STATUS": "ok",
+            "PROFILE": "linux-cpu",
+            "BACKEND": "cpu",
+            "TORCH_RUNTIME_POLICY": "service_line_default_torch_lt_2_6",
+        },
+    )
     assert gfx1201 is not None and base is not None
     assert gfx1201[0] == "linux_rocm7_gfx1201"
     assert base[0] == "linux_base"
@@ -528,6 +641,277 @@ def test_torch_stack_profile_gates_gfx1201_override():
     assert gfx1201[1]["torch"] == _bootstrap_var(script, "ROCM7_GFX1201_TORCH_VERSION")
     assert base[1]["torch"] == _bootstrap_var(script, "PINNED_TORCH_VERSION")
     assert gfx1201[1] != base[1], "gfx1201 override and base Linux profiles must differ"
+
+
+def test_gfx1201_cpu_fallback_uses_evidenced_base_pins():
+    """A gfx1201 host whose bootstrap fell back to CPU must be checked
+    against the base pins recorded for that runtime, not ROCm pins selected
+    from the currently visible GPU."""
+    evidence = {
+        "STATUS": "ok",
+        "PROFILE": "linux-cpu",
+        "BACKEND": "cpu",
+        "TORCH_RUNTIME_POLICY": "service_line_default_torch_lt_2_6",
+        "ROCM_FALLBACK_REASON": "rocm_runtime_no_device",
+    }
+    profile_name, expected = _select_torch_stack_profile("Linux", "x86_64", evidence)
+    base_stack = _stack_data(
+        {"torch": "2.5.1", "torchvision": "0.20.1", "torchaudio": "2.5.1"},
+        requires=["torch(==2.5.1)"],
+    )
+
+    assert profile_name == "linux_base"
+    assert _managed_torch_stack_errors(base_stack, expected) == []
+
+
+def _linux_profile_evidence(profile, backend, policy, **overrides):
+    evidence = {
+        "STATUS": "ok",
+        "PROFILE": profile,
+        "BACKEND": backend,
+        "TORCH_RUNTIME_POLICY": policy,
+    }
+    evidence.update(overrides)
+    return evidence
+
+
+def _matching_stack(profile_name):
+    if profile_name == "linux_rocm7_gfx1201":
+        return _stack_data(
+            {"torch": "2.10.0+rocm7.0", "torchvision": "0.25.0+rocm7.0", "torchaudio": "2.10.0+rocm7.0"},
+            requires=["torch(==2.10.0)"],
+        )
+    return _stack_data(
+        {"torch": "2.5.1", "torchvision": "0.20.1", "torchaudio": "2.5.1"},
+        requires=["torch(==2.5.1)"],
+    )
+
+
+@pytest.mark.parametrize(
+    ("evidence", "installed_profile", "expected_status", "expected_profile"),
+    [
+        (
+            _linux_profile_evidence(
+                "linux-rocm", "rocm", "rocm_gfx1201_allow_2_10_rocm7",
+                ROCM_SELECTED_DEVICE="rx9070_gfx1201",
+            ),
+            "linux_rocm7_gfx1201",
+            "PASS",
+            "linux_rocm7_gfx1201",
+        ),
+        (
+            _linux_profile_evidence(
+                "linux-cpu", "cpu", "service_line_default_torch_lt_2_6",
+                ROCM_FALLBACK_REASON="rocm_runtime_no_device",
+            ),
+            "linux_base",
+            "PASS",
+            "linux_base",
+        ),
+        (
+            _linux_profile_evidence("linux-cuda", "cuda", "service_line_default_torch_lt_2_6"),
+            "linux_base",
+            "PASS",
+            "linux_base",
+        ),
+        (
+            _linux_profile_evidence("linux-rocm", "rocm", "service_line_default_torch_lt_2_6"),
+            "linux_base",
+            "PASS",
+            "linux_base",
+        ),
+        (
+            _linux_profile_evidence(
+                "linux-cpu", "cpu", "service_line_default_torch_lt_2_6",
+                ROCM_FALLBACK_REASON="rocm_runtime_no_device",
+            ),
+            "linux_rocm7_gfx1201",
+            "FAIL",
+            "linux_base",
+        ),
+        (
+            _linux_profile_evidence(
+                "linux-rocm", "rocm", "rocm_gfx1201_allow_2_10_rocm7",
+                ROCM_SELECTED_DEVICE="rx9070_gfx1201",
+            ),
+            "linux_base",
+            "FAIL",
+            "linux_rocm7_gfx1201",
+        ),
+    ],
+)
+def test_runtime_pin_validation_uses_evidenced_linux_profile(
+    evidence, installed_profile, expected_status, expected_profile
+):
+    result = _validate_managed_torch_stack(
+        {**_matching_stack(installed_profile), "system": "Linux", "machine": "x86_64", "torch_hip": "7.0"},
+        evidence,
+    )
+    assert result["status"] == expected_status
+    assert result["profile"] == expected_profile
+    assert any("version drift" in error for error in result["errors"]) == (expected_status == "FAIL")
+
+
+def test_installed_versions_and_current_gpu_cannot_choose_or_override_profile():
+    base_stack = {**_matching_stack("linux_base"), "system": "Linux", "machine": "x86_64", "torch_hip": None}
+    assert _validate_managed_torch_stack(base_stack, None)["status"] == "INDETERMINATE"
+
+    cpu_evidence = _linux_profile_evidence(
+        "linux-cpu",
+        "cpu",
+        "service_line_default_torch_lt_2_6",
+        ROCM_FALLBACK_REASON="rocm_runtime_no_device",
+        CURRENT_HARDWARE="gfx1201",
+    )
+    result = _validate_managed_torch_stack(base_stack, cpu_evidence)
+    assert result == {"status": "PASS", "profile": "linux_base", "errors": []}
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        {},
+        {
+            **_linux_profile_evidence("linux-cpu", "cpu", "service_line_default_torch_lt_2_6"),
+            "STATUS": "repair_required",
+        },
+        _linux_profile_evidence("linux-mystery", "cpu", "service_line_default_torch_lt_2_6"),
+        _linux_profile_evidence("linux-cpu", "rocm", "service_line_default_torch_lt_2_6"),
+        _linux_profile_evidence("linux-rocm", "rocm", "unknown_policy"),
+        _linux_profile_evidence("linux-cpu", "cpu", "rocm_gfx1201_allow_2_10_rocm7"),
+        _linux_profile_evidence("linux-rocm", "rocm", "rocm_gfx1201_allow_2_10_rocm7"),
+        _linux_profile_evidence(
+            "linux-cpu",
+            "cpu",
+            "service_line_default_torch_lt_2_6",
+            ROCM_SELECTED_DEVICE="rx9070_gfx1201",
+        ),
+    ],
+)
+def test_runtime_pin_validation_reports_missing_unknown_or_contradictory_evidence(evidence):
+    result = _validate_managed_torch_stack(
+        {**_matching_stack("linux_base"), "system": "Linux", "machine": "x86_64", "torch_hip": None},
+        evidence,
+    )
+    assert result["status"] == "INDETERMINATE"
+    assert result["profile"] is None
+    assert result["errors"]
+
+
+def test_import_failure_does_not_reclassify_evidenced_rocm_runtime_as_cpu():
+    evidence = _linux_profile_evidence(
+        "linux-rocm",
+        "rocm",
+        "rocm_gfx1201_allow_2_10_rocm7",
+        ROCM_SELECTED_DEVICE="rx9070_gfx1201",
+    )
+    stack = _matching_stack("linux_rocm7_gfx1201")
+    stack["imports"]["torch"] = "ImportError: controlled failure"
+    result = _validate_managed_torch_stack(
+        {**stack, "system": "Linux", "machine": "x86_64", "torch_hip": None},
+        evidence,
+    )
+    assert result["status"] == "FAIL"
+    assert result["profile"] == "linux_rocm7_gfx1201"
+    assert any("torch import failed" in error for error in result["errors"])
+
+
+def test_runtime_profile_evidence_must_name_the_runtime_being_validated(tmp_path):
+    system_python = tmp_path / "system-python"
+    system_python.touch()
+    runtime_root = tmp_path / "main"
+    runtime_python = runtime_root / ".venv" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.symlink_to(system_python)
+    state_dir = runtime_root / "state"
+    state_dir.mkdir()
+    other_python = tmp_path / "drumsep" / ".venv-drumsep-rocm" / "bin" / "python"
+    other_python.parent.mkdir(parents=True)
+    other_python.symlink_to(system_python)
+    (state_dir / "bootstrap.env").write_text(
+        "\n".join(
+            (
+                "STATUS=ok",
+                "PROFILE=linux-rocm",
+                "BACKEND=rocm",
+                "TORCH_RUNTIME_POLICY=rocm_gfx1201_allow_2_10_rocm7",
+                "ROCM_SELECTED_DEVICE=rx9070_gfx1201",
+                f"RUNTIME_BASE={runtime_root}",
+                f"VENV_PYTHON_PATH={other_python}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    evidence, error = _managed_runtime_profile_evidence(runtime_python)
+
+    assert evidence is None
+    assert "different runtime" in error
+
+
+def test_runtime_profile_evidence_accepts_matching_main_runtime_record(tmp_path):
+    runtime_root = tmp_path / "main"
+    runtime_python = runtime_root / ".venv" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.touch()
+    state_dir = runtime_root / "state"
+    state_dir.mkdir()
+    (state_dir / "bootstrap.env").write_text(
+        "\n".join(
+            (
+                "STATUS=ok",
+                "PROFILE=linux-cpu",
+                "BACKEND=cpu",
+                "TORCH_RUNTIME_POLICY=service_line_default_torch_lt_2_6",
+                "ROCM_FALLBACK_REASON=rocm_runtime_no_device",
+                f"RUNTIME_BASE={runtime_root}",
+                f"VENV_PYTHON_PATH={runtime_python}",
+                f"PYTHON_PATH={runtime_python}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    evidence, error = _managed_runtime_profile_evidence(runtime_python)
+
+    assert error == ""
+    assert evidence["PROFILE"] == "linux-cpu"
+    assert evidence["TORCH_RUNTIME_POLICY"] == "service_line_default_torch_lt_2_6"
+
+
+def test_runtime_pin_validation_preserves_macos_and_windows_policy():
+    def macos_stack(machine):
+        _profile, pins = _select_torch_stack_profile("Darwin", machine)
+        return {
+            **_stack_data(
+                {
+                    "torch": pins["torch"],
+                    "torchvision": pins["torchvision"],
+                    "torchaudio": pins["torchaudio"],
+                },
+                requires=[f"torch(=={pins['torch']})"],
+            ),
+            "system": "Darwin",
+            "machine": machine,
+            "torch_hip": None,
+        }
+
+    arm = _validate_managed_torch_stack(
+        macos_stack("arm64"), None,
+    )
+    intel = _validate_managed_torch_stack(
+        macos_stack("x86_64"), None,
+    )
+    windows = _validate_managed_torch_stack(
+        {**_matching_stack("linux_base"), "system": "Windows", "machine": "AMD64", "torch_hip": None},
+        None,
+    )
+    assert arm == {"status": "PASS", "profile": "macos_arm64", "errors": []}
+    assert intel == {"status": "PASS", "profile": "macos_intel", "errors": []}
+    assert windows["status"] == "INDETERMINATE"
+    assert windows["profile"] is None
 
 
 def test_torch_stack_profile_unestablished_platforms_yield_no_guess():
@@ -586,8 +970,13 @@ def test_torch_stack_drift_fails_against_independently_selected_pins():
     with the base Linux profile independently selected (gfx1201 gate
     closed), a runtime carrying ROCm-override versions still fails as drift
     against the base pins -- and vice versa. The selection inputs are only
-    (system, machine, hardware gate); installed versions never reach it."""
-    _name, base = _select_torch_stack_profile("Linux", "x86_64", False)
+    the runtime platform/architecture and provisioning evidence; installed
+    versions never reach it."""
+    _name, base = _select_torch_stack_profile(
+        "Linux",
+        "x86_64",
+        _linux_profile_evidence("linux-cpu", "cpu", "service_line_default_torch_lt_2_6"),
+    )
     rocm_override_stack = _stack_data(
         {"torch": "2.10.0+rocm7.0", "torchvision": "0.25.0+rocm7.0", "torchaudio": "2.10.0+rocm7.0"},
         requires=["torch(==2.10.0)"],
@@ -595,7 +984,16 @@ def test_torch_stack_drift_fails_against_independently_selected_pins():
     errors = _managed_torch_stack_errors(rocm_override_stack, base)
     assert any("version drift" in e and base["torch"] in e for e in errors)
 
-    _name, gfx1201 = _select_torch_stack_profile("Linux", "x86_64", True)
+    _name, gfx1201 = _select_torch_stack_profile(
+        "Linux",
+        "x86_64",
+        _linux_profile_evidence(
+            "linux-rocm",
+            "rocm",
+            "rocm_gfx1201_allow_2_10_rocm7",
+            ROCM_SELECTED_DEVICE="rx9070_gfx1201",
+        ),
+    )
     base_stack = _stack_data(
         {"torch": "2.5.1", "torchvision": "0.20.1", "torchaudio": "2.5.1"},
         requires=["torch(==2.5.1)"],
