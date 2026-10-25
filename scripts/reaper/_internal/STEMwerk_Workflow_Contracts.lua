@@ -508,11 +508,21 @@ local function validateBundle(bundle, catalogs)
     end
 
     if catalogs ~= nil then
-        local capabilityIds, modelsById = {}, {}
-        for _, c in ipairs(catalogs.capabilities) do capabilityIds[c.capability_id] = true end
+        local capabilitiesById, modelsById, workflowsById = {}, {}, {}
+        for _, c in ipairs(catalogs.capabilities) do capabilitiesById[c.capability_id] = c end
         for _, m in ipairs(catalogs.models) do modelsById[m.model_id] = m end
-        for _, stage in ipairs(stages) do
-            if not capabilityIds[stage.capability_id] then
+        for _, w in ipairs(catalogs.workflows) do workflowsById[w.workflow_id] = w end
+        local workflow = workflowsById[request.workflow_id]
+        if not workflow then
+            fail("workflow_request references unknown workflow_id: " .. tostring(request.workflow_id))
+        end
+        if #stages ~= #workflow.ordered_stages then
+            fail("workflow_request stage count does not match workflow catalog")
+        end
+
+        for index, stage in ipairs(stages) do
+            local capability = capabilitiesById[stage.capability_id]
+            if not capability then
                 fail("stage references unknown capability_id: " .. tostring(stage.capability_id))
             end
             local model = modelsById[stage.model_id]
@@ -520,9 +530,70 @@ local function validateBundle(bundle, catalogs)
             if model.capability_id ~= stage.capability_id then
                 fail("stage model_id " .. stage.model_id .. " does not implement capability_id " .. stage.capability_id)
             end
+
+            local workflowStage = workflow.ordered_stages[index]
+            local capabilityPermitted = false
+            for _, capabilityId in ipairs(workflowStage.capability_ids) do
+                if capabilityId == stage.capability_id then capabilityPermitted = true end
+            end
+            if not capabilityPermitted then
+                fail("workflow_request stage " .. index .. " capability_id " .. stage.capability_id
+                    .. " is not permitted by the workflow")
+            end
+
+            local supportedIndex = {}
+            for outputIndex, semantic in ipairs(capability.output_semantic_ids) do
+                supportedIndex[semantic] = outputIndex
+            end
+            local previousIndex = 0
+            for _, output in ipairs(stage.outputs) do
+                local outputIndex = supportedIndex[output.semantic_id]
+                if not outputIndex then
+                    fail("workflow_request stage " .. index .. " declares unsupported deliverable output: "
+                        .. output.semantic_id)
+                end
+                if outputIndex <= previousIndex then
+                    fail("workflow_request stage " .. index .. " outputs must preserve capability output order")
+                end
+                previousIndex = outputIndex
+            end
         end
         if not modelsById[request.requested_runtime.model_id] then
             fail("requested_runtime references unknown model_id: " .. tostring(request.requested_runtime.model_id))
+        end
+
+        local finalCapabilityId = stages[#stages].capability_id
+        local selectedRoute, selectedRouteCount = nil, 0
+        for _, route in ipairs(workflow.deliverable_routes) do
+            if route.capability_id == finalCapabilityId then
+                selectedRoute, selectedRouteCount = route, selectedRouteCount + 1
+            end
+        end
+        if selectedRouteCount ~= 1 then
+            fail("workflow must have exactly one deliverable route for selected capability: "
+                .. finalCapabilityId)
+        end
+
+        local promisedIndex = {}
+        for index, semantic in ipairs(selectedRoute.deliverable_ids) do promisedIndex[semantic] = index end
+        local previousIndex = 0
+        for _, semantic in ipairs(request.deliverable_ids) do
+            local deliverableIndex = promisedIndex[semantic]
+            if not deliverableIndex then
+                fail("workflow_request contains unsupported deliverable for selected route: " .. semantic)
+            end
+            if deliverableIndex <= previousIndex then
+                fail("workflow_request.deliverable_ids must preserve selected route order")
+            end
+            previousIndex = deliverableIndex
+        end
+
+        local finalStageOutputs = {}
+        for _, output in ipairs(stages[#stages].outputs) do finalStageOutputs[output.semantic_id] = true end
+        for _, semantic in ipairs(request.deliverable_ids) do
+            if not finalStageOutputs[semantic] then
+                fail("requested deliverable is missing from final stage outputs: " .. semantic)
+            end
         end
     end
 

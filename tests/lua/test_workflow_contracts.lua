@@ -189,6 +189,40 @@ end
 
 do
     local bundle = loadBundle("normal_stems_new_tracks.json")
+    bundle.workflow_request.deliverable_ids = { "vocals" }
+    bundle.workflow_result.artifacts = { bundle.workflow_result.artifacts[1] }
+    bundle.workflow_result.deliverables = { bundle.workflow_result.deliverables[1] }
+    bundle.import_plan.imports = { bundle.import_plan.imports[1] }
+    local ok, err = CONTRACTS.validateBundle(bundle, REAL_CATALOGS)
+    check("selected route allows supported selective deliverables", ok == true, err)
+end
+
+do
+    local bundle = loadBundle("normal_stems_new_tracks.json")
+    bundle.workflow_request.stages[1].outputs = {
+        { port_id = "guitar", semantic_id = "guitar", kind = "audio" },
+    }
+    bundle.workflow_request.deliverable_ids = { "guitar" }
+    local artifact = bundle.workflow_result.artifacts[1]
+    artifact.artifact_id = "artifact_guitar_001"
+    artifact.semantic_id = "guitar"
+    artifact.relative_path = "outputs/guitar.wav"
+    artifact.producer.port_id = "guitar"
+    bundle.workflow_result.artifacts = { artifact }
+    bundle.workflow_result.deliverables = {
+        { semantic_id = "guitar", artifact_id = "artifact_guitar_001" },
+    }
+    local imported = bundle.import_plan.imports[1]
+    imported.semantic_id = "guitar"
+    imported.artifact_id = "artifact_guitar_001"
+    bundle.import_plan.imports = { imported }
+    local ok, err = CONTRACTS.validateBundle(bundle, REAL_CATALOGS)
+    check("selected route rejects unsupported deliverable",
+        ok == nil and tostring(err):find("unsupported deliverable", 1, true) ~= nil, err)
+end
+
+do
+    local bundle = loadBundle("normal_stems_new_tracks.json")
     bundle.workflow_request.stages[1].model_id = "totally_unknown_model"
     local ok, err = CONTRACTS.validateBundle(bundle)
     check("stage unknown model_id still ACCEPTED without catalogs (legacy structural-only mode)",

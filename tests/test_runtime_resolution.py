@@ -108,6 +108,7 @@ def test_known_workflow_resolves_successfully():
     assert plan.contract_source == "2.4_contract"
     assert plan.fallback_applied is False
     assert plan.reason_code == REASON_OK_EXPLICIT
+    assert plan.deliverable_ids == ("vocals", "drums", "bass", "other")
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +137,7 @@ def test_every_normal_stems_model_resolves(model_id):
 def test_htdemucs_6s_resolves_to_the_6_stem_capability():
     plan = resolve_execution_plan("normal_stems", "htdemucs_6s", "cpu", catalog_dir=CATALOG_DIR, probe=CPU_PROBE)
     assert plan.capability_id == "normal_stems_6"
+    assert plan.deliverable_ids == ("vocals", "drums", "bass", "other", "guitar", "piano")
 
 
 def test_drumsep_model_resolves_for_both_drum_kit_workflows():
@@ -302,6 +304,7 @@ def test_drum_kit_split_resolves_both_stages_independently():
     assert plan.stages[1].stage_id == "drumsep_kit"
     assert plan.stages[1].capability_id == "drum_kit_6"
     assert plan.stages[1].resolved_backend == "rocm"
+    assert plan.deliverable_ids == ("kick", "snare", "toms", "hi-hat", "ride", "crash")
 
 
 def test_drum_kit_direct_resolves_single_stage():
@@ -313,6 +316,7 @@ def test_drum_kit_direct_resolves_single_stage():
     assert len(plan.stages) == 1
     assert plan.stages[0].capability_id == "drum_kit_6"
     assert plan.stages[0].resolved_backend == "cpu"
+    assert plan.deliverable_ids == ("kick", "snare", "toms", "hi-hat", "ride", "crash")
 
 
 def test_stage_request_count_mismatch_fails_closed():

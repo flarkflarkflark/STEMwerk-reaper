@@ -21,7 +21,7 @@ policy table to keep in sync with the catalog.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
@@ -54,7 +54,12 @@ class ResolutionError(ValueError):
 
 @dataclass(frozen=True)
 class ExecutionPlan:
-    """Immutable, contract-resolved plan for one workflow stage."""
+    """Immutable, contract-resolved plan for one workflow stage.
+
+    ``deliverable_ids`` is the workflow's full ordered promise for the
+    selected capability route. A request may select an ordered subset, and
+    result artifacts separately record what processing actually produced.
+    """
 
     workflow_id: str
     schema_version: str
@@ -68,16 +73,22 @@ class ExecutionPlan:
     reason_code: str
     detail: str
     contract_source: str = CONTRACT_SOURCE
+    deliverable_ids: tuple = ()
 
 
 @dataclass(frozen=True)
 class WorkflowExecutionPlan:
-    """Immutable, contract-resolved plan for every stage of a workflow, in order."""
+    """Immutable, contract-resolved plan for every stage of a workflow.
+
+    ``deliverable_ids`` has the same promise semantics as on
+    :class:`ExecutionPlan` and is resolved from the final selected stage.
+    """
 
     workflow_id: str
     schema_version: str
     stages: tuple
     contract_source: str = CONTRACT_SOURCE
+    deliverable_ids: tuple = ()
 
 
 def _default_is_unexpected_cpu_downgrade(requested_device: str, resolved_device: str) -> bool:
@@ -227,6 +238,22 @@ def _resolve_single_stage(
     )
 
 
+def _resolve_deliverable_ids(
+    workflow: Mapping[str, Any], capability_id: str
+) -> tuple[str, ...]:
+    routes = [
+        route for route in workflow.get("deliverable_routes") or ()
+        if route.get("capability_id") == capability_id
+    ]
+    if len(routes) != 1:
+        raise ResolutionError(
+            REASON_CONTRACT_LOAD_ERROR,
+            f"workflow {workflow.get('workflow_id')!r} must have exactly one deliverable route "
+            f"for capability {capability_id!r}; found {len(routes)}",
+        )
+    return tuple(routes[0]["deliverable_ids"])
+
+
 def resolve_execution_plan(
     workflow_id: str,
     model_id: str,
@@ -261,7 +288,10 @@ def resolve_execution_plan(
             f"workflow {workflow_id!r} has {len(stages)} stage(s); resolve_execution_plan only "
             "supports single-stage workflows -- use resolve_workflow_plan for multi-stage workflows",
         )
-    return _resolve_single_stage(catalogs, workflow["workflow_id"], stages[0], model_id, requested_device, probe)
+    plan = _resolve_single_stage(
+        catalogs, workflow["workflow_id"], stages[0], model_id, requested_device, probe
+    )
+    return replace(plan, deliverable_ids=_resolve_deliverable_ids(workflow, plan.capability_id))
 
 
 def resolve_workflow_plan(
@@ -303,4 +333,5 @@ def resolve_workflow_plan(
         workflow_id=workflow["workflow_id"],
         schema_version=workflow_contracts.SCHEMA_VERSION,
         stages=resolved_stages,
+        deliverable_ids=_resolve_deliverable_ids(workflow, resolved_stages[-1].capability_id),
     )

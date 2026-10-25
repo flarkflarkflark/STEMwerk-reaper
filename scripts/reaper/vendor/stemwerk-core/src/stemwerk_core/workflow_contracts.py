@@ -382,10 +382,19 @@ def validate_bundle(
                 raise ContractError(f"missing producer output port: {input_ref['port_id']}")
 
     if catalogs is not None:
-        capability_ids = {c["capability_id"] for c in catalogs["capabilities"]}
+        capabilities_by_id = {c["capability_id"]: c for c in catalogs["capabilities"]}
         models_by_id = {m["model_id"]: m for m in catalogs["models"]}
-        for stage in stages:
-            if stage["capability_id"] not in capability_ids:
+        workflows_by_id = {w["workflow_id"]: w for w in catalogs["workflows"]}
+        workflow = workflows_by_id.get(workflow_id)
+        if workflow is None:
+            raise ContractError(f"workflow_request references unknown workflow_id: {workflow_id}")
+        workflow_stages = workflow["ordered_stages"]
+        if len(stages) != len(workflow_stages):
+            raise ContractError("workflow_request stage count does not match workflow catalog")
+
+        for index, (stage, workflow_stage) in enumerate(zip(stages, workflow_stages), start=1):
+            capability = capabilities_by_id.get(stage["capability_id"])
+            if capability is None:
                 raise ContractError(f"stage references unknown capability_id: {stage['capability_id']}")
             model = models_by_id.get(stage["model_id"])
             if model is None:
@@ -394,8 +403,57 @@ def validate_bundle(
                 raise ContractError(
                     f"stage model_id {stage['model_id']} does not implement capability_id {stage['capability_id']}"
                 )
+            if stage["capability_id"] not in workflow_stage["capability_ids"]:
+                raise ContractError(
+                    f"workflow_request stage {index} capability_id {stage['capability_id']} "
+                    "is not permitted by the workflow"
+                )
+            supported_outputs = list(capability["output_semantic_ids"])
+            stage_outputs = [output["semantic_id"] for output in stage["outputs"]]
+            unsupported_outputs = [semantic for semantic in stage_outputs if semantic not in supported_outputs]
+            if unsupported_outputs:
+                raise ContractError(
+                    f"workflow_request stage {index} declares unsupported deliverable output: "
+                    f"{unsupported_outputs[0]}"
+                )
+            if stage_outputs != [semantic for semantic in supported_outputs if semantic in stage_outputs]:
+                raise ContractError(
+                    f"workflow_request stage {index} outputs must preserve capability output order"
+                )
         if requested_runtime["model_id"] not in models_by_id:
             raise ContractError(f"requested_runtime references unknown model_id: {requested_runtime['model_id']}")
+
+        final_capability_id = stages[-1]["capability_id"]
+        selected_routes = [
+            route for route in workflow["deliverable_routes"]
+            if route["capability_id"] == final_capability_id
+        ]
+        if len(selected_routes) != 1:
+            raise ContractError(
+                f"workflow must have exactly one deliverable route for selected capability: {final_capability_id}"
+            )
+        promised_deliverables = list(selected_routes[0]["deliverable_ids"])
+        requested_deliverables = list(request["deliverable_ids"])
+        unsupported_deliverables = [
+            semantic for semantic in requested_deliverables if semantic not in promised_deliverables
+        ]
+        if unsupported_deliverables:
+            raise ContractError(
+                f"workflow_request contains unsupported deliverable for selected route: "
+                f"{unsupported_deliverables[0]}"
+            )
+        if requested_deliverables != [
+            semantic for semantic in promised_deliverables if semantic in requested_deliverables
+        ]:
+            raise ContractError("workflow_request.deliverable_ids must preserve selected route order")
+        final_stage_outputs = {output["semantic_id"] for output in stages[-1]["outputs"]}
+        missing_outputs = [
+            semantic for semantic in requested_deliverables if semantic not in final_stage_outputs
+        ]
+        if missing_outputs:
+            raise ContractError(
+                f"requested deliverable is missing from final stage outputs: {missing_outputs[0]}"
+            )
 
     artifacts = {artifact["artifact_id"]: artifact for artifact in result["artifacts"]}
     for artifact in artifacts.values():
@@ -576,7 +634,7 @@ def validate_catalogs(catalog_dir: str | Path) -> dict[str, list[Mapping[str, An
 
     for workflow_id, workflow in workflows_by_id.items():
         where = f"workflows.{workflow_id}"
-        _only_keys(workflow, {"workflow_id", "label", "ordered_stages", "deliverable_ids"}, where)
+        _only_keys(workflow, {"workflow_id", "label", "ordered_stages", "deliverable_routes"}, where)
         _string(workflow.get("label"), f"{where}.label")
         stages = _list(workflow.get("ordered_stages"), f"{where}.ordered_stages")
         if not stages:
@@ -613,11 +671,42 @@ def validate_catalogs(catalog_dir: str | Path) -> dict[str, list[Mapping[str, An
                     )
             validated_stages[stage_id] = stage
 
-        deliverables = [
-            _stable_id(item, f"{where}.deliverable_ids item")
-            for item in _list(workflow.get("deliverable_ids"), f"{where}.deliverable_ids")
-        ]
-        if not deliverables or len(set(deliverables)) != len(deliverables):
-            raise ContractError(f"{where}.deliverable_ids must be a non-empty list of unique semantic ids")
+        routes = _list(workflow.get("deliverable_routes"), f"{where}.deliverable_routes")
+        if not routes:
+            raise ContractError(f"{where}.deliverable_routes must not be empty")
+        final_capability_ids = list(stages[-1]["capability_ids"])
+        route_counts: dict[str, int] = {}
+        for index, raw_route in enumerate(routes, start=1):
+            route_where = f"{where}.deliverable_routes[{index}]"
+            route = _mapping(raw_route, route_where)
+            _only_keys(route, {"capability_id", "deliverable_ids"}, route_where)
+            capability_id = _stable_id(route.get("capability_id"), f"{route_where}.capability_id")
+            deliverables = [
+                _stable_id(item, f"{route_where}.deliverable_ids item")
+                for item in _list(route.get("deliverable_ids"), f"{route_where}.deliverable_ids")
+            ]
+            if not deliverables or len(set(deliverables)) != len(deliverables):
+                raise ContractError(
+                    f"{route_where}.deliverable_ids must be a non-empty list of unique semantic ids"
+                )
+            if capability_id not in final_capability_ids:
+                raise ContractError(
+                    f"{route_where}.capability_id must be permitted by the final workflow stage: {capability_id}"
+                )
+            expected_deliverables = list(capabilities_by_id[capability_id]["output_semantic_ids"])
+            if deliverables != expected_deliverables:
+                raise ContractError(
+                    f"{route_where}.deliverable_ids must exactly match capability "
+                    f"{capability_id} output_semantic_ids"
+                )
+            route_counts[capability_id] = route_counts.get(capability_id, 0) + 1
+
+        for capability_id in final_capability_ids:
+            count = route_counts.get(capability_id, 0)
+            if count != 1:
+                raise ContractError(
+                    f"{where} must have exactly one deliverable route for final-stage capability "
+                    f"{capability_id}; found {count}"
+                )
 
     return {name: document[name] for name, document in documents.items()}

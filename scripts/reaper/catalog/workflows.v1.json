@@ -13,7 +13,16 @@
           "input_artifact_kind": "audio"
         }
       ],
-      "deliverable_ids": ["vocals", "drums", "bass", "other"]
+      "deliverable_routes": [
+        {
+          "capability_id": "normal_stems_4",
+          "deliverable_ids": ["vocals", "drums", "bass", "other"]
+        },
+        {
+          "capability_id": "normal_stems_6",
+          "deliverable_ids": ["vocals", "drums", "bass", "other", "guitar", "piano"]
+        }
+      ]
     },
     {
       "workflow_id": "drum_kit_direct",
@@ -27,7 +36,12 @@
           "input_artifact_kind": "audio"
         }
       ],
-      "deliverable_ids": ["kick", "snare", "toms", "hi-hat", "ride", "crash"]
+      "deliverable_routes": [
+        {
+          "capability_id": "drum_kit_6",
+          "deliverable_ids": ["kick", "snare", "toms", "hi-hat", "ride", "crash"]
+        }
+      ]
     },
     {
       "workflow_id": "drum_kit_split",
@@ -50,7 +64,12 @@
           "input_artifact_kind": "audio"
         }
       ],
-      "deliverable_ids": ["kick", "snare", "toms", "hi-hat", "ride", "crash"]
+      "deliverable_routes": [
+        {
+          "capability_id": "drum_kit_6",
+          "deliverable_ids": ["kick", "snare", "toms", "hi-hat", "ride", "crash"]
+        }
+      ]
     }
   ]
 }

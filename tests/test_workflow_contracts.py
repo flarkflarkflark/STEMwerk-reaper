@@ -99,28 +99,21 @@ def test_catalogs_cover_exactly_the_known_2_3_production_routes():
     }
 
     by_workflow = {entry["workflow_id"]: entry for entry in catalogs["workflows"]}
-    assert by_workflow["normal_stems"]["deliverable_ids"] == [
-        "vocals",
-        "drums",
-        "bass",
-        "other",
-    ]
-    assert by_workflow["drum_kit_direct"]["deliverable_ids"] == [
-        "kick",
-        "snare",
-        "toms",
-        "hi-hat",
-        "ride",
-        "crash",
-    ]
-    assert by_workflow["drum_kit_split"]["deliverable_ids"] == [
-        "kick",
-        "snare",
-        "toms",
-        "hi-hat",
-        "ride",
-        "crash",
-    ]
+    normal_routes = {
+        route["capability_id"]: route["deliverable_ids"]
+        for route in by_workflow["normal_stems"]["deliverable_routes"]
+    }
+    assert normal_routes == {
+        "normal_stems_4": ["vocals", "drums", "bass", "other"],
+        "normal_stems_6": ["vocals", "drums", "bass", "other", "guitar", "piano"],
+    }
+    for workflow_id in ("drum_kit_direct", "drum_kit_split"):
+        assert by_workflow[workflow_id]["deliverable_routes"] == [
+            {
+                "capability_id": "drum_kit_6",
+                "deliverable_ids": ["kick", "snare", "toms", "hi-hat", "ride", "crash"],
+            }
+        ]
     assert len(by_workflow["drum_kit_split"]["ordered_stages"]) == 2
 
 
@@ -324,6 +317,28 @@ def _write_catalog_dir(tmp_path: Path, documents: dict[str, dict]) -> Path:
             lambda docs: docs["capabilities"]["capabilities"][0]["permitted_backends"].append("tpu"),
             "unknown backend kind",
         ),
+        (
+            lambda docs: docs["workflows"]["workflows"][0]["deliverable_routes"][1][
+                "deliverable_ids"
+            ].remove("piano"),
+            "must exactly match capability",
+        ),
+        (
+            lambda docs: docs["workflows"]["workflows"][0]["deliverable_routes"][0][
+                "deliverable_ids"
+            ].append("guitar"),
+            "must exactly match capability",
+        ),
+        (
+            lambda docs: docs["workflows"]["workflows"][0]["deliverable_routes"].append(
+                copy.deepcopy(docs["workflows"]["workflows"][0]["deliverable_routes"][0])
+            ),
+            "exactly one deliverable route",
+        ),
+        (
+            lambda docs: docs["workflows"]["workflows"][0]["deliverable_routes"].pop(),
+            "exactly one deliverable route",
+        ),
     ],
 )
 def test_catalog_cross_references_fail_closed(tmp_path: Path, mutate, message):
@@ -426,6 +441,40 @@ def test_bundle_rejects_stage_unknown_capability_id_when_catalogs_supplied():
     bundle = copy.deepcopy(_bundle())
     bundle["workflow_request"]["stages"][0]["capability_id"] = "totally_unknown_capability"
     with pytest.raises(ContractError, match="unknown capability_id"):
+        validate_bundle(bundle, catalogs=catalogs)
+
+
+def test_bundle_allows_ordered_selective_deliverables_supported_by_selected_route():
+    catalogs = validate_catalogs(ROOT / "scripts" / "reaper" / "catalog")
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_request"]["deliverable_ids"] = ["vocals"]
+    bundle["workflow_result"]["artifacts"] = bundle["workflow_result"]["artifacts"][:1]
+    bundle["workflow_result"]["deliverables"] = bundle["workflow_result"]["deliverables"][:1]
+    bundle["import_plan"]["imports"] = bundle["import_plan"]["imports"][:1]
+
+    validate_bundle(bundle, catalogs=catalogs)
+
+
+def test_bundle_rejects_deliverable_unsupported_by_selected_route():
+    catalogs = validate_catalogs(ROOT / "scripts" / "reaper" / "catalog")
+    bundle = copy.deepcopy(_bundle())
+    stage = bundle["workflow_request"]["stages"][0]
+    stage["outputs"] = [{"port_id": "guitar", "semantic_id": "guitar", "kind": "audio"}]
+    bundle["workflow_request"]["deliverable_ids"] = ["guitar"]
+
+    artifact = copy.deepcopy(bundle["workflow_result"]["artifacts"][0])
+    artifact.update(artifact_id="artifact_guitar_001", semantic_id="guitar", relative_path="outputs/guitar.wav")
+    artifact["producer"]["port_id"] = "guitar"
+    bundle["workflow_result"]["artifacts"] = [artifact]
+    bundle["workflow_result"]["deliverables"] = [
+        {"semantic_id": "guitar", "artifact_id": "artifact_guitar_001"}
+    ]
+
+    imported = copy.deepcopy(bundle["import_plan"]["imports"][0])
+    imported.update(semantic_id="guitar", artifact_id="artifact_guitar_001")
+    bundle["import_plan"]["imports"] = [imported]
+
+    with pytest.raises(ContractError, match="unsupported deliverable"):
         validate_bundle(bundle, catalogs=catalogs)
 
 
@@ -562,6 +611,15 @@ def test_workflow_request_schema_composes_nested_contract_schemas():
 
     result_schema = json.loads((schema_dir / "workflow-result.v1.schema.json").read_text(encoding="utf-8"))
     assert result_schema["properties"]["artifacts"]["items"]["$ref"] == "artifact.v1.schema.json"
+
+
+def test_workflow_request_schema_types_selected_deliverable_ids():
+    schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
+    schema = json.loads((schema_dir / "workflow-request.v1.schema.json").read_text(encoding="utf-8"))
+    deliverables = schema["properties"]["deliverable_ids"]
+
+    assert deliverables["items"] == {"type": "string"}
+    assert "selected subset" in deliverables["description"]
 
 
 def test_source_plan_schema_matches_slice0_single_source_restriction():
