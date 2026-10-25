@@ -42,6 +42,47 @@ sys.path.insert(0, str(ROOT / "tools"))
 import stemwerk_runtime_diagnostics as diag  # noqa: E402
 
 
+def _runtime_probe_data(*failed_imports):
+    module_names = (
+        "audio_separator", "numpy", "onnx", "onnx2torch", "onnxruntime",
+        "stemwerk_core", "torch", "torchaudio", "torchvision",
+    )
+    failures = set(failed_imports)
+    imports = {}
+    for module_name in module_names:
+        imports[module_name] = (
+            {"ok": False, "error": f"ImportError: simulated {module_name} failure"}
+            if module_name in failures
+            else {"ok": True}
+        )
+    return {
+        "imports": imports,
+        "torch_version": "2.5.1",
+        "torchaudio_version": "2.5.1",
+        "numpy_version": "2.1.3",
+        "audio_separator_version": "0.23.0",
+        "onnxruntime_version": "1.20.1",
+    }
+
+
+def _backend_probe_data(**overrides):
+    data = {
+        "torch_version": "2.5.1",
+        "torch_cuda_version": None,
+        "torch_hip_version": None,
+        "cuda_available": False,
+        "cuda_device_count": 0,
+        "device_names": [],
+        "torch_mps_built": False,
+        "torch_mps_available": False,
+        "directml_available": False,
+        "directml_device_count": 0,
+        "onnxruntime_providers": ["CPUExecutionProvider"],
+    }
+    data.update(overrides)
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Verdict vocabulary
 # ---------------------------------------------------------------------------
@@ -176,32 +217,28 @@ def test_mocked_platform_shape_windows_cuda_backend_matrix_row():
     this proves the backend_matrix ROW SHAPE for a Windows/CUDA machine
     (built the same way build_report() would from real probe data), not
     that CUDA was actually probed."""
-    fake_hardware_main = {"status": diag.PASS, "auto_selected_backend": "cuda"}
-    fake_drumsep_pythons = {"cuda": Path("/fake/venv-drumsep-cuda/python.exe")}
-    row = {}
-    for backend in diag.BACKEND_MATRIX["windows"]:
-        if backend == "cpu":
-            row[backend] = diag.PASS
-        elif backend in fake_drumsep_pythons or fake_hardware_main.get("auto_selected_backend") == backend:
-            row[backend] = diag.PASS
-        else:
-            row[backend] = diag.UNAVAILABLE
-    assert row == {"cuda": diag.PASS, "directml": diag.UNAVAILABLE, "cpu": diag.PASS}
+    matrix = diag._build_backend_matrix(
+        "windows",
+        runtime={"main": {"status": diag.PASS}, "drumsep_cuda": {"status": diag.PASS}},
+        hardware={
+            "main": {"status": diag.PASS, "auto_selected_backend": "cuda"},
+            "drumsep_cuda": {"status": diag.PASS},
+        },
+    )
+    assert matrix["windows"] == {"cuda": diag.PASS, "directml": diag.UNAVAILABLE, "cpu": diag.PASS}
 
 
 @pytest.mark.portable
 def test_mocked_platform_shape_windows_directml_backend_matrix_row():
-    fake_hardware_main = {"status": diag.PASS, "auto_selected_backend": "directml"}
-    fake_drumsep_pythons: dict = {}
-    row = {}
-    for backend in diag.BACKEND_MATRIX["windows"]:
-        if backend == "cpu":
-            row[backend] = diag.PASS
-        elif backend in fake_drumsep_pythons or fake_hardware_main.get("auto_selected_backend") == backend:
-            row[backend] = diag.PASS
-        else:
-            row[backend] = diag.UNAVAILABLE
-    assert row == {"cuda": diag.UNAVAILABLE, "directml": diag.PASS, "cpu": diag.PASS}
+    matrix = diag._build_backend_matrix(
+        "windows",
+        runtime={"main": {"status": diag.PASS}, "drumsep_directml": {"status": diag.PASS}},
+        hardware={
+            "main": {"status": diag.PASS, "auto_selected_backend": "directml"},
+            "drumsep_directml": {"status": diag.PASS},
+        },
+    )
+    assert matrix["windows"] == {"cuda": diag.UNAVAILABLE, "directml": diag.PASS, "cpu": diag.PASS}
 
 
 @pytest.mark.portable
@@ -232,16 +269,12 @@ def test_mocked_platform_shape_macos_mps_runtime_fields():
 
 @pytest.mark.portable
 def test_mocked_platform_shape_cpu_only_machine_backend_matrix_row():
-    fake_hardware_main = {"status": diag.PASS, "auto_selected_backend": "cpu"}
-    row = {}
-    for backend in diag.BACKEND_MATRIX["linux"]:
-        if backend == "cpu":
-            row[backend] = diag.PASS
-        elif fake_hardware_main.get("auto_selected_backend") == backend:
-            row[backend] = diag.PASS
-        else:
-            row[backend] = diag.UNAVAILABLE
-    assert row == {"rocm": diag.UNAVAILABLE, "cpu": diag.PASS}
+    matrix = diag._build_backend_matrix(
+        "linux",
+        runtime={"main": {"status": diag.PASS}},
+        hardware={"main": {"status": diag.PASS, "auto_selected_backend": "cpu"}},
+    )
+    assert matrix["linux"] == {"rocm": diag.UNAVAILABLE, "cpu": diag.PASS}
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +298,250 @@ def test_collect_runtime_reports_fail_when_interpreter_lacks_torch(tmp_path):
     probe_src = "import definitely_not_a_real_module_xyz_9f3\n"
     result = diag._run_probe(fake_python, probe_src)
     assert "probe_error" in result
+
+
+@pytest.mark.portable
+def test_collect_runtime_rejects_parseable_torch_abi_import_error(monkeypatch):
+    data = _runtime_probe_data("torch")
+    data["imports"]["torch"]["error"] = "OSError: libtorch ABI symbol not found"
+    monkeypatch.setattr(diag, "_run_probe", lambda *_a, **_k: data)
+
+    result = diag.collect_runtime(Path("/fake/python"), source_label="managed")
+
+    assert result["status"] == diag.FAIL
+    assert result["failed_required_imports"]["torch"] == "OSError: libtorch ABI symbol not found"
+    assert result["evidence_kind"] == "required_imports"
+
+
+@pytest.mark.portable
+def test_collect_runtime_rejects_missing_required_drumsep_package(monkeypatch):
+    monkeypatch.setattr(diag, "_run_probe", lambda *_a, **_k: _runtime_probe_data("onnx"))
+
+    result = diag.collect_runtime(
+        Path("/fake/drumsep/python"), source_label="managed", runtime_profile="drumsep"
+    )
+
+    assert result["status"] == diag.FAIL
+    assert "onnx" in result["failed_required_imports"]
+
+
+@pytest.mark.portable
+def test_collect_runtime_accepts_required_imports_without_requiring_optional_onnx2torch(monkeypatch):
+    monkeypatch.setattr(diag, "_run_probe", lambda *_a, **_k: _runtime_probe_data("onnx2torch"))
+
+    result = diag.collect_runtime(
+        Path("/fake/drumsep/python"), source_label="managed", runtime_profile="drumsep"
+    )
+
+    assert result["status"] == diag.PASS
+    assert "onnx2torch" not in result["required_imports"]
+
+
+@pytest.mark.portable
+def test_backend_probe_rejects_valid_runtime_when_mps_is_unavailable(monkeypatch):
+    monkeypatch.setattr(diag, "_run_probe", lambda *_a, **_k: _backend_probe_data())
+
+    result = diag.collect_drumsep_hardware(
+        "mps", Path("/fake/python"), runtime_result={"status": diag.PASS}
+    )
+
+    assert result["status"] == diag.UNAVAILABLE
+    assert "MPS" in result["reason"]
+
+
+@pytest.mark.portable
+def test_main_hardware_probe_rejects_parseable_json_without_device_evidence(monkeypatch):
+    monkeypatch.setattr(diag, "_run_probe", lambda *_a, **_k: {})
+
+    result = diag.collect_main_hardware(Path("/fake/python"), source_label="managed")
+
+    assert result["status"] == diag.UNAVAILABLE
+    assert "evidence" in result["reason"]
+
+
+@pytest.mark.portable
+def test_main_hardware_probe_accepts_complete_device_discovery_evidence(monkeypatch):
+    monkeypatch.setattr(
+        diag,
+        "_run_probe",
+        lambda *_a, **_k: {
+            "available_devices": [{"id": "cpu", "name": "CPU"}],
+            "auto_selected_device_id": "cpu",
+            "auto_selected_device_name": "CPU",
+            "auto_selected_backend": "cpu",
+        },
+    )
+
+    result = diag.collect_main_hardware(Path("/fake/python"), source_label="managed")
+
+    assert result["status"] == diag.PASS
+    assert result["evidence_kind"] == "device_discovery"
+
+
+@pytest.mark.portable
+@pytest.mark.parametrize(
+    "backend,payload,expected_status",
+    [
+        (
+            "rocm",
+            _backend_probe_data(
+                torch_hip_version="6.4", cuda_available=True, cuda_device_count=1,
+                device_names=["AMD Radeon RX 9070"],
+            ),
+            diag.PASS,
+        ),
+        (
+            "cuda",
+            _backend_probe_data(
+                torch_hip_version="6.4", cuda_available=True, cuda_device_count=1,
+                device_names=["AMD Radeon RX 9070"],
+            ),
+            diag.FAIL,
+        ),
+        (
+            "cuda",
+            _backend_probe_data(
+                torch_cuda_version="12.8", cuda_available=True, cuda_device_count=1,
+                device_names=["NVIDIA RTX"],
+                onnxruntime_providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            ),
+            diag.PASS,
+        ),
+        (
+            "rocm",
+            _backend_probe_data(
+                torch_cuda_version="12.8", cuda_available=True, cuda_device_count=1,
+                device_names=["NVIDIA RTX"],
+                onnxruntime_providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            ),
+            diag.FAIL,
+        ),
+    ],
+)
+def test_backend_probe_distinguishes_rocm_from_cuda(monkeypatch, backend, payload, expected_status):
+    monkeypatch.setattr(diag, "_run_probe", lambda *_a, **_k: payload)
+
+    result = diag.collect_drumsep_hardware(
+        backend, Path("/fake/python"), runtime_result={"status": diag.PASS}
+    )
+
+    assert result["status"] == expected_status
+
+
+@pytest.mark.portable
+@pytest.mark.parametrize(
+    "backend,payload,expected_status",
+    [
+        ("mps", _backend_probe_data(torch_mps_built=True, torch_mps_available=True), diag.PASS),
+        ("mps", _backend_probe_data(torch_mps_built=True, torch_mps_available=False), diag.UNAVAILABLE),
+        (
+            "directml",
+            _backend_probe_data(
+                directml_available=True, directml_device_count=1,
+                onnxruntime_providers=["DmlExecutionProvider", "CPUExecutionProvider"],
+            ),
+            diag.PASS,
+        ),
+        (
+            "directml",
+            _backend_probe_data(directml_available=True, directml_device_count=1),
+            diag.FAIL,
+        ),
+    ],
+)
+def test_backend_probe_mps_and_directml_capability_evidence(monkeypatch, backend, payload, expected_status):
+    monkeypatch.setattr(diag, "_run_probe", lambda *_a, **_k: payload)
+
+    result = diag.collect_drumsep_hardware(
+        backend, Path("/fake/python"), runtime_result={"status": diag.PASS}
+    )
+
+    assert result["status"] == expected_status
+    assert result["evidence_kind"] == "backend_capability_probe"
+
+
+@pytest.mark.portable
+def test_cpu_backend_requires_passing_runtime_evidence(monkeypatch):
+    monkeypatch.setattr(
+        diag, "_run_probe", lambda *_a, **_k: pytest.fail("CPU verdict must use runtime evidence")
+    )
+
+    passed = diag.collect_drumsep_hardware(
+        "cpu", Path("/fake/python"), runtime_result={"status": diag.PASS}
+    )
+    failed = diag.collect_drumsep_hardware(
+        "cpu", Path("/fake/python"), runtime_result={"status": diag.FAIL, "reason": "imports failed"}
+    )
+
+    assert passed["status"] == diag.PASS
+    assert failed["status"] == diag.FAIL
+
+
+@pytest.mark.portable
+def test_backend_matrix_does_not_overwrite_registered_rocm_probe_failures():
+    matrix = diag._build_backend_matrix(
+        "linux",
+        runtime={"main": {"status": diag.PASS}, "drumsep_rocm": {"status": diag.FAIL}},
+        hardware={
+            "main": {"status": diag.PASS, "auto_selected_backend": "rocm"},
+            "drumsep_rocm": {"status": diag.FAIL},
+        },
+    )
+
+    assert matrix["linux"]["rocm"] == diag.FAIL
+    assert matrix["linux"]["cpu"] == diag.PASS
+
+
+@pytest.mark.portable
+def test_failed_ambient_main_probe_with_existing_interpreter_fails_cpu_matrix(monkeypatch):
+    monkeypatch.setattr(diag, "collect_identity", lambda: {"platform_system": "Linux"})
+    monkeypatch.setattr(diag, "managed_runtime_python", lambda: None)
+    monkeypatch.setattr(diag, "managed_drumsep_pythons", lambda: {})
+    monkeypatch.setattr(
+        diag, "collect_runtime",
+        lambda python_exe, *, source_label, runtime_profile="main": {
+            "status": diag.FAIL, "runtime_source": source_label, "python_executable": str(python_exe),
+        },
+    )
+    monkeypatch.setattr(
+        diag, "collect_main_hardware",
+        lambda python_exe, *, source_label: {"status": diag.PASS, "auto_selected_backend": "cpu"},
+    )
+    monkeypatch.setattr(diag, "collect_contracts", lambda **_k: {})
+
+    report = diag.build_report(real=False)
+
+    assert report["runtime"]["main"]["runtime_source"] == "ambient"
+    assert report["backend_matrix"]["linux"]["cpu"] == diag.FAIL
+
+
+@pytest.mark.portable
+def test_registered_rocm_venv_with_failed_probes_stays_failed_in_matrix(monkeypatch):
+    main_python = Path("/fake/main/python")
+    rocm_python = Path("/fake/.venv-drumsep-rocm/python")
+    monkeypatch.setattr(diag, "collect_identity", lambda: {"platform_system": "Linux"})
+    monkeypatch.setattr(diag, "managed_runtime_python", lambda: main_python)
+    monkeypatch.setattr(diag, "managed_drumsep_pythons", lambda: {"rocm": rocm_python})
+
+    def fake_runtime(python_exe, *, source_label, runtime_profile="main"):
+        return {"status": diag.FAIL if python_exe == rocm_python else diag.PASS}
+
+    monkeypatch.setattr(diag, "collect_runtime", fake_runtime)
+    monkeypatch.setattr(
+        diag, "collect_main_hardware",
+        lambda *_a, **_k: {"status": diag.PASS, "auto_selected_backend": "rocm"},
+    )
+    monkeypatch.setattr(
+        diag, "collect_drumsep_hardware",
+        lambda *_a, **_k: {"status": diag.FAIL, "reason": "simulated ROCm hardware probe failure"},
+    )
+    monkeypatch.setattr(diag, "collect_contracts", lambda **_k: {})
+
+    report = diag.build_report(real=False)
+
+    assert report["runtime"]["drumsep_rocm"]["status"] == diag.FAIL
+    assert report["hardware"]["drumsep_rocm"]["status"] == diag.FAIL
+    assert report["backend_matrix"]["linux"]["rocm"] == diag.FAIL
 
 
 @pytest.mark.portable
@@ -473,12 +750,27 @@ def test_drum_kit_contracts_accept_linux_attributed_cpu_fallback(monkeypatch):
     assert plan["requested_device"] == "cuda:0"
     assert plan["resolved_backend"] == "cpu"
     assert plan["fallback_applied"] is True
+    assert plan["fallback_reason"] == "cuda_skipped:missing"
 
     split = contracts["drum_kit_split"]
     assert split["status"] == diag.PASS
     assert split["stages"][0]["requested_device"] == "cuda:0"
+    assert split["stages"][0]["fallback_reason"] == ""
     assert split["stages"][1]["resolved_backend"] == "cpu"
     assert split["stages"][1]["fallback_applied"] is True
+    assert split["stages"][1]["fallback_reason"] == "cuda_skipped:missing"
+
+    markdown = diag.to_markdown({
+        "schema_version": diag.SCHEMA_VERSION,
+        "generated_at_utc": "x",
+        "identity": {},
+        "runtime": {},
+        "hardware": {},
+        "contracts": contracts,
+        "backend_matrix": {},
+        "safety": {},
+    })
+    assert "fallback_reason: cuda_skipped:missing" in markdown
 
     # Normal Stems is untouched by the DrumSep selector swap.
     assert contracts["normal_stems"]["status"] == diag.PASS

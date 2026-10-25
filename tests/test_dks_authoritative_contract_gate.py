@@ -115,6 +115,20 @@ def test_drum_kit_direct_authoritative_success_cpu(monkeypatch, tmp_path, capsys
     assert helper_calls[0][1]["backend_runtime"] == "cpu"
 
 
+def test_drum_kit_direct_authoritative_success_mps(monkeypatch, tmp_path, capsys):
+    _module, exit_code, helper_calls = _run_dks_direct(
+        monkeypatch, tmp_path, requested_device="mps", drumsep_runtime_kind="mps", expect_helper_called=True,
+    )
+    assert exit_code == 0
+    stderr = capsys.readouterr().err
+    assert "STEMWERK_DIAG contract_workflow_id=drum_kit_direct" in stderr
+    assert "STEMWERK_DIAG contract_resolved_backend=mps" in stderr
+    assert "STEMWERK_DIAG contract_resolved_device=mps" in stderr
+    assert "contract_abort_reason" not in stderr
+    assert helper_calls[0][1]["requested_device"] == "mps"
+    assert helper_calls[0][1]["backend_runtime"] == "mps"
+
+
 def test_drum_kit_direct_unavailable_explicit_backend_fails_closed_before_processing(monkeypatch, tmp_path, capsys):
     """explicit cuda request, but the real _select_drumsep_runtime couldn't
     find a usable runtime at all (python_path=None) -- must reject before
@@ -237,6 +251,23 @@ def test_drum_kit_split_authoritative_success(monkeypatch, tmp_path, capsys):
     assert stderr.count("STEMWERK_DIAG contract_source=2.4_contract") == 2  # one per stage
     assert "STEMWERK_DIAG contract_stage1_runtime_agrees=True" in stderr
     assert "contract_abort_reason" not in stderr
+
+
+def test_drum_kit_split_authoritative_success_mps(monkeypatch, tmp_path, capsys):
+    _module, exit_code, stage1_inits, helper_calls = _run_dks_extract(
+        monkeypatch, tmp_path,
+        stage1_requested_device="mps", stage1_resolved_device="mps", stage1_select_device_result=("mps", "Apple MPS"),
+        drumsep_runtime_kind="mps", expect_stage1_called=True, expect_helper_called=True,
+    )
+    assert exit_code == 0
+    assert stage1_inits == [("htdemucs", "mps")]
+    stderr = capsys.readouterr().err
+    assert "STEMWERK_DIAG contract_workflow_id=drum_kit_split" in stderr
+    assert stderr.count("STEMWERK_DIAG contract_resolved_backend=mps") == 2
+    assert "STEMWERK_DIAG contract_stage1_runtime_agrees=True" in stderr
+    assert "contract_abort_reason" not in stderr
+    assert helper_calls[0][1]["requested_device"] == "mps"
+    assert helper_calls[0][1]["backend_runtime"] == "mps"
 
 
 def test_drum_kit_split_stage2_unavailable_fails_before_stage1_separation(monkeypatch, tmp_path, capsys):
@@ -392,6 +423,21 @@ def test_drum_kit_split_stage2_exception_does_not_bypass_stage1_rejection(monkey
         stage1_select_device_result=("cpu", "CPU"),
         drumsep_runtime_kind="cpu",
         drumsep_info={"selection_policy": "fallback_cpu", "fallback_reason": "cuda_skipped:missing"},
+        expect_stage1_called=False, expect_helper_called=False,
+    )
+    assert exit_code == 1
+    stderr = capsys.readouterr().err
+    assert "STEMWERK_DIAG contract_resolution_failed_code=backend_unavailable" in stderr
+    assert "error_reason=drumsep_contract_rejected" in stderr
+    assert "contract_stage1_runtime_agrees" not in stderr
+
+
+def test_drum_kit_split_mps_stage2_does_not_bypass_invalid_stage1(monkeypatch, tmp_path, capsys):
+    _module, exit_code, stage1_inits, helper_calls = _run_dks_extract(
+        monkeypatch, tmp_path,
+        stage1_requested_device="mps", stage1_resolved_device="cpu",
+        stage1_select_device_result=("cpu", "CPU"),
+        drumsep_runtime_kind="mps",
         expect_stage1_called=False, expect_helper_called=False,
     )
     assert exit_code == 1

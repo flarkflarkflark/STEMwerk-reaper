@@ -83,11 +83,11 @@ LEGACY_TO_CONTRACT_DRUMSEP_MODEL_ID = {
 }
 
 # DrumSep's runtime selector (_select_drumsep_runtime) resolves directly to a
-# backend *kind* (cpu/cuda/rocm/directml) plus a venv python path -- there is
+# backend *kind* (cpu/cuda/rocm/mps/directml) plus a venv python path -- there is
 # no separate "device id" concept (no cuda:N GPU index) the way
 # stemwerk_core.devices has. The kind string doubles as both the resolved
 # device and the resolved backend for this probe.
-_DRUMSEP_RUNTIME_KINDS = frozenset({"cpu", "cuda", "rocm", "directml"})
+_DRUMSEP_RUNTIME_KINDS = frozenset({"cpu", "cuda", "rocm", "mps", "directml"})
 
 
 def _drumsep_select_device(legacy, requested: str) -> tuple:

@@ -341,7 +341,7 @@ _LEGACY_TO_CONTRACT_DRUMSEP_MODEL_ID = {
     "MDX23C-DrumSep-aufr33-jarredou.ckpt": "drumsep_mdx23c",
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt": "drumsep_mdx23c",
 }
-_DRUMSEP_RUNTIME_KINDS = frozenset({"cpu", "cuda", "rocm", "directml"})
+_DRUMSEP_RUNTIME_KINDS = frozenset({"cpu", "cuda", "rocm", "mps", "directml"})
 
 
 def _contract_drumsep_model_id(legacy_model_id: str) -> str:

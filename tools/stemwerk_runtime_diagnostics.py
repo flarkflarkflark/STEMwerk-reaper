@@ -155,11 +155,34 @@ def collect_identity() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _RUNTIME_PROBE_SRC = r"""
+import importlib
 import json
+from importlib.metadata import version as pkg_version
 
-result = {}
-try:
-    import torch
+result = {"imports": {}}
+modules = {}
+for module_name in (
+    "audio_separator",
+    "numpy",
+    "onnx",
+    "onnx2torch",
+    "onnxruntime",
+    "stemwerk_core",
+    "torch",
+    "torchaudio",
+    "torchvision",
+):
+    try:
+        modules[module_name] = importlib.import_module(module_name)
+        result["imports"][module_name] = {"ok": True}
+    except Exception as exc:
+        result["imports"][module_name] = {
+            "ok": False,
+            "error": "%s: %s" % (type(exc).__name__, exc),
+        }
+
+torch = modules.get("torch")
+if torch is not None:
     result["torch_version"] = getattr(torch, "__version__", None)
     result["torch_cuda_available"] = bool(torch.cuda.is_available())
     result["torch_cuda_version"] = getattr(getattr(torch, "version", None), "cuda", None)
@@ -179,43 +202,50 @@ try:
     except Exception:
         result["torch_mps_built"] = None
         result["torch_mps_available"] = None
-except Exception as exc:
+else:
     result["torch_version"] = None
-    result["torch_import_error"] = "%s: %s" % (type(exc).__name__, exc)
+    result["torch_cuda_available"] = None
+    result["torch_cuda_version"] = None
+    result["torch_hip_version"] = None
+    result["torch_cuda_device_count"] = None
+    result["torch_cuda_device_names"] = []
+    result["torch_mps_built"] = None
+    result["torch_mps_available"] = None
 
-for mod_name, key in (
+for module_name, key in (
     ("torchaudio", "torchaudio_version"),
     ("torchvision", "torchvision_version"),
     ("numpy", "numpy_version"),
+    ("onnx", "onnx_version"),
 ):
-    try:
-        mod = __import__(mod_name)
-        result[key] = getattr(mod, "__version__", None)
-    except Exception:
-        result[key] = None
+    module = modules.get(module_name)
+    result[key] = getattr(module, "__version__", None) if module is not None else None
 
 try:
-    from importlib.metadata import PackageNotFoundError, version as pkg_version
-    try:
-        result["audio_separator_version"] = pkg_version("audio-separator")
-    except PackageNotFoundError:
-        result["audio_separator_version"] = None
+    result["audio_separator_version"] = pkg_version("audio-separator")
 except Exception:
     result["audio_separator_version"] = None
 
-try:
-    import onnxruntime
+onnxruntime = modules.get("onnxruntime")
+if onnxruntime is not None:
     result["onnxruntime_version"] = getattr(onnxruntime, "__version__", None)
     try:
         result["onnxruntime_providers"] = list(onnxruntime.get_available_providers())
     except Exception:
         result["onnxruntime_providers"] = []
-except Exception:
+else:
     result["onnxruntime_version"] = None
     result["onnxruntime_providers"] = []
 
 print(json.dumps(result))
 """
+
+_RUNTIME_REQUIRED_IMPORTS = {
+    "main": ("audio_separator", "numpy", "onnxruntime", "stemwerk_core", "torch", "torchaudio"),
+    # Mirrors audio_separator_process._verify_drumsep_runtime. onnx2torch is
+    # intentionally optional there and remains optional here.
+    "drumsep": ("audio_separator", "numpy", "onnx", "onnxruntime", "torch"),
+}
 
 
 def _run_probe(python_exe: Path, src: str, timeout: int = 60) -> Dict[str, Any]:
@@ -232,18 +262,54 @@ def _run_probe(python_exe: Path, src: str, timeout: int = 60) -> Dict[str, Any]:
     if not lines:
         return {"probe_error": "probe produced no output"}
     try:
-        return json.loads(lines[-1])
+        payload = json.loads(lines[-1])
     except Exception as exc:
         return {"probe_error": f"could not parse probe output: {exc}", "raw_stdout": proc.stdout[-2000:]}
+    if not isinstance(payload, dict):
+        return {"probe_error": f"probe output must be a JSON object, got {type(payload).__name__}"}
+    return payload
 
 
-def collect_runtime(python_exe: Optional[Path], *, source_label: str) -> Dict[str, Any]:
+def collect_runtime(
+    python_exe: Optional[Path], *, source_label: str, runtime_profile: str = "main"
+) -> Dict[str, Any]:
     if python_exe is None:
         return {"status": UNAVAILABLE, "reason": f"no {source_label} interpreter found", "runtime_source": source_label}
-    data = _run_probe(python_exe, _RUNTIME_PROBE_SRC)
+    data = dict(_run_probe(python_exe, _RUNTIME_PROBE_SRC))
     data["python_executable"] = str(python_exe)
     data["runtime_source"] = source_label
-    data["status"] = FAIL if "probe_error" in data else PASS
+    data["runtime_profile"] = runtime_profile
+    data["evidence_kind"] = "required_imports"
+
+    required_imports = _RUNTIME_REQUIRED_IMPORTS.get(runtime_profile)
+    if required_imports is None:
+        data["status"] = FAIL
+        data["reason"] = f"unknown runtime profile: {runtime_profile}"
+        data["required_imports"] = []
+        data["failed_required_imports"] = {}
+        return data
+
+    failures: Dict[str, str] = {}
+    imports = data.get("imports")
+    if not isinstance(imports, dict):
+        imports = {}
+    for module_name in required_imports:
+        evidence = imports.get(module_name)
+        if not isinstance(evidence, dict):
+            failures[module_name] = "no import evidence"
+        elif evidence.get("ok") is not True:
+            failures[module_name] = str(evidence.get("error") or "import did not succeed")
+
+    data["required_imports"] = list(required_imports)
+    data["failed_required_imports"] = failures
+    if "probe_error" in data:
+        data["status"] = FAIL
+        data["reason"] = f"runtime probe failed: {data['probe_error']}"
+    elif failures:
+        data["status"] = FAIL
+        data["reason"] = "required package import validation failed"
+    else:
+        data["status"] = PASS
     return data
 
 
@@ -275,7 +341,23 @@ def collect_main_hardware(python_exe: Optional[Path], *, source_label: str) -> D
     data = _run_probe(python_exe, _MAIN_HARDWARE_PROBE_SRC)
     data["python_executable"] = str(python_exe)
     data["runtime_source"] = source_label
-    data["status"] = FAIL if ("probe_error" in data or "error" in data) else PASS
+    data["evidence_kind"] = "device_discovery"
+    data["inference_evidence"] = False
+    if "probe_error" in data or "error" in data:
+        data["status"] = FAIL
+        data["reason"] = str(data.get("probe_error") or data.get("error"))
+    elif not isinstance(data.get("available_devices"), list) or not all(
+        key in data
+        for key in (
+            "auto_selected_device_id",
+            "auto_selected_device_name",
+            "auto_selected_backend",
+        )
+    ):
+        data["status"] = UNAVAILABLE
+        data["reason"] = "device discovery probe returned insufficient capability evidence"
+    else:
+        data["status"] = PASS
     return data
 
 
@@ -286,9 +368,11 @@ result = {}
 try:
     import torch
     result["torch_version"] = getattr(torch, "__version__", None)
+    result["torch_cuda_version"] = getattr(getattr(torch, "version", None), "cuda", None)
     result["torch_hip_version"] = getattr(getattr(torch, "version", None), "hip", None)
     result["cuda_available"] = bool(torch.cuda.is_available())
     count = torch.cuda.device_count() if result["cuda_available"] else 0
+    result["cuda_device_count"] = count
     names = []
     for i in range(count):
         try:
@@ -296,19 +380,125 @@ try:
         except Exception:
             pass
     result["device_names"] = names
+    try:
+        result["torch_mps_built"] = bool(torch.backends.mps.is_built())
+        result["torch_mps_available"] = bool(torch.backends.mps.is_available())
+    except Exception:
+        result["torch_mps_built"] = None
+        result["torch_mps_available"] = None
 except Exception as exc:
-    result["error"] = "%s: %s" % (type(exc).__name__, exc)
+    result["torch_import_error"] = "%s: %s" % (type(exc).__name__, exc)
+
+try:
+    import onnxruntime
+    result["onnxruntime_providers"] = list(onnxruntime.get_available_providers() or [])
+except Exception as exc:
+    result["onnxruntime_providers"] = []
+    result["onnxruntime_import_error"] = "%s: %s" % (type(exc).__name__, exc)
+
+try:
+    import torch_directml
+    result["directml_available"] = bool(torch_directml.is_available())
+    result["directml_device_count"] = int(torch_directml.device_count())
+except Exception as exc:
+    result["directml_available"] = False
+    result["directml_device_count"] = 0
+    result["directml_import_error"] = "%s: %s" % (type(exc).__name__, exc)
 
 print(json.dumps(result))
 """
 
 
-def collect_drumsep_hardware(backend: str, python_exe: Path) -> Dict[str, Any]:
-    data = _run_probe(python_exe, _DRUMSEP_HARDWARE_PROBE_SRC)
+def collect_drumsep_hardware(
+    backend: str, python_exe: Path, *, runtime_result: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    if runtime_result is None:
+        runtime_result = collect_runtime(
+            python_exe, source_label="managed", runtime_profile="drumsep"
+        )
+
+    runtime_status = runtime_result.get("status", UNAVAILABLE)
+    base = {
+        "python_executable": str(python_exe),
+        "declared_backend": backend,
+        "evidence_kind": "backend_capability_probe",
+        "inference_evidence": False,
+        "probe_executed": False,
+    }
+    if runtime_status != PASS:
+        base["evidence_kind"] = "backend_capability_blocked"
+        base["status"] = runtime_status
+        base["reason"] = (
+            f"runtime import validation did not pass: {runtime_result.get('reason', runtime_status)}"
+        )
+        return base
+
+    if backend == "cpu":
+        base["status"] = PASS
+        base["evidence_kind"] = "runtime_import_validation"
+        return base
+
+    data = dict(_run_probe(python_exe, _DRUMSEP_HARDWARE_PROBE_SRC))
     data["python_executable"] = str(python_exe)
     data["declared_backend"] = backend
-    data["status"] = FAIL if ("probe_error" in data or "error" in data) else PASS
-    return data
+    data["evidence_kind"] = "backend_capability_probe"
+    data["inference_evidence"] = False
+    data["probe_executed"] = True
+
+    def verdict(status: str, reason: str) -> Dict[str, Any]:
+        data["status"] = status
+        data["reason"] = reason
+        return data
+
+    if "probe_error" in data:
+        return verdict(FAIL, f"backend probe failed: {data['probe_error']}")
+    if data.get("torch_import_error"):
+        return verdict(FAIL, f"Torch import failed: {data['torch_import_error']}")
+
+    cuda_available = data.get("cuda_available") is True
+    device_count = int(data.get("cuda_device_count") or 0)
+    device_names = [str(name) for name in (data.get("device_names") or []) if str(name).strip()]
+    hip_version = str(data.get("torch_hip_version") or "").strip()
+    cuda_version = str(data.get("torch_cuda_version") or "").strip()
+    providers = [str(provider) for provider in (data.get("onnxruntime_providers") or [])]
+
+    if backend == "rocm":
+        if not hip_version:
+            return verdict(FAIL, "declared ROCm runtime has no torch.version.hip evidence")
+        if cuda_version:
+            return verdict(FAIL, "declared ROCm runtime also reports a CUDA runtime version")
+        if not cuda_available or device_count < 1 or not device_names:
+            return verdict(UNAVAILABLE, "ROCm runtime has no available torch.cuda device evidence")
+        return verdict(PASS, "ROCm capability confirmed by HIP and live device evidence")
+
+    if backend == "cuda":
+        if hip_version:
+            return verdict(FAIL, "declared CUDA runtime is a ROCm/HIP runtime")
+        if not cuda_version:
+            return verdict(FAIL, "declared CUDA runtime has no torch.version.cuda evidence")
+        if not cuda_available or device_count < 1 or not device_names:
+            return verdict(UNAVAILABLE, "CUDA runtime has no available device evidence")
+        if "CUDAExecutionProvider" not in providers:
+            return verdict(FAIL, "onnxruntime CUDAExecutionProvider is unavailable")
+        return verdict(PASS, "CUDA capability confirmed by CUDA, device, and provider evidence")
+
+    if backend == "mps":
+        if data.get("torch_mps_built") is not True:
+            return verdict(UNAVAILABLE, "MPS backend is not built into Torch")
+        if data.get("torch_mps_available") is not True:
+            return verdict(UNAVAILABLE, "MPS backend is built but unavailable")
+        return verdict(PASS, "MPS capability confirmed by Torch build and availability evidence")
+
+    if backend == "directml":
+        if data.get("directml_import_error"):
+            return verdict(FAIL, f"torch_directml import failed: {data['directml_import_error']}")
+        if data.get("directml_available") is not True or int(data.get("directml_device_count") or 0) < 1:
+            return verdict(UNAVAILABLE, "DirectML runtime has no available device evidence")
+        if "DmlExecutionProvider" not in providers:
+            return verdict(FAIL, "onnxruntime DmlExecutionProvider is unavailable")
+        return verdict(PASS, "DirectML capability confirmed by device and provider evidence")
+
+    return verdict(FAIL, f"unknown backend: {backend}")
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +547,7 @@ def collect_contracts(requested_device: str = "auto") -> Dict[str, Any]:
     gates_present = _legacy_authoritative_gates_present()
     results: Dict[str, Any] = {}
 
-    def _plan_dict(plan) -> Dict[str, Any]:
+    def _plan_dict(plan, fallback_reason: str = "") -> Dict[str, Any]:
         return {
             "workflow_id": plan.workflow_id,
             "stage_id": plan.stage_id,
@@ -366,6 +556,7 @@ def collect_contracts(requested_device: str = "auto") -> Dict[str, Any]:
             "resolved_backend": plan.resolved_backend,
             "resolved_device": plan.resolved_device,
             "fallback_applied": plan.fallback_applied,
+            "fallback_reason": str(fallback_reason or ""),
             "reason_code": plan.reason_code,
             "contract_source": plan.contract_source,
         }
@@ -420,7 +611,7 @@ def collect_contracts(requested_device: str = "auto") -> Dict[str, Any]:
                 "status": PASS,
                 "evidence_kind": "real_probe_resolution",
                 "authoritative": bool(gates_present.get("drum_kit_direct")),
-                "plan": _plan_dict(plan),
+                "plan": _plan_dict(plan, selection_info.get("fallback_reason", "")),
             }
         except ResolutionError as exc:
             results["drum_kit_direct"] = {"status": FAIL, "evidence_kind": "real_probe_resolution", "reason": f"{exc.code}: {exc.detail}"}
@@ -447,7 +638,13 @@ def collect_contracts(requested_device: str = "auto") -> Dict[str, Any]:
                 "status": PASS,
                 "evidence_kind": "real_probe_resolution",
                 "authoritative": bool(gates_present.get("drum_kit_split")),
-                "stages": [_plan_dict(p) for p in workflow_plan.stages],
+                "stages": [
+                    _plan_dict(
+                        stage_plan,
+                        selection_info.get("fallback_reason", "") if index == 1 else "",
+                    )
+                    for index, stage_plan in enumerate(workflow_plan.stages)
+                ],
             }
         except ResolutionError as exc:
             results["drum_kit_split"] = {"status": FAIL, "evidence_kind": "real_probe_resolution", "reason": f"{exc.code}: {exc.detail}"}
@@ -683,6 +880,61 @@ BACKEND_MATRIX = {
 _PLATFORM_KEY = {"Linux": "linux", "Windows": "windows", "Darwin": "darwin"}
 
 
+def _combine_probe_statuses(*statuses: str) -> str:
+    if FAIL in statuses:
+        return FAIL
+    if not statuses or UNAVAILABLE in statuses:
+        return UNAVAILABLE
+    if SKIPPED in statuses:
+        return SKIPPED
+    return PASS if all(status == PASS for status in statuses) else UNAVAILABLE
+
+
+def _build_backend_matrix(
+    this_platform_key: str,
+    *,
+    runtime: Dict[str, Any],
+    hardware: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build backend verdicts only from the probe layers that support them.
+
+    A registered DrumSep runtime is authoritative for its backend row, even
+    when the main runtime independently auto-selects the same backend. This
+    prevents a failed managed venv probe from being overwritten by path
+    existence or unrelated main-runtime evidence.
+    """
+    matrix: Dict[str, Any] = {}
+    for platform_key, backends in BACKEND_MATRIX.items():
+        row: Dict[str, str] = {}
+        for backend in backends:
+            if platform_key != this_platform_key:
+                row[backend] = NOT_APPLICABLE
+                continue
+
+            if backend == "cpu":
+                row[backend] = str(runtime.get("main", {}).get("status", UNAVAILABLE))
+                continue
+
+            drumsep_key = f"drumsep_{backend}"
+            if drumsep_key in runtime:
+                row[backend] = _combine_probe_statuses(
+                    str(runtime[drumsep_key].get("status", UNAVAILABLE)),
+                    str(hardware.get(drumsep_key, {}).get("status", UNAVAILABLE)),
+                )
+                continue
+
+            main_hardware = hardware.get("main", {})
+            if main_hardware.get("auto_selected_backend") == backend:
+                row[backend] = _combine_probe_statuses(
+                    str(runtime.get("main", {}).get("status", UNAVAILABLE)),
+                    str(main_hardware.get("status", UNAVAILABLE)),
+                )
+            else:
+                row[backend] = UNAVAILABLE
+        matrix[platform_key] = row
+    return matrix
+
+
 # ---------------------------------------------------------------------------
 # Report assembly
 # ---------------------------------------------------------------------------
@@ -696,13 +948,31 @@ def build_report(*, real: bool = False, requested_device: str = "auto") -> Dict[
     if main_python is None:
         main_python = Path(sys.executable)
 
-    runtime: Dict[str, Any] = {"main": collect_runtime(main_python, source_label=main_source)}
+    runtime: Dict[str, Any] = {
+        "main": collect_runtime(main_python, source_label=main_source, runtime_profile="main")
+    }
     hardware: Dict[str, Any] = {"main": collect_main_hardware(main_python, source_label=main_source)}
 
     drumsep_pythons = managed_drumsep_pythons()
     for backend, python_exe in drumsep_pythons.items():
-        runtime[f"drumsep_{backend}"] = collect_runtime(python_exe, source_label="managed")
-        hardware[f"drumsep_{backend}"] = collect_drumsep_hardware(backend, python_exe)
+        key = f"drumsep_{backend}"
+        runtime[key] = collect_runtime(
+            python_exe, source_label="managed", runtime_profile="drumsep"
+        )
+        hardware[key] = collect_drumsep_hardware(
+            backend, python_exe, runtime_result=runtime[key]
+        )
+
+    # Apple Silicon DrumSep deliberately reuses the managed main venv rather
+    # than a dedicated .venv-drumsep-mps directory. Validate that interpreter
+    # against the DrumSep import profile before claiming MPS capability.
+    if this_platform_key == "darwin":
+        runtime["drumsep_mps"] = collect_runtime(
+            main_python, source_label=main_source, runtime_profile="drumsep"
+        )
+        hardware["drumsep_mps"] = collect_drumsep_hardware(
+            "mps", main_python, runtime_result=runtime["drumsep_mps"]
+        )
     for backend in ("rocm", "cuda", "directml", "cpu"):
         key = f"drumsep_{backend}"
         if key not in hardware:
@@ -710,20 +980,9 @@ def build_report(*, real: bool = False, requested_device: str = "auto") -> Dict[
 
     contracts = collect_contracts(requested_device=requested_device)
 
-    backend_matrix: Dict[str, Any] = {}
-    for plat, backends in BACKEND_MATRIX.items():
-        row = {}
-        for backend in backends:
-            if plat != this_platform_key:
-                row[backend] = NOT_APPLICABLE
-                continue
-            if backend == "cpu":
-                row[backend] = PASS if main_python is not None else UNAVAILABLE
-            elif backend in drumsep_pythons or hardware["main"].get("auto_selected_backend") == backend:
-                row[backend] = PASS
-            else:
-                row[backend] = UNAVAILABLE
-        backend_matrix[plat] = row
+    backend_matrix = _build_backend_matrix(
+        this_platform_key, runtime=runtime, hardware=hardware
+    )
 
     report: Dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -797,9 +1056,19 @@ def to_markdown(report: Dict[str, Any]) -> str:
         if "plan" in data:
             plan = data["plan"]
             lines.append(f"- resolved: {plan.get('resolved_backend')}/{plan.get('resolved_device')} ({plan.get('reason_code')})")
+            if plan.get("fallback_applied") or plan.get("fallback_reason"):
+                lines.append(
+                    f"- fallback_applied: {plan.get('fallback_applied')}; "
+                    f"fallback_reason: {plan.get('fallback_reason') or 'none'}"
+                )
         if "stages" in data:
             for stage in data["stages"]:
                 lines.append(f"  - stage {stage.get('stage_id')}: {stage.get('resolved_backend')}/{stage.get('resolved_device')} ({stage.get('reason_code')})")
+                if stage.get("fallback_applied") or stage.get("fallback_reason"):
+                    lines.append(
+                        f"    - fallback_applied: {stage.get('fallback_applied')}; "
+                        f"fallback_reason: {stage.get('fallback_reason') or 'none'}"
+                    )
         lines.append("")
     if "execution" in report:
         lines.append("## Execution agreement (real fixture)")

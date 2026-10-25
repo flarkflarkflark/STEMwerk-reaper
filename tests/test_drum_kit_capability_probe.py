@@ -44,6 +44,20 @@ def test_drumsep_probe_explicit_rocm_success(monkeypatch, legacy_module):
     assert plan.fallback_applied is False
 
 
+def test_drumsep_probe_explicit_mps_success(monkeypatch, legacy_module):
+    monkeypatch.setattr(
+        legacy_module, "_select_drumsep_runtime", lambda requested, runtime_base=None: (Path("/fake/python"), "mps", {})
+    )
+    probe = stemwerk_runtime_seam.build_drum_kit_capability_probe()
+
+    plan = resolve_execution_plan(
+        "drum_kit_direct", "drumsep_mdx23c", "mps", catalog_dir=CATALOG_DIR, probe=probe
+    )
+    assert plan.resolved_backend == "mps"
+    assert plan.resolved_device == "mps"
+    assert plan.fallback_applied is False
+
+
 def test_drumsep_probe_explicit_rocm_failure_fails_closed(monkeypatch, legacy_module):
     monkeypatch.setattr(
         legacy_module, "_select_drumsep_runtime", lambda requested, runtime_base=None: (None, "broken", {})
