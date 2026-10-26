@@ -30,6 +30,10 @@ RECEIPT_FILENAME = "stemwerk-materialization-receipt.v1.json"
 PRODUCTION_POLICY_ID = (
     "stemwerk_core.model_assets.DIRECT_DKS_MODEL_EXPECTED_SHA256"
 )
+_MACOS_RENAME_EXCL = 0x00000004
+_WINDOWS_DESTINATION_EXISTS = {80, 183}
+_WINDOWS_PUBLICATION_UNSUPPORTED = {1, 17, 50, 120}
+_WINDOWS_SHARING_VIOLATION = 32
 
 
 class MaterializationError(Exception):
@@ -142,6 +146,12 @@ def _production_policy() -> _TrustedAssetPolicy:
     )
 
 
+def _binary_flag() -> int:
+    """Windows opens descriptors in text mode unless O_BINARY is requested."""
+
+    return getattr(os, "O_BINARY", 0)
+
+
 def _absolute_path(value: Any, label: str) -> Path:
     if not isinstance(value, (str, os.PathLike)) or not str(value):
         raise MaterializationError("invalid_path", f"{label} must be a path")
@@ -158,20 +168,33 @@ def _absolute_path(value: Any, label: str) -> Path:
     return path
 
 
+def _is_reparse_point(path_stat: os.stat_result) -> bool:
+    """Return whether a Windows stat result identifies a reparse point."""
+
+    attributes = getattr(path_stat, "st_file_attributes", 0)
+    reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(attributes & reparse_attribute)
+
+
+def _is_link_or_reparse(path_stat: os.stat_result) -> bool:
+    return stat.S_ISLNK(path_stat.st_mode) or _is_reparse_point(path_stat)
+
+
 def _reject_symlink_components(path: Path, label: str) -> None:
     components = [path, *path.parents]
     for component in reversed(components):
         try:
-            mode = os.lstat(component).st_mode
+            component_stat = os.lstat(component)
         except FileNotFoundError:
             continue
         except OSError as exc:
             raise MaterializationError(
                 "path_unreadable", f"cannot inspect {label}: {exc}"
             ) from exc
-        if stat.S_ISLNK(mode):
+        if _is_link_or_reparse(component_stat):
             raise MaterializationError(
-                "symlink_not_allowed", f"{label} contains a symbolic link"
+                "symlink_not_allowed",
+                f"{label} contains a symbolic link or reparse point",
             )
 
 
@@ -189,6 +212,7 @@ def _validate_source(name: str, value: Any, expected: str) -> _ValidatedSource:
     _reject_symlink_components(path, f"source for {name}")
     flags = (
         os.O_RDONLY
+        | _binary_flag()
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_NONBLOCK", 0)
@@ -297,15 +321,16 @@ def _validate_destination(value: Any) -> _ValidatedDestination:
         raise MaterializationError(
             "destination_ineligible", "destination parent is not a directory"
         )
-    if hasattr(os, "geteuid") and parent_stat.st_uid != os.geteuid():
-        raise MaterializationError(
-            "destination_ineligible", "destination parent is not owned by this user"
-        )
-    if parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        raise MaterializationError(
-            "destination_ineligible",
-            "destination parent must not be group- or world-writable",
-        )
+    if hasattr(os, "geteuid"):
+        if parent_stat.st_uid != os.geteuid():
+            raise MaterializationError(
+                "destination_ineligible", "destination parent is not owned by this user"
+            )
+        if parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise MaterializationError(
+                "destination_ineligible",
+                "destination parent must not be group- or world-writable",
+            )
     try:
         os.lstat(destination)
     except FileNotFoundError:
@@ -349,14 +374,14 @@ def validate_drumsep_materialization(request: MaterializationRequest) -> dict[st
 def preflight_drumsep_materialization(destination: Path) -> dict[str, Any]:
     """Validate publication support and a new destination without source I/O."""
 
-    _linux_renameat2()
+    publication_platform = _publication_platform()
     validated = _validate_destination(destination)
     return {
         "kind": "stemwerk_asset_materialization_preflight",
         "schema_version": SCHEMA_VERSION,
         "outcome": "validated",
         "destination": str(validated.path),
-        "publication_platform": "linux_renameat2_noreplace",
+        "publication_platform": publication_platform,
     }
 
 
@@ -400,7 +425,13 @@ def _open_lock(validated: _ValidatedRequest, operation_id: str) -> tuple[int, _O
     lock_path = validated.destination.parent / (
         f".{validated.destination.name}.stemwerk-materialize.lock"
     )
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | _binary_flag()
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     try:
         handle = os.open(lock_path, flags, 0o600)
     except FileExistsError as exc:
@@ -436,7 +467,6 @@ def _open_lock(validated: _ValidatedRequest, operation_id: str) -> tuple[int, _O
 
 
 def _create_staging(validated: _ValidatedRequest) -> _OwnedPath:
-    path: Path | None = None
     try:
         path = Path(
             tempfile.mkdtemp(
@@ -444,18 +474,18 @@ def _create_staging(validated: _ValidatedRequest) -> _OwnedPath:
                 dir=validated.destination.parent,
             )
         )
-        stage_stat = os.lstat(path)
     except OSError as exc:
-        cleanup_remaining: list[str] = []
-        if path is not None:
-            try:
-                shutil.rmtree(path)
-            except OSError:
-                cleanup_remaining.append(str(path))
         raise MaterializationError(
             "staging_failed",
             f"cannot create owned staging directory: {exc}",
-            cleanup_remaining=cleanup_remaining,
+        ) from exc
+    try:
+        stage_stat = os.lstat(path)
+    except OSError as exc:
+        raise MaterializationError(
+            "staging_failed",
+            f"cannot identify owned staging directory: {exc}",
+            cleanup_remaining=(str(path),),
         ) from exc
     return _OwnedPath(path, stage_stat.st_dev, stage_stat.st_ino, is_directory=True)
 
@@ -474,6 +504,7 @@ def _cleanup_owned(owned: _OwnedPath | None) -> list[str]:
         and current.st_ino == owned.inode
         and stat.S_ISDIR(current.st_mode) == owned.is_directory
         and stat.S_ISREG(current.st_mode) != owned.is_directory
+        and not _is_link_or_reparse(current)
     ):
         return [str(owned.path)]
     try:
@@ -489,12 +520,17 @@ def _cleanup_owned(owned: _OwnedPath | None) -> list[str]:
 def _copy_validated_source(source: _ValidatedSource, target: Path) -> None:
     source_flags = (
         os.O_RDONLY
+        | _binary_flag()
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_NONBLOCK", 0)
     )
     target_flags = (
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | _binary_flag()
+        | getattr(os, "O_CLOEXEC", 0)
     )
     source_handle = os.open(source.path, source_flags)
     try:
@@ -567,7 +603,13 @@ def _write_receipt(path: Path, receipt: Mapping[str, Any]) -> None:
     payload = (
         json.dumps(receipt, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     ).encode("utf-8")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | _binary_flag()
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     handle = os.open(path, flags, 0o600)
     try:
         view = memoryview(payload)
@@ -621,6 +663,7 @@ def _parent_still_matches(validated: _ValidatedRequest) -> None:
         current.st_dev != validated.parent_device
         or current.st_ino != validated.parent_inode
         or not stat.S_ISDIR(current.st_mode)
+        or _is_link_or_reparse(current)
     ):
         raise MaterializationError(
             "destination_changed", "destination parent changed after validation"
@@ -642,6 +685,7 @@ def _publication_status(
         return None
     return (
         stat.S_ISDIR(destination_stat.st_mode)
+        and not _is_link_or_reparse(destination_stat)
         and destination_stat.st_dev == staging.device
         and destination_stat.st_ino == staging.inode
     )
@@ -653,7 +697,7 @@ def _linux_renameat2():
     if not sys.platform.startswith("linux"):
         raise MaterializationError(
             "publication_unsupported",
-            "atomic no-replace directory publication is currently supported on Linux only",
+            "Linux renameat2 publication is unavailable on this platform",
         )
     try:
         renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
@@ -666,10 +710,104 @@ def _linux_renameat2():
     return renameat2
 
 
-def _publish_noreplace(staging: Path, destination: Path) -> None:
-    """Atomically rename a directory only when destination is absent on Linux."""
+def _macos_renamex_np():
+    """Return the macOS exclusive-rename function or fail explicitly."""
 
-    renameat2 = _linux_renameat2()
+    if sys.platform != "darwin":
+        raise MaterializationError(
+            "publication_unsupported",
+            "macOS exclusive directory publication is unavailable on this platform",
+        )
+    try:
+        renamex_np = ctypes.CDLL(None, use_errno=True).renamex_np
+    except AttributeError as exc:
+        raise MaterializationError(
+            "publication_unsupported", "macOS does not expose renamex_np"
+        ) from exc
+    renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+    renamex_np.restype = ctypes.c_int
+    return renamex_np
+
+
+def _windows_move_file_ex():
+    """Return the Windows Unicode directory-move function or fail explicitly."""
+
+    if sys.platform != "win32":
+        raise MaterializationError(
+            "publication_unsupported",
+            "Windows no-replace directory publication is unavailable on this platform",
+        )
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        move_file_ex = kernel32.MoveFileExW
+    except (AttributeError, OSError) as exc:
+        raise MaterializationError(
+            "publication_unsupported", "Windows does not expose MoveFileExW"
+        ) from exc
+    move_file_ex.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+    move_file_ex.restype = ctypes.c_int
+    return move_file_ex
+
+
+def _publication_platform() -> str:
+    """Check native API availability without claiming filesystem support."""
+
+    if sys.platform.startswith("linux"):
+        _linux_renameat2()
+        return "linux_renameat2_noreplace"
+    if sys.platform == "darwin":
+        _macos_renamex_np()
+        return "macos_renamex_np_exclusive"
+    if sys.platform == "win32":
+        _windows_move_file_ex()
+        return "windows_movefileexw_noreplace"
+    raise MaterializationError(
+        "publication_unsupported",
+        "atomic no-replace directory publication is unsupported on this platform",
+    )
+
+
+def _publication_context(
+    operation: str, code: str, staging: Path, destination: Path
+) -> str:
+    return f"{operation} failed with {code}: staging={staging}, destination={destination}"
+
+
+def _raise_posix_publication_error(
+    error: int, operation: str, staging: Path, destination: Path
+) -> None:
+    name = errno.errorcode.get(error, "UNKNOWN")
+    context = _publication_context(
+        operation, f"{name} ({error}: {os.strerror(error)})", staging, destination
+    )
+    if error in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise MaterializationError(
+            "publication_conflict",
+            f"destination appeared before publication; {context}",
+        )
+    if error in {
+        errno.ENOSYS,
+        errno.EINVAL,
+        errno.EOPNOTSUPP,
+        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+        errno.EXDEV,
+    }:
+        raise MaterializationError(
+            "publication_unsupported",
+            "filesystem does not support same-filesystem atomic no-replace "
+            f"directory publication; {context}",
+        )
+    raise MaterializationError(
+        "publication_failed", f"atomic destination publication failed; {context}"
+    )
+
+
+def _publish_linux_noreplace(
+    staging: Path, destination: Path, *, renameat2=None, get_errno=None
+) -> None:
+    renameat2 = renameat2 or _linux_renameat2()
+    get_errno = get_errno or ctypes.get_errno
+
     result = renameat2(
         -100,
         os.fsencode(staging),
@@ -679,18 +817,95 @@ def _publish_noreplace(staging: Path, destination: Path) -> None:
     )
     if result == 0:
         return
-    error = ctypes.get_errno()
-    if error in {errno.EEXIST, errno.ENOTEMPTY}:
+    _raise_posix_publication_error(
+        get_errno(), "renameat2(RENAME_NOREPLACE)", staging, destination
+    )
+
+
+def _publish_macos_noreplace(
+    staging: Path, destination: Path, *, renamex_np=None, get_errno=None
+) -> None:
+    renamex_np = renamex_np or _macos_renamex_np()
+    get_errno = get_errno or ctypes.get_errno
+    # RENAME_EXCL from Apple's <sys/stdio.h>.
+    result = renamex_np(
+        os.fsencode(staging), os.fsencode(destination), _MACOS_RENAME_EXCL
+    )
+    if result == 0:
+        return
+    _raise_posix_publication_error(
+        get_errno(), "renamex_np(RENAME_EXCL)", staging, destination
+    )
+
+
+def _publish_windows_noreplace(
+    staging: Path,
+    destination: Path,
+    *,
+    move_file_ex=None,
+    get_last_error=None,
+) -> None:
+    move_file_ex = move_file_ex or _windows_move_file_ex()
+    # No flags: no replacement, cross-volume copy, delayed move, or hard link.
+    if move_file_ex(str(staging), str(destination), 0):
+        return
+    get_last_error = get_last_error or ctypes.get_last_error
+    error = get_last_error()
+    context = _publication_context(
+        "MoveFileExW(flags=0)", f"GetLastError={error}", staging, destination
+    )
+    # ERROR_FILE_EXISTS and ERROR_ALREADY_EXISTS.
+    if error in _WINDOWS_DESTINATION_EXISTS:
         raise MaterializationError(
-            "publication_conflict", "destination appeared before publication"
+            "publication_conflict",
+            f"destination appeared before publication; {context}",
         )
-    if error in {errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP}:
+    try:
+        os.lstat(destination)
+    except OSError:
+        pass
+    else:
+        # Some Windows filesystems report an existing directory as access
+        # denied instead of ERROR_ALREADY_EXISTS. The failed native call and
+        # observed destination still establish a no-replace collision.
+        raise MaterializationError(
+            "publication_conflict",
+            f"destination appeared before publication; {context}",
+        )
+    # ERROR_INVALID_FUNCTION, ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED, and
+    # ERROR_CALL_NOT_IMPLEMENTED.
+    if error in _WINDOWS_PUBLICATION_UNSUPPORTED:
         raise MaterializationError(
             "publication_unsupported",
-            "filesystem does not support atomic no-replace directory publication",
+            "filesystem does not support same-filesystem atomic no-replace "
+            f"directory publication; {context}",
+        )
+    if error == _WINDOWS_SHARING_VIOLATION:
+        raise MaterializationError(
+            "publication_failed",
+            "atomic destination publication failed: another process holds a "
+            f"handle on the staging directory (ERROR_SHARING_VIOLATION); {context}",
         )
     raise MaterializationError(
-        "publication_failed", f"atomic destination publication failed: {os.strerror(error)}"
+        "publication_failed", f"atomic destination publication failed; {context}"
+    )
+
+
+def _publish_noreplace(staging: Path, destination: Path) -> None:
+    """Publish a directory with the platform's native no-replace rename."""
+
+    if sys.platform.startswith("linux"):
+        _publish_linux_noreplace(staging, destination)
+        return
+    if sys.platform == "darwin":
+        _publish_macos_noreplace(staging, destination)
+        return
+    if sys.platform == "win32":
+        _publish_windows_noreplace(staging, destination)
+        return
+    raise MaterializationError(
+        "publication_unsupported",
+        "atomic no-replace directory publication is unsupported on this platform",
     )
 
 

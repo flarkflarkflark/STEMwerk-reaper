@@ -25,8 +25,8 @@ def sha256(data: bytes) -> str:
 
 def controlled_sources(tmp_path: Path):
     contents = {
-        "controlled.ckpt": b"controlled checkpoint\n",
-        "controlled.yaml": b"controlled config\n",
+        "controlled.ckpt": b"controlled checkpoint\r\nbare-lf\n\x1a\x00tail\n",
+        "controlled.yaml": b"controlled config\r\nbare-lf\n\x1a\x00tail\n",
     }
     source_dir = tmp_path / "sources"
     source_dir.mkdir(parents=True)
@@ -49,8 +49,10 @@ def controlled_materializer(policy):
     return materialize
 
 
+@pytest.mark.native_publication
 @pytest.mark.skipif(
-    not sys.platform.startswith("linux"), reason="publication requires Linux"
+    not (sys.platform.startswith("linux") or sys.platform in {"darwin", "win32"}),
+    reason="requires a supported native publisher",
 )
 def test_local_source_success_preserves_sources_and_skips_acquisition(
     tmp_path, monkeypatch
@@ -124,8 +126,10 @@ def controlled_acquirer(contents, policy):
     return acquire
 
 
+@pytest.mark.native_publication
 @pytest.mark.skipif(
-    not sys.platform.startswith("linux"), reason="publication requires Linux"
+    not (sys.platform.startswith("linux") or sys.platform in {"darwin", "win32"}),
+    reason="requires a supported native publisher",
 )
 def test_controlled_acquisition_then_publication_cleans_temporary_sources(tmp_path):
     _, contents, policy = controlled_sources(tmp_path)
@@ -155,7 +159,7 @@ def test_preflight_failure_does_not_acquire(tmp_path, monkeypatch, mode):
     calls = []
     destination = Path("relative") if mode == "invalid_destination" else tmp_path / "out"
     if mode == "unsupported_platform":
-        monkeypatch.setattr(materialization.sys, "platform", "darwin")
+        monkeypatch.setattr(materialization.sys, "platform", "unsupported-os")
 
     with pytest.raises(preparation.PreparationError) as exc:
         preparation._prepare_asset_set(

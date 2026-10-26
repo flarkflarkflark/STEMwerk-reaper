@@ -95,3 +95,53 @@ jobs:
         run: |
           lua5.4 tests/lua/test_workflow_contracts.lua
           lua5.4 tests/lua/test_runtime_authority.lua
+
+  asset-publication-native:
+    name: Asset publication (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: Install test dependency
+        # The Core modules under test import only the standard library at
+        # module level; pytest is the only third-party requirement.
+        run: python -m pip install pytest
+
+      - name: Run native no-replace publication tests
+        run: >-
+          python -m pytest -q -rs -m native_publication
+          --junitxml=native-publication-junit.xml
+          tests/test_core_asset_materialization.py
+          tests/test_core_asset_preparation.py
+
+      - name: Require that native publication tests really ran
+        # A skip must not look like a pass: fail unless tests ran and none
+        # were skipped, errored or failed.
+        shell: python
+        run: |
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("native-publication-junit.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          totals = {
+              key: sum(int(suite.get(key, 0)) for suite in suites)
+              for key in ("tests", "skipped", "errors", "failures")
+          }
+          print(totals)
+          if (
+              totals["tests"] <= 0
+              or totals["skipped"]
+              or totals["errors"]
+              or totals["failures"]
+          ):
+              sys.exit("native publication tests did not all execute and pass")

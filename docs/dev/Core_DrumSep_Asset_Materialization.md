@@ -41,11 +41,19 @@ use Core's existing filename/SHA-256 mapping and identify that policy as
 `stemwerk_core.model_assets.DIRECT_DKS_MODEL_EXPECTED_SHA256`.
 
 Validation requires absolute paths without `..` segments. Every existing
-source and destination-parent path component must be free of symbolic links.
+source and destination-parent path component must be free of symbolic links;
+on Windows, reparse points such as junctions are rejected too. The
+rejection covers every reparse point, including OneDrive and other cloud
+placeholders and deduplicated files, so a destination (or source) under a
+OneDrive-synced folder, which is often where Windows places Documents, is
+refused by design rather than special-cased.
 Sources must be distinct, readable regular files. The destination parent must
-already exist, be owned by the current user, not be group- or world-writable,
-and remain stable through the operation. The destination itself must not exist
-as any filesystem object. Source/destination aliases are rejected.
+already exist and remain stable through the operation. On Linux and macOS it
+must be owned by the current user and not be group- or world-writable. On
+Windows Core does not translate POSIX mode bits into an ownership claim: the
+caller supplies a non-reparse parent and the operating system enforces its
+ACLs for the current process. The destination itself must not exist as any
+filesystem object. Source/destination aliases are rejected.
 
 ## CLI
 
@@ -72,15 +80,47 @@ it never hard-links or changes the sources. Each staged asset is hashed again.
 The receipt is written and re-read, and staging must contain exactly both assets
 and the receipt before publication.
 
-Publication currently supports Linux filesystems that implement atomic
-`renameat2(RENAME_NOREPLACE)` for same-filesystem directory renames. Staging is
-created beside the destination to keep publication on one filesystem. The
-no-replace operation prevents an empty or populated destination that appears
-concurrently from being overwritten. Other platforms and filesystems that do
-not provide this operation fail with `publication_unsupported` before
-publication. No cross-platform, network-filesystem or crash-durability claim is
-made. The contract assumes destination ancestors are not being maliciously
-renamed concurrently; their identity is checked before publication.
+Publication uses one native no-replace directory rename:
+
+- Linux calls `renameat2` with `RENAME_NOREPLACE`.
+- macOS calls `renamex_np` with `RENAME_EXCL`.
+- Windows calls the Unicode `MoveFileExW` API with flags `0`. In particular,
+  Core does not request replacement, cross-volume copy/delete, delayed rename
+  or hard-link behavior.
+
+Staging is created beside the destination, keeping the rename on one
+filesystem. The single native call prevents an empty or populated destination
+that appears concurrently from being overwritten. A platform API can be
+detected during preflight, but support by the destination filesystem is known
+only when publication runs. Unsupported syscalls, flags or filesystems and
+cross-filesystem results fail with `publication_unsupported`; there is no
+check-then-rename, copying or overwrite-capable fallback.
+
+The supported trust boundary is a caller-selected local filesystem and
+cooperatively stable ancestors. Ancestor components are checked at validation
+and the destination parent's identity is checked immediately before
+publication; an ancestor swapped between validation and publication (for
+example for a junction or symbolic link) falls under that cooperative
+ancestor-stability assumption and is not defended against.
+
+Platform status:
+
+- Linux: exercised by the native publication tests.
+- macOS and Windows: implemented, not natively qualified. Native CI jobs are
+  configured for the macOS and Windows runner filesystems, and simulated
+  adapter tests do not qualify a platform. No result is generalized to every
+  local or network filesystem.
+
+Known Windows limits: open handles, ACLs, sharing rules, and the documented
+`MoveFileExW` path-length rules can cause a normal `publication_failed` result.
+In particular `ERROR_SHARING_VIOLATION` (32) can occur while antivirus,
+search-indexer or backup software holds a handle on the staging directory. Core
+does not retry: the result is a clean `publication_failed` that names the
+operation, `GetLastError` number and paths, the destination is not created and
+the staging directory and lock are removed. Native errors on every platform
+report the operation, the errno name and number (`GetLastError` on Windows) and
+the staging and destination paths, while the error codes stay stable.
+No power-loss or crash-durability claim is made.
 
 Failures before publication leave pre-existing content untouched and remove
 only the operation's inode-checked staging directory and lock. If cleanup is
@@ -125,12 +165,32 @@ and FFmpeg provisioning, target selection for active installations,
 ownership/adoption policy, repair/update/removal, receipts across operations,
 rollback, orchestration and post-install readiness revalidation unresolved.
 
-Focused tests are portable and use small injected trusted specifications; only
-the public production functions bind to the real Core pins. They cover success,
+Focused tests use small injected trusted specifications; only the public
+production functions bind to the real Core pins. They cover success,
 receipt consistency, corrupt/missing/unreadable sources, invalid paths,
-symlinks, existing destinations, aliases, interruption, incomplete copies,
-publication failure, post-publication errors and interrupts, competing
-processes, and incomplete cleanup reporting. Tests that require Linux
-`renameat2`, POSIX FIFO support, or unprivileged POSIX permission behavior skip
-explicitly when that capability is unavailable; the unsupported-platform path
-is tested without invoking a weaker publication fallback.
+symlinks/reparse points, existing destinations, aliases, interruption,
+incomplete copies, publication failure, post-publication errors and
+interrupts, competing processes, and incomplete cleanup reporting. Tests that
+require Linux `renameat2`, POSIX FIFO support, unprivileged POSIX permission
+behavior, or permission to create Windows symbolic links skip explicitly when
+that capability is unavailable. Simulated adapter tests are marked separately
+from native publication tests and do not qualify a platform.
+
+## Native API references
+
+- Linux: [`renameat2(2)` and `RENAME_NOREPLACE`](https://man7.org/linux/man-pages/man2/rename.2.html)
+- macOS: Apple documents the
+  [`volumeSupportsExclusiveRenamingKey`](https://developer.apple.com/documentation/foundation/urlresourcekey/volumesupportsexclusiverenamingkey)
+  capability in terms of `renamex_np(2)` with `RENAME_EXCL`. The userspace
+  definition (`0x00000004`) is in
+  [`<sys/stdio.h>`](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/stdio.h),
+  which `renamex_np(2)` documents as reached through `#include <stdio.h>`; the kernel-side
+  `VFS_RENAME_EXCL` in `vnode_if.h` is a separate VFS constant.
+- Windows: Microsoft documents
+  [`MoveFileExW`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
+  flags, same-drive directory behavior, Unicode paths and error reporting, and
+  its [directory-move example](https://learn.microsoft.com/en-us/windows/win32/fileio/moving-directories)
+  states that the destination cannot already exist.
+- Python documents the portable `st_dev`/`st_ino` identity fields and Windows
+  [`st_file_attributes`/`st_reparse_tag`](https://docs.python.org/3/library/os.html#os.stat_result)
+  used for reconciliation and identity-bounded cleanup.

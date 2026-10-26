@@ -83,13 +83,16 @@ argument-parser errors also exit `2`.
 The orchestrator first validates that exactly one mode was selected. It then
 calls the materializer's shared publication preflight before any acquisition.
 Preflight rejects unsupported platforms, invalid or existing destinations and
-ineligible parents. Publication currently requires Linux and the `renameat2`
-no-replace syscall.
+ineligible parents. Publication uses the materializer's native no-replace API:
+Linux `renameat2(RENAME_NOREPLACE)`, macOS `renamex_np(RENAME_EXCL)`, or Windows
+`MoveFileExW` without replacement/copy flags.
 
 Preflight does not reserve the destination. The materializer independently
 revalidates source identities, destination eligibility and parent identity,
 then performs its normal collision-safe publication. Filesystem support for a
-particular no-replace rename is established by the actual publication call.
+particular no-replace rename is established by the actual publication call;
+successful API preflight does not promise successful publication on every
+filesystem. macOS and Windows: implemented, not natively qualified.
 
 ## Evidence and phases
 
@@ -140,7 +143,7 @@ an existing destination.
 ## Limits and licensing
 
 Preparation inherits the acquisition transport bounds and the materializer's
-Linux-only publication, cooperative ancestor stability and crash-durability
+cooperative ancestor stability, platform/filesystem and crash-durability
 limits. It adds no transaction database, lease, rollback, download cache or
 receipt authority. The materialization receipt remains bounded evidence of
 that copy-and-publication operation; it is not installation readiness,

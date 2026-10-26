@@ -153,9 +153,9 @@ establishes collision safety for a new, cooperatively stable destination. It
 does not claim atomic visibility of the complete two-file set, protection
 against hostile ancestor replacement, network-filesystem semantics, crash
 recovery, `SIGKILL` recovery or power-loss durability. The existing
-materializer retains its separate Linux-only atomic publication contract.
-Portable acquisition tests run without active roots, but this review does not
-claim native Windows or macOS qualification from its Linux test execution.
+materializer retains its separate platform-native, no-replace publication
+contract. Portable acquisition tests run without active roots and do not by
+themselves qualify publication on a host platform or filesystem.
 
 ## Provenance and licensing limits
 

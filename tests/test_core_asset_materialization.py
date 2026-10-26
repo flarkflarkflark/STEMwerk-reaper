@@ -1,6 +1,7 @@
 """Portable tests for bounded, offline DrumSep asset materialization."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import multiprocessing
@@ -20,7 +21,9 @@ sys.path.insert(0, str(CORE_SRC))
 from stemwerk_core import asset_materialization as materialization  # noqa: E402
 
 pytestmark = pytest.mark.portable
-LINUX_PUBLICATION = sys.platform.startswith("linux")
+NATIVE_PUBLICATION = (
+    sys.platform.startswith("linux") or sys.platform in {"darwin", "win32"}
+)
 
 
 def sha256(data: bytes) -> str:
@@ -28,10 +31,11 @@ def sha256(data: bytes) -> str:
 
 
 def controlled_request(tmp_path: Path):
-    if os.name == "nt":
-        pytest.skip("controlled filesystem cases require POSIX mode semantics")
     names = ("controlled-model.ckpt", "controlled-model.yaml")
-    contents = {names[0]: b"controlled checkpoint\n", names[1]: b"controlled config\n"}
+    contents = {
+        names[0]: b"controlled checkpoint\r\nbare-lf\n\x1a\x00tail\n",
+        names[1]: b"controlled config\r\nbare-lf\n\x1a\x00tail\n",
+    }
     source_dir = tmp_path / "sources"
     source_dir.mkdir(parents=True)
     sources = {}
@@ -50,7 +54,34 @@ def controlled_request(tmp_path: Path):
     return policy, request, contents
 
 
-@pytest.mark.skipif(not LINUX_PUBLICATION, reason="publication requires Linux renameat2")
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
+def test_every_descriptor_open_requests_binary_mode(tmp_path, monkeypatch):
+    sentinel = 1 << 30
+    real_binary = getattr(os, "O_BINARY", 0)
+    real_open = os.open
+    recorded = []
+
+    def recording_open(path, flags, *args, **kwargs):
+        recorded.append((Path(path).name, flags))
+        return real_open(path, (flags & ~sentinel) | real_binary, *args, **kwargs)
+
+    policy, request, contents = controlled_request(tmp_path)
+    monkeypatch.setattr(os, "O_BINARY", sentinel, raising=False)
+    monkeypatch.setattr(os, "open", recording_open)
+
+    result = materialization._materialize_asset_set(request, policy)
+
+    # validation (2) + lock (1) + copy source/target (4) + receipt (1)
+    assert len(recorded) >= 8
+    missing = [name for name, flags in recorded if not flags & sentinel]
+    assert missing == []
+    for name, expected in contents.items():
+        assert (Path(result["destination"]) / name).read_bytes() == expected
+
+
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
 def test_materializes_complete_verified_set_and_consistent_receipt(tmp_path):
     policy, request, contents = controlled_request(tmp_path)
 
@@ -185,11 +216,30 @@ def test_rejects_fifo_substitution_before_copy_without_blocking(tmp_path):
     assert not (tmp_path / "copy").exists()
 
 
-def test_existing_destination_is_preserved(tmp_path):
+def _create_destination_object(destination: Path, kind: str) -> Path:
+    if kind == "file":
+        destination.write_text("existing")
+        return destination
+    target = destination
+    if kind == "link":
+        target = destination.parent / f"{destination.name}-link-target"
+    target.mkdir()
+    marker = target / "keep.txt"
+    marker.write_text("existing")
+    if kind == "link":
+        try:
+            destination.symlink_to(target, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"directory symlink creation unavailable: {exc}")
+    return marker
+
+
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
+@pytest.mark.parametrize("kind", ["file", "directory", "link"])
+def test_existing_destination_is_preserved(tmp_path, kind):
     policy, request, _ = controlled_request(tmp_path)
-    request.destination.mkdir()
-    sentinel = request.destination / "keep.txt"
-    sentinel.write_text("existing")
+    sentinel = _create_destination_object(request.destination, kind)
 
     with pytest.raises(materialization.MaterializationError) as exc:
         materialization._materialize_asset_set(request, policy)
@@ -393,7 +443,8 @@ def test_publication_failure_preserves_destination_absence_and_cleans(tmp_path):
     assert sorted(path.name for path in tmp_path.iterdir()) == ["sources"]
 
 
-@pytest.mark.skipif(not LINUX_PUBLICATION, reason="publication requires Linux renameat2")
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
 def test_failure_after_publication_reports_destination_and_receipt(tmp_path):
     policy, request, _ = controlled_request(tmp_path)
 
@@ -422,7 +473,8 @@ def test_failure_after_publication_reports_destination_and_receipt(tmp_path):
     assert retry.value.code == "destination_exists"
 
 
-@pytest.mark.skipif(not LINUX_PUBLICATION, reason="publication requires Linux renameat2")
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
 def test_interrupt_after_publication_preserves_original_with_context(tmp_path):
     policy, request, _ = controlled_request(tmp_path)
 
@@ -446,7 +498,8 @@ def test_interrupt_after_publication_preserves_original_with_context(tmp_path):
     assert receipt.is_file()
 
 
-@pytest.mark.skipif(not LINUX_PUBLICATION, reason="publication requires Linux renameat2")
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
 def test_publication_identity_survives_receipt_read_failure(tmp_path, monkeypatch):
     policy, request, _ = controlled_request(tmp_path)
     receipt = request.destination / materialization.RECEIPT_FILENAME
@@ -474,7 +527,8 @@ def test_publication_identity_survives_receipt_read_failure(tmp_path, monkeypatc
     assert receipt.is_file()
 
 
-@pytest.mark.skipif(not LINUX_PUBLICATION, reason="publication requires Linux renameat2")
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
 def test_unknown_publication_state_is_not_reported_as_absent(tmp_path, monkeypatch):
     policy, request, _ = controlled_request(tmp_path)
     real_lstat = os.lstat
@@ -519,6 +573,196 @@ def test_unsupported_platform_fails_without_publication_fallback(
     assert not destination.exists()
 
 
+@pytest.mark.simulated_publication_adapter
+@pytest.mark.parametrize(
+    ("error", "expected_code"),
+    [
+        (errno.EEXIST, "publication_conflict"),
+        (errno.ENOTEMPTY, "publication_conflict"),
+        (errno.EINVAL, "publication_unsupported"),
+        (errno.EXDEV, "publication_unsupported"),
+        (errno.EPERM, "publication_failed"),
+    ],
+)
+def test_simulated_linux_adapter_reports_operation_errno_and_paths(
+    tmp_path, error, expected_code
+):
+    calls = []
+
+    def renameat2(source_dirfd, source, destination_dirfd, destination, flags):
+        calls.append((source_dirfd, source, destination_dirfd, destination, flags))
+        return -1
+
+    with pytest.raises(materialization.MaterializationError) as exc:
+        materialization._publish_linux_noreplace(
+            tmp_path / "staging",
+            tmp_path / "destination",
+            renameat2=renameat2,
+            get_errno=lambda: error,
+        )
+
+    assert exc.value.code == expected_code
+    message = str(exc.value)
+    assert "renameat2(RENAME_NOREPLACE)" in message
+    assert f"{errno.errorcode[error]} ({error}:" in message
+    assert f"staging={tmp_path / 'staging'}" in message
+    assert f"destination={tmp_path / 'destination'}" in message
+    assert len(calls) == 1 and calls[0][4] == 1
+
+
+@pytest.mark.simulated_publication_adapter
+@pytest.mark.parametrize(
+    ("error", "expected_code"),
+    [
+        (errno.EEXIST, "publication_conflict"),
+        (errno.EXDEV, "publication_unsupported"),
+        (errno.EACCES, "publication_failed"),
+    ],
+)
+def test_simulated_macos_adapter_maps_errors_without_fallback(
+    tmp_path, error, expected_code
+):
+    calls = []
+
+    def renamex_np(source, destination, flags):
+        calls.append((source, destination, flags))
+        return -1
+
+    with pytest.raises(materialization.MaterializationError) as exc:
+        materialization._publish_macos_noreplace(
+            tmp_path / "staging-ë",
+            tmp_path / "destination-ë",
+            renamex_np=renamex_np,
+            get_errno=lambda: error,
+        )
+
+    assert exc.value.code == expected_code
+    message = str(exc.value)
+    assert "renamex_np(RENAME_EXCL)" in message
+    assert f"{errno.errorcode[error]} ({error}:" in message
+    assert f"staging={tmp_path / 'staging-ë'}" in message
+    assert f"destination={tmp_path / 'destination-ë'}" in message
+    assert calls == [
+        (
+            os.fsencode(tmp_path / "staging-ë"),
+            os.fsencode(tmp_path / "destination-ë"),
+            0x00000004,
+        )
+    ]
+
+
+@pytest.mark.simulated_publication_adapter
+@pytest.mark.parametrize(
+    ("error", "expected_code"),
+    [
+        (80, "publication_conflict"),
+        (183, "publication_conflict"),
+        (17, "publication_unsupported"),
+        (50, "publication_unsupported"),
+        (32, "publication_failed"),
+    ],
+)
+def test_simulated_windows_adapter_uses_unicode_and_maps_errors(
+    tmp_path, error, expected_code
+):
+    calls = []
+
+    def move_file_ex(source, destination, flags):
+        calls.append((source, destination, flags))
+        return 0
+
+    with pytest.raises(materialization.MaterializationError) as exc:
+        materialization._publish_windows_noreplace(
+            tmp_path / "staging-ë",
+            tmp_path / "destination-ë",
+            move_file_ex=move_file_ex,
+            get_last_error=lambda: error,
+        )
+
+    assert exc.value.code == expected_code
+    message = str(exc.value)
+    assert "MoveFileExW(flags=0)" in message
+    assert f"GetLastError={error}" in message
+    assert f"staging={tmp_path / 'staging-ë'}" in message
+    assert f"destination={tmp_path / 'destination-ë'}" in message
+    if error == 32:
+        assert "ERROR_SHARING_VIOLATION" in message
+    assert calls == [
+        (str(tmp_path / "staging-ë"), str(tmp_path / "destination-ë"), 0)
+    ]
+
+
+@pytest.mark.simulated_publication_adapter
+def test_simulated_windows_existing_directory_maps_access_denied_to_conflict(
+    tmp_path,
+):
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    sentinel = destination / "keep"
+    sentinel.write_text("existing")
+
+    with pytest.raises(materialization.MaterializationError) as exc:
+        materialization._publish_windows_noreplace(
+            tmp_path / "staging",
+            destination,
+            move_file_ex=lambda source, target, flags: 0,
+            get_last_error=lambda: 5,
+        )
+
+    assert exc.value.code == "publication_conflict"
+    assert sentinel.read_text() == "existing"
+
+
+@pytest.mark.simulated_publication_adapter
+def test_simulated_platform_adapters_return_only_after_native_success(tmp_path):
+    mac_calls = []
+    windows_calls = []
+
+    materialization._publish_macos_noreplace(
+        tmp_path / "mac-stage",
+        tmp_path / "mac-destination",
+        renamex_np=lambda source, destination, flags: mac_calls.append(
+            (source, destination, flags)
+        )
+        or 0,
+    )
+    materialization._publish_windows_noreplace(
+        tmp_path / "windows-stage",
+        tmp_path / "windows-destination",
+        move_file_ex=lambda source, destination, flags: windows_calls.append(
+            (source, destination, flags)
+        )
+        or 1,
+    )
+
+    assert mac_calls[0][2] == 0x00000004
+    assert windows_calls[0][2] == 0
+
+
+@pytest.mark.simulated_publication_adapter
+@pytest.mark.parametrize(
+    ("platform", "loader_name", "platform_id"),
+    [
+        ("linux", "_linux_renameat2", "linux_renameat2_noreplace"),
+        ("darwin", "_macos_renamex_np", "macos_renamex_np_exclusive"),
+        ("win32", "_windows_move_file_ex", "windows_movefileexw_noreplace"),
+    ],
+)
+def test_preflight_reports_api_support_without_publication(
+    tmp_path, monkeypatch, platform, loader_name, platform_id
+):
+    calls = []
+    monkeypatch.setattr(materialization.sys, "platform", platform)
+    monkeypatch.setattr(materialization, loader_name, lambda: calls.append(loader_name))
+
+    result = materialization.preflight_drumsep_materialization(tmp_path / "new")
+
+    assert result["outcome"] == "validated"
+    assert result["publication_platform"] == platform_id
+    assert calls == [loader_name]
+    assert not (tmp_path / "new").exists()
+
+
 def test_materialization_cleans_when_platform_is_unsupported(tmp_path, monkeypatch):
     policy, request, _ = controlled_request(tmp_path)
     monkeypatch.setattr(materialization.sys, "platform", "unsupported-os")
@@ -534,13 +778,14 @@ def test_materialization_cleans_when_platform_is_unsupported(tmp_path, monkeypat
     assert sorted(path.name for path in tmp_path.iterdir()) == ["sources"]
 
 
-@pytest.mark.skipif(not LINUX_PUBLICATION, reason="publication requires Linux renameat2")
-def test_destination_appearing_at_publication_is_not_replaced(tmp_path):
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
+@pytest.mark.parametrize("kind", ["file", "directory", "link"])
+def test_destination_appearing_at_publication_is_not_replaced(tmp_path, kind):
     policy, request, _ = controlled_request(tmp_path)
 
     def competing_publication(staging, destination):
-        destination.mkdir()
-        (destination / "competitor.txt").write_text("preserve")
+        _create_destination_object(destination, kind)
         materialization._publish_noreplace(staging, destination)
 
     with pytest.raises(materialization.MaterializationError) as exc:
@@ -549,11 +794,22 @@ def test_destination_appearing_at_publication_is_not_replaced(tmp_path):
         )
 
     assert exc.value.code == "publication_conflict"
-    assert (request.destination / "competitor.txt").read_text() == "preserve"
+    sentinel = (
+        request.destination
+        if kind == "file"
+        else (
+            request.destination.parent / f"{request.destination.name}-link-target"
+            if kind == "link"
+            else request.destination
+        )
+        / "keep.txt"
+    )
+    assert sentinel.read_text() == "existing"
     assert not list(tmp_path.glob(".*.stemwerk-*"))
 
 
-@pytest.mark.skipif(not LINUX_PUBLICATION, reason="publication requires Linux renameat2")
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
 def test_competing_attempt_fails_while_first_owns_lock(tmp_path):
     policy, request, _ = controlled_request(tmp_path)
     copying = threading.Event()
@@ -605,10 +861,13 @@ def _materialize_in_process(policy, request, output, copying=None, release=None)
         output.put(("success", result["destination"], True))
 
 
-@pytest.mark.skipif(not LINUX_PUBLICATION, reason="requires Linux fork and renameat2")
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
 def test_competing_processes_cannot_both_publish(tmp_path):
     policy, request, _ = controlled_request(tmp_path)
-    context = multiprocessing.get_context("fork")
+    context = multiprocessing.get_context(
+        "spawn" if sys.platform in {"darwin", "win32"} else "fork"
+    )
     copying = context.Event()
     release = context.Event()
     output = context.Queue()
@@ -684,7 +943,54 @@ def test_cleanup_inspection_error_is_reported_without_removing_path(
     assert path.read_text() == "owned"
 
 
-@pytest.mark.skipif(not LINUX_PUBLICATION, reason="publication requires Linux renameat2")
+@pytest.mark.simulated_publication_adapter
+def test_cleanup_refuses_reparse_point_even_if_identity_matches(tmp_path, monkeypatch):
+    path = tmp_path / "owned-stage"
+    path.mkdir()
+    path_stat = path.stat()
+    owned = materialization._OwnedPath(
+        path, path_stat.st_dev, path_stat.st_ino, is_directory=True
+    )
+
+    class ReparseStat:
+        st_dev = path_stat.st_dev
+        st_ino = path_stat.st_ino
+        st_mode = path_stat.st_mode
+        st_file_attributes = 0x400
+
+    monkeypatch.setattr(materialization.os, "lstat", lambda candidate: ReparseStat())
+    monkeypatch.setattr(
+        materialization.shutil,
+        "rmtree",
+        lambda candidate: pytest.fail("reparse point must not be a cleanup target"),
+    )
+
+    assert materialization._cleanup_owned(owned) == [str(path)]
+    assert path.is_dir()
+
+
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
+def test_cleanup_preserves_content_substituted_at_owned_path(tmp_path):
+    path = tmp_path / "owned-stage"
+    path.mkdir()
+    path_stat = path.stat()
+    owned = materialization._OwnedPath(
+        path, path_stat.st_dev, path_stat.st_ino, is_directory=True
+    )
+    original = tmp_path / "original-stage"
+    path.rename(original)
+    path.mkdir()
+    sentinel = path / "unrelated"
+    sentinel.write_text("preserve")
+
+    assert materialization._cleanup_owned(owned) == [str(path)]
+    assert sentinel.read_text() == "preserve"
+    assert original.is_dir()
+
+
+@pytest.mark.native_publication
+@pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
 def test_post_publication_cleanup_failure_remains_success_with_receipt(
     tmp_path, monkeypatch
 ):
