@@ -14,10 +14,13 @@ that gap.
 
 from __future__ import annotations
 
+import errno
 import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PROCESS_SCRIPT = ROOT / "scripts" / "reaper" / "audio_separator_process.py"
@@ -36,13 +39,26 @@ def _load_module():
 
 
 class _FakeStemSeparator:
+    seen_inputs = []
+    seen_input_contents = []
+    seen_input_identities = []
+    seen_working_directories = []
+
     def __init__(self, model, device):
         self.model = model
         self.device = device
         self.on_progress = None
         self.runtime_evidence = {}
 
-    def separate(self, _input_path, output_dir, stems=None):
+    def separate(self, input_path, output_dir, stems=None):
+        input_path = Path(input_path)
+        self.seen_inputs.append(input_path)
+        self.seen_working_directories.append(Path.cwd())
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+        self.seen_input_contents.append(input_path.read_bytes())
+        input_stat = input_path.stat()
+        self.seen_input_identities.append((input_stat.st_dev, input_stat.st_ino))
         outputs = {}
         for stem in ("vocals", "drums", "bass", "other"):
             path = Path(output_dir) / f"{stem}.wav"
@@ -51,7 +67,17 @@ class _FakeStemSeparator:
         return SimpleNamespace(stems=outputs, device_used=self.device, elapsed=0.01)
 
 
-def _run_main(monkeypatch, tmp_path, *, model_name, device):
+def _run_main(
+    monkeypatch,
+    tmp_path,
+    *,
+    model_name,
+    device,
+    input_path=None,
+    input_argument=None,
+    output_dir=None,
+    create_input=True,
+):
     module = _load_module()
     monkeypatch.setattr(module, "_setup_reaper_io", lambda _output_dir: (lambda _status: None))
     monkeypatch.setattr(module, "_write_worker_context", lambda _output_dir: None)
@@ -74,23 +100,117 @@ def _run_main(monkeypatch, tmp_path, *, model_name, device):
     monkeypatch.setattr(module, "_apply_mps_experimental_policy", lambda _req, dev, _model: dev)
     monkeypatch.setattr(module, "_enable_torch_weights_only_compat", lambda *_a, **_k: None)
     monkeypatch.setattr(module, "StemSeparator", _FakeStemSeparator)
+    _FakeStemSeparator.seen_inputs.clear()
+    _FakeStemSeparator.seen_input_contents.clear()
+    _FakeStemSeparator.seen_input_identities.clear()
+    _FakeStemSeparator.seen_working_directories.clear()
     monkeypatch.setattr(
         module,
         "_map_reaper_stems_from_result",
         lambda result, _output_root: {k: str(v) for k, v in result.stems.items()},
     )
 
-    input_path = tmp_path / "input.wav"
-    output_dir = tmp_path / "out"
-    input_path.write_bytes(b"RIFF")
+    input_path = input_path or tmp_path / "input.wav"
+    output_dir = output_dir or tmp_path / "out"
+    if create_input:
+        input_path.parent.mkdir(parents=True, exist_ok=True)
+        input_path.write_bytes(b"RIFF")
 
     argv = [
-        "audio_separator_process.py", str(input_path), str(output_dir),
+        "audio_separator_process.py", input_argument or str(input_path), str(output_dir),
         "--model", model_name, "--device", device,
     ]
     monkeypatch.setattr(sys, "argv", argv)
     exit_code = module.main()
     return exit_code
+
+
+def test_relative_input_is_anchored_before_output_working_directory_change(monkeypatch, tmp_path):
+    caller_dir = tmp_path / "caller directory"
+    input_path = caller_dir / "input files" / "töne 测试.wav"
+    output_dir = tmp_path / "separate output directory"
+    caller_dir.mkdir()
+    monkeypatch.chdir(caller_dir)
+
+    exit_code = _run_main(
+        monkeypatch,
+        tmp_path,
+        model_name="htdemucs",
+        device="cpu",
+        input_path=input_path,
+        input_argument=str(input_path.relative_to(caller_dir)),
+        output_dir=output_dir,
+    )
+
+    assert exit_code == 0
+    assert _FakeStemSeparator.seen_inputs == [input_path]
+    assert _FakeStemSeparator.seen_working_directories == [output_dir]
+
+
+def test_relative_input_preserves_symlink_parent_traversal_across_working_directory_change(
+    monkeypatch, tmp_path
+):
+    caller_dir = tmp_path / "caller directory"
+    symlink_target = tmp_path / "symlink target" / "nested directory"
+    intended_input = symlink_target.parent / "selected.wav"
+    lexical_decoy = caller_dir / "selected.wav"
+    output_dir = tmp_path / "separate output directory"
+    caller_dir.mkdir()
+    symlink_target.mkdir(parents=True)
+    intended_input.write_bytes(b"selected through symlink parent")
+    lexical_decoy.write_bytes(b"lexically collapsed decoy")
+    try:
+        (caller_dir / "input link").symlink_to(symlink_target, target_is_directory=True)
+    except OSError as exc:
+        unavailable_errors = {
+            errno.EACCES,
+            errno.ENOSYS,
+            errno.EPERM,
+            getattr(errno, "EOPNOTSUPP", -1),
+        }
+        if exc.errno not in unavailable_errors and getattr(exc, "winerror", None) != 1314:
+            raise
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+    input_argument = "input link/../selected.wav"
+    monkeypatch.chdir(caller_dir)
+    selected_before = Path(input_argument).stat()
+
+    exit_code = _run_main(
+        monkeypatch,
+        tmp_path,
+        model_name="htdemucs",
+        device="cpu",
+        input_path=intended_input,
+        input_argument=input_argument,
+        output_dir=output_dir,
+        create_input=False,
+    )
+
+    assert exit_code == 0
+    assert _FakeStemSeparator.seen_input_contents == [b"selected through symlink parent"]
+    assert _FakeStemSeparator.seen_input_identities == [(selected_before.st_dev, selected_before.st_ino)]
+    assert _FakeStemSeparator.seen_working_directories == [output_dir]
+
+
+def test_missing_relative_input_reports_the_original_caller_argument(monkeypatch, tmp_path, capsys):
+    caller_dir = tmp_path / "caller directory"
+    caller_dir.mkdir()
+    monkeypatch.chdir(caller_dir)
+
+    exit_code = _run_main(
+        monkeypatch,
+        tmp_path,
+        model_name="htdemucs",
+        device="cpu",
+        input_path=caller_dir / "missing files" / "not here.wav",
+        input_argument="missing files/not here.wav",
+        output_dir=tmp_path / "separate output directory",
+        create_input=False,
+    )
+
+    assert exit_code == 1
+    assert "ERROR: Input file not found: missing files/not here.wav" in capsys.readouterr().err
+    assert _FakeStemSeparator.seen_inputs == []
 
 
 def test_catalogued_model_runs_and_emits_agreeing_contract_diagnostics(monkeypatch, tmp_path, capsys):

@@ -4032,13 +4032,17 @@ def main():
         parser.print_help()
         return 1
 
+    input_argument = args.input
+    if not os.path.isabs(args.input):
+        args.input = os.path.join(os.getcwd(), args.input)
+
     _require_core()
     if stemwerk_core_file:
         print(f"STEMWERK_DIAG stemwerk_core_file={stemwerk_core_file}", file=sys.stderr)
     _emit_source_contamination_diagnostics()
 
     if not os.path.exists(args.input):
-        print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
+        print(f"ERROR: Input file not found: {input_argument}", file=sys.stderr)
         return 1
 
     benchmark_sampler = None
