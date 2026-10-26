@@ -102,6 +102,23 @@ the delay, capped at 30 seconds. Wrong size/hash, TLS failure, rejected
 redirects, other HTTP statuses and local validation/write failures are
 terminal and never select the fallback.
 
+A transport failure is classified in one place, in this order. If the attempt
+watchdog has fired, the failure is the transient "bounded deadline" outcome,
+whatever exception type surfaced: the exception raised when the watchdog shuts
+a socket down depends on the TLS library (`RemoteDisconnected` with OpenSSL
+3.0.x, `BrokenPipeError` with OpenSSL 3.5.x, or an SSL EOF error), so the type
+is never used to decide whether a deadline was reached. Otherwise a TLS failure
+is terminal (`tls_failed`); a connection closed without any response
+(`RemoteDisconnected`) is transient and retryable; any other malformed HTTP
+(an invalid status line, an over-long line, other `http.client` protocol
+errors) is terminal (`http_rejected`); and socket and timeout errors are
+transient. The same deadline precedence applies to TLS errors while the body is
+read. A transient failure is retried within the three-attempt budget and, once
+the attempts are exhausted, ends as `source_unavailable` (or
+`deadline_exceeded` when the retry wait would pass the asset budget). Tests
+inject the exact exception at the status-line and body phases with a controlled
+watchdog, so the rules are verified independently of the TLS library version.
+
 DNS resolution runs in a daemon worker that receives only a hostname and port;
 the acquisition thread stops waiting at the attempt deadline. A resolver call
 that cannot be cancelled by the operating system may finish later, but it has

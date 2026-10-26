@@ -931,6 +931,233 @@ def test_transport_rejects_truncated_excess_length_and_hash_failures(
     assert exc.value.code == code
 
 
+class _ManualTimer:
+    """Watchdog timer that fires only when a test says the deadline was reached."""
+
+    def __init__(self, callback):
+        self.callback = callback
+        self.daemon = False
+
+    def start(self):
+        return None
+
+    def cancel(self):
+        return None
+
+    def join(self, timeout=None):
+        return None
+
+    def fire(self):
+        self.callback()
+
+
+class _ManualTimers:
+    def __init__(self):
+        self.timers = []
+
+    def __call__(self, seconds, callback):
+        timer = _ManualTimer(callback)
+        self.timers.append(timer)
+        return timer
+
+
+class _FailingStatusConnection(FakeConnection):
+    """Raises ``error`` while waiting for the status line."""
+
+    def __init__(self, error, timers, deadline_reached):
+        super().__init__(FakeResponse())
+        self.error = error
+        self.timers = timers
+        self.deadline_reached = deadline_reached
+
+    def getresponse(self):
+        if self.deadline_reached:
+            self.timers.timers[-1].fire()
+        raise self.error
+
+
+class _FailingBodyResponse(FakeResponse):
+    """Raises ``error`` on the first body read."""
+
+    def __init__(self, error, timers, deadline_reached, content):
+        super().__init__(
+            status=200, body=content, headers={"Content-Length": str(len(content))}
+        )
+        self.error = error
+        self.timers = timers
+        self.deadline_reached = deadline_reached
+
+    def read(self, amount=-1):
+        if self.deadline_reached:
+            self.timers.timers[-1].fire()
+        raise self.error
+
+
+class _ScriptedConnectionFactory:
+    """One item per connection: an exception to raise at getresponse or a response."""
+
+    def __init__(self, items, timers):
+        self.items = deque(items)
+        self.timers = timers
+        self.connections = 0
+
+    def __call__(self, host, port, timeout, context):
+        self.connections += 1
+        item = self.items.popleft()
+        if isinstance(item, BaseException):
+            return _FailingStatusConnection(item, self.timers, False)
+        return FakeConnection(item)
+
+
+DEADLINE = "bounded deadline"
+CLOSED = "closed the connection without a response"
+STATUS_PHASE_CASES = [
+    pytest.param(http.client.RemoteDisconnected("eof"), True, "deadline", id="remote-disconnected-reached"),
+    pytest.param(http.client.RemoteDisconnected("eof"), False, "closed", id="remote-disconnected"),
+    pytest.param(BrokenPipeError(32, "Broken pipe"), True, "deadline", id="broken-pipe-reached"),
+    pytest.param(ssl.SSLEOFError(8, "EOF occurred"), True, "deadline", id="ssl-eof-reached"),
+    pytest.param(ssl.SSLError("handshake"), True, "deadline", id="ssl-error-reached"),
+    pytest.param(ssl.SSLError("handshake"), False, "tls_failed", id="ssl-error"),
+    pytest.param(http.client.BadStatusLine("garbage"), False, "http_rejected", id="bad-status-line"),
+    pytest.param(http.client.BadStatusLine("garbage"), True, "deadline", id="bad-status-line-reached"),
+    pytest.param(http.client.LineTooLong("status line"), False, "http_rejected", id="line-too-long"),
+    pytest.param(http.client.LineTooLong("status line"), True, "deadline", id="line-too-long-reached"),
+    pytest.param(ConnectionResetError(104, "reset"), False, "transport", id="connection-reset"),
+    pytest.param(ConnectionResetError(104, "reset"), True, "deadline", id="connection-reset-reached"),
+]
+
+
+@pytest.mark.parametrize(("error", "deadline_reached", "expected"), STATUS_PHASE_CASES)
+def test_status_phase_failures_are_classified_by_deadline_then_type(
+    tmp_path, error, deadline_reached, expected
+):
+    timers = _ManualTimers()
+    connection = _FailingStatusConnection(error, timers, deadline_reached)
+    clock = FakeClock()
+    transport = acquisition._HttpsTransport(
+        connection_factory=lambda *args: connection,
+        timer_factory=timers,
+        clock=clock,
+    )
+    source, asset = transport_asset()
+    target = tmp_path / "asset.part"
+    target.touch()
+
+    with pytest.raises(
+        (acquisition._AttemptFailure, acquisition.AcquisitionError)
+    ) as exc:
+        transport.download(source, asset, target, deadline=clock() + 20)
+
+    outcome = exc.value
+    assert "initial-secret" not in str(outcome)
+    if expected in {"deadline", "closed", "transport"}:
+        assert isinstance(outcome, acquisition._AttemptFailure)
+        assert outcome.kind == "transient"
+        assert {
+            "deadline": DEADLINE,
+            "closed": CLOSED,
+            "transport": "transport failed",
+        }[expected] in str(outcome)
+    else:
+        assert isinstance(outcome, acquisition.AcquisitionError)
+        assert outcome.code == expected
+
+
+@pytest.mark.parametrize("deadline_reached", [True, False])
+def test_tls_failure_while_reading_body_follows_the_deadline(tmp_path, deadline_reached):
+    content = b"verified"
+    timers = _ManualTimers()
+    response = _FailingBodyResponse(
+        ssl.SSLEOFError(8, "EOF occurred"), timers, deadline_reached, content
+    )
+    clock = FakeClock()
+    transport = acquisition._HttpsTransport(
+        connection_factory=lambda *args: FakeConnection(response),
+        timer_factory=timers,
+        clock=clock,
+    )
+    source, asset = transport_asset(content)
+    target = tmp_path / "asset.part"
+    target.touch()
+
+    with pytest.raises(
+        (acquisition._AttemptFailure, acquisition.AcquisitionError)
+    ) as exc:
+        transport.download(source, asset, target, deadline=clock() + 20)
+
+    if deadline_reached:
+        assert isinstance(exc.value, acquisition._AttemptFailure)
+        assert exc.value.kind == "transient"
+        assert DEADLINE in str(exc.value)
+    else:
+        assert isinstance(exc.value, acquisition.AcquisitionError)
+        assert exc.value.code == "tls_failed"
+
+
+def test_closed_without_response_is_retried_and_the_bytes_are_verified(tmp_path):
+    policy, contents = controlled_policy()
+    timers = _ManualTimers()
+    ckpt = contents["controlled-model.ckpt"]
+    yaml_bytes = contents["controlled-model.yaml"]
+    factory = _ScriptedConnectionFactory(
+        [
+            http.client.RemoteDisconnected("closed"),
+            FakeResponse(status=200, body=ckpt, headers={"Content-Length": str(len(ckpt))}),
+            FakeResponse(
+                status=200,
+                body=yaml_bytes,
+                headers={"Content-Length": str(len(yaml_bytes))},
+            ),
+        ],
+        timers,
+    )
+    clock = FakeClock()
+    transport = acquisition._HttpsTransport(
+        connection_factory=factory, timer_factory=timers, clock=clock
+    )
+
+    result = acquisition._acquire_asset_set(
+        acquisition.AcquisitionRequest(tmp_path / "acquired"),
+        policy,
+        transport=transport,
+        clock=clock,
+        sleeper=clock.sleep,
+    )
+
+    assert result["outcome"] == "success"
+    assert [asset["attempts"] for asset in result["assets"]] == [2, 1]
+    assert factory.connections == 3
+    assert clock.sleeps  # the retry waited before trying again
+    for name, content in contents.items():
+        assert Path(result["sources"][name]).read_bytes() == content
+
+
+def test_repeated_closed_without_response_exhausts_into_source_unavailable(tmp_path):
+    policy, _ = controlled_policy()
+    timers = _ManualTimers()
+    factory = _ScriptedConnectionFactory(
+        [http.client.RemoteDisconnected("closed")] * 3, timers
+    )
+    clock = FakeClock()
+    transport = acquisition._HttpsTransport(
+        connection_factory=factory, timer_factory=timers, clock=clock
+    )
+
+    with pytest.raises(acquisition.AcquisitionError) as exc:
+        acquisition._acquire_asset_set(
+            acquisition.AcquisitionRequest(tmp_path / "acquired"),
+            policy,
+            transport=transport,
+            clock=clock,
+            sleeper=clock.sleep,
+        )
+
+    assert exc.value.code == "source_unavailable"
+    assert CLOSED in str(exc.value)
+    assert factory.connections == 3
+    assert not (tmp_path / "acquired").exists()
+
+
 def localhost_transport_asset(content=b"verified", path="/asset"):
     source = acquisition._SourceSpec(
         source_id="localhost",

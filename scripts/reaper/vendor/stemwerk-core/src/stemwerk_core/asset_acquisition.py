@@ -433,6 +433,40 @@ def _response_socket(response: Any) -> Any:
     return getattr(raw, "_sock", None)
 
 
+def _classify_attempt_exception(
+    exc: BaseException, deadline_reached: bool, url: str
+) -> Exception:
+    """Map one I/O failure of a source attempt to its single outcome.
+
+    The deadline watchdog stops a stalled attempt by shutting its socket down,
+    and the exception type that surfaces for that varies with the TLS library
+    (RemoteDisconnected, BrokenPipeError, an SSL EOF error, ...). A reached
+    deadline therefore wins over the exception type.
+    """
+
+    if deadline_reached:
+        return _AttemptFailure(
+            "transient", "source attempt exceeded its bounded deadline"
+        )
+    if isinstance(exc, (ssl.CertificateError, ssl.SSLError)):
+        return AcquisitionError(
+            "tls_failed", f"TLS validation failed for {_redacted_url(url)}"
+        )
+    if isinstance(exc, http.client.RemoteDisconnected):
+        return _AttemptFailure(
+            "transient",
+            f"server closed the connection without a response at {_redacted_url(url)}",
+        )
+    if isinstance(exc, http.client.HTTPException):
+        return AcquisitionError(
+            "http_rejected", f"source returned malformed HTTP at {_redacted_url(url)}"
+        )
+    return _AttemptFailure(
+        "transient",
+        f"transport failed for {_redacted_url(url)}: {type(exc).__name__}",
+    )
+
+
 class _DeadlineWatchdog:
     """Close both connection-owned and response-owned sockets at a deadline."""
 
@@ -672,25 +706,19 @@ class _HttpsTransport:
                 )
             except (_AttemptFailure, AcquisitionError):
                 raise
-            except (ssl.CertificateError, ssl.SSLError):
-                raise AcquisitionError(
-                    "tls_failed",
-                    f"TLS validation failed for {_redacted_url(current_url)}",
-                ) from None
-            except http.client.HTTPException:
-                raise AcquisitionError(
-                    "http_rejected",
-                    f"source returned malformed HTTP at {_redacted_url(current_url)}",
-                ) from None
-            except (socket.timeout, TimeoutError, ConnectionError, OSError) as exc:
-                if watchdog is not None and watchdog.reached.is_set():
-                    raise _AttemptFailure(
-                        "transient", "source attempt exceeded its bounded deadline"
-                    ) from None
-                raise _AttemptFailure(
-                    "transient",
-                    f"transport failed for {_redacted_url(current_url)}: "
-                    f"{type(exc).__name__}",
+            except (
+                ssl.CertificateError,
+                ssl.SSLError,
+                http.client.HTTPException,
+                socket.timeout,
+                TimeoutError,
+                ConnectionError,
+                OSError,
+            ) as exc:
+                raise _classify_attempt_exception(
+                    exc,
+                    watchdog is not None and watchdog.reached.is_set(),
+                    current_url,
                 ) from None
             finally:
                 if watchdog is not None:
@@ -756,6 +784,11 @@ class _HttpsTransport:
                     reader = getattr(response, "read1", response.read)
                     chunk = reader(max(1, amount))
                 except (ssl.CertificateError, ssl.SSLError):
+                    if deadline_reached.is_set():
+                        raise _AttemptFailure(
+                            "transient",
+                            "source attempt exceeded its bounded deadline",
+                        ) from None
                     raise AcquisitionError(
                         "tls_failed",
                         f"TLS validation failed while reading {_redacted_url(current_url)}",
