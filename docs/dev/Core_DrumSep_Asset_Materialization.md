@@ -105,7 +105,8 @@ ancestor-stability assumption and is not defended against.
 
 Platform status:
 
-- Linux: exercised by the native publication tests.
+- Linux: exercised by the native publication tests, in the portable CI
+  selection and in the native publication job under the guard described below.
 - macOS and Windows: implemented, not natively qualified. Native CI jobs are
   configured for the macOS and Windows runner filesystems, and simulated
   adapter tests do not qualify a platform. No result is generalized to every
@@ -171,10 +172,22 @@ receipt consistency, corrupt/missing/unreadable sources, invalid paths,
 symlinks/reparse points, existing destinations, aliases, interruption,
 incomplete copies, publication failure, post-publication errors and
 interrupts, competing processes, and incomplete cleanup reporting. Tests that
-require Linux `renameat2`, POSIX FIFO support, unprivileged POSIX permission
-behavior, or permission to create Windows symbolic links skip explicitly when
-that capability is unavailable. Simulated adapter tests are marked separately
-from native publication tests and do not qualify a platform.
+require POSIX FIFO support or unprivileged POSIX permission behavior skip
+explicitly when that capability is unavailable, as do the symbolic-link
+variants when the host cannot create symbolic links. Simulated adapter tests
+are marked separately from native publication tests and do not qualify a
+platform.
+
+The `native_publication` selection runs in the `asset-publication-native` CI
+job on Linux, macOS and Windows. Its junit guard fails the job unless at least
+`MIN_NATIVE_PUBLICATION_TESTS` tests ran (the current selection size, set once
+in the job environment) and none were skipped, errored or failed. On native CI
+and for native qualification a skip therefore fails the run instead of passing
+silently. Windows native qualification needs permission to create symbolic
+links (an administrator account or Developer Mode), because the symbolic-link
+destination cases must execute rather than skip. The full portable selection
+keeps legitimate skips; it only reports them (`-rs`). The guard does not make
+macOS or Windows qualified until those jobs have actually run.
 
 ## Native API references
 

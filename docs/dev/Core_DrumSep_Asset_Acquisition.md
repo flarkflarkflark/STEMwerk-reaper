@@ -141,6 +141,13 @@ or process targeting the same destination fails rather than sharing or
 replacing it. An exclusively created private staging directory and partial
 files hold incoming bytes. There is no resume support or persistent cache.
 
+Every descriptor-level open (partial-file creation, transfer writes,
+verification reads and the final copy) requests `O_BINARY` where the platform
+defines it, so Windows does not translate line endings or treat `0x1A` as end
+of file; it is a no-op on Linux and macOS. A regression test records the flags
+of each open with a sentinel bit. It runs on Linux and does not qualify the
+Windows behavior natively.
+
 Both downloaded files are re-opened and verified from storage. Final files are
 created with exclusive no-replace opens and verified again before their paths
 are returned. An error after one successful transfer cannot return a partial

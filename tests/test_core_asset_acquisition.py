@@ -173,8 +173,8 @@ class ScriptedTransport:
 
 def controlled_policy(*, total_timeout: float = 30.0):
     contents = {
-        "controlled-model.ckpt": b"controlled checkpoint\n",
-        "controlled-model.yaml": b"controlled config\n",
+        "controlled-model.ckpt": b"controlled checkpoint\r\nbare-lf\n\x1a\x00tail\n",
+        "controlled-model.yaml": b"controlled config\r\nbare-lf\n\x1a\x00tail\n",
     }
     primary = acquisition._SourceSpec(
         source_id="primary",
@@ -1474,6 +1474,80 @@ def test_real_https_unavailable_primary_uses_one_shared_fallback_attempt(
     assert waits == []
     assert result["assets"][0]["attempts"] == 2
     assert result["assets"][0]["source_id"] == "fallback"
+
+
+def test_every_descriptor_open_requests_binary_mode(
+    tmp_path, local_https_server, monkeypatch
+):
+    policy, contents = controlled_policy()
+
+    class AssetHandler(QuietHandler):
+        def do_GET(self):
+            body = contents.get(self.path.lstrip("/"))
+            if body is None:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+
+    factory, context, _ = local_https_server(AssetHandler)
+    local_policy = acquisition._AcquisitionPolicy(
+        "tests.local",
+        tuple(
+            acquisition._AssetSpec(
+                name=asset.name,
+                sha256=asset.sha256,
+                size=asset.size,
+                sources=(
+                    acquisition._SourceSpec(
+                        source_id="local",
+                        url=f"https://localhost/{asset.name}",
+                        redirect_hosts=("localhost",),
+                    ),
+                ),
+                attempt_timeout=2,
+                total_timeout=3,
+            )
+            for asset in policy.assets
+        ),
+    )
+    sentinel = 1 << 30
+    real_binary = getattr(os, "O_BINARY", 0)
+    real_open = os.open
+    recorded = []
+
+    def recording_open(path, flags, *args, **kwargs):
+        recorded.append((Path(path).name, flags))
+        return real_open(path, (flags & ~sentinel) | real_binary, *args, **kwargs)
+
+    monkeypatch.setattr(os, "O_BINARY", sentinel, raising=False)
+    monkeypatch.setattr(os, "open", recording_open)
+
+    result = acquisition._acquire_asset_set(
+        acquisition.AcquisitionRequest(tmp_path / "acquired"),
+        local_policy,
+        transport=acquisition._HttpsTransport(
+            connection_factory=factory, ssl_context=context
+        ),
+    )
+
+    # Per asset: partial create, HTTPS body write, verify read, staged-source
+    # read and final-target create all go through os.open.
+    creates = [item for item in recorded if item[1] & os.O_CREAT]
+    writes = [
+        item
+        for item in recorded
+        if item[1] & os.O_WRONLY and not item[1] & os.O_CREAT
+    ]
+    reads = [item for item in recorded if not item[1] & os.O_WRONLY]
+    assert len(creates) >= 4 and len(writes) >= 2 and len(reads) >= 4
+    assert [name for name, flags in recorded if not flags & sentinel] == []
+    for name, content in contents.items():
+        assert Path(result["sources"][name]).read_bytes() == content
 
 
 @pytest.mark.skipif(

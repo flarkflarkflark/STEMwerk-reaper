@@ -68,7 +68,7 @@ jobs:
         # require this repo's bootstrapped managed runtime and actual
         # hardware and stay runnable separately, outside portable CI.
         run: >-
-          python -m pytest -q -m portable
+          python -m pytest -q -rs -m portable
           tests/test_stemwerk_runtime_diagnostics_harness.py
           tests/test_core_drumsep_runtime.py
           tests/test_core_readiness.py
@@ -99,10 +99,15 @@ jobs:
   asset-publication-native:
     name: Asset publication (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      # Number of tests selected by -m native_publication in the two files
+      # below. Raise it when native publication tests are added; the guard
+      # fails if fewer ran, so a deselected or removed test cannot pass.
+      MIN_NATIVE_PUBLICATION_TESTS: "18"
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -124,10 +129,11 @@ jobs:
           tests/test_core_asset_preparation.py
 
       - name: Require that native publication tests really ran
-        # A skip must not look like a pass: fail unless tests ran and none
-        # were skipped, errored or failed.
+        # A skip must not look like a pass: fail unless at least the minimum
+        # number of tests ran and none were skipped, errored or failed.
         shell: python
         run: |
+          import os
           import sys
           import xml.etree.ElementTree as ET
 
@@ -137,9 +143,10 @@ jobs:
               key: sum(int(suite.get(key, 0)) for suite in suites)
               for key in ("tests", "skipped", "errors", "failures")
           }
-          print(totals)
+          minimum = max(int(os.environ["MIN_NATIVE_PUBLICATION_TESTS"]), 1)
+          print(totals, "minimum", minimum)
           if (
-              totals["tests"] <= 0
+              totals["tests"] < minimum
               or totals["skipped"]
               or totals["errors"]
               or totals["failures"]

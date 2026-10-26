@@ -271,6 +271,12 @@ def _redacted_url(url: str) -> str:
     return f"{parsed.scheme or '<invalid-scheme>'}://{authority}{path}{suffix}"
 
 
+def _binary_flag() -> int:
+    """Windows opens descriptors in text mode unless O_BINARY is requested."""
+
+    return getattr(os, "O_BINARY", 0)
+
+
 def _remaining(deadline: float, clock: Callable[[], float]) -> float:
     value = deadline - clock()
     if value <= 0:
@@ -709,6 +715,7 @@ class _HttpsTransport:
         received = 0
         flags = (
             os.O_WRONLY
+            | _binary_flag()
             | getattr(os, "O_CLOEXEC", 0)
             | getattr(os, "O_NOFOLLOW", 0)
             | getattr(os, "O_NONBLOCK", 0)
@@ -959,6 +966,7 @@ def _verify_acquired_file(
     try:
         flags = (
             os.O_RDONLY
+            | _binary_flag()
             | getattr(os, "O_CLOEXEC", 0)
             | getattr(os, "O_NOFOLLOW", 0)
             | getattr(os, "O_NONBLOCK", 0)
@@ -1012,12 +1020,19 @@ def _copy_to_final(
 ) -> _OwnedPath:
     source_handle = None
     target_handle = None
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | _binary_flag()
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     try:
         try:
             source_handle = os.open(
                 source_owned.path,
                 os.O_RDONLY
+                | _binary_flag()
                 | getattr(os, "O_CLOEXEC", 0)
                 | getattr(os, "O_NOFOLLOW", 0)
                 | getattr(os, "O_NONBLOCK", 0),
@@ -1092,7 +1107,11 @@ def _acquire_one(
     try:
         handle = os.open(
             partial,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | _binary_flag()
+            | getattr(os, "O_CLOEXEC", 0),
             0o600,
         )
         os.close(handle)
