@@ -100,10 +100,10 @@ jobs:
     name: Asset publication (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     env:
-      # Number of tests selected by -m native_publication in the two files
+      # Number of tests selected by -m native_publication in the three files
       # below. Raise it when native publication tests are added; the guard
       # fails if fewer ran, so a deselected or removed test cannot pass.
-      MIN_NATIVE_PUBLICATION_TESTS: "18"
+      MIN_NATIVE_PUBLICATION_TESTS: "25"
     strategy:
       fail-fast: false
       matrix:
@@ -127,6 +127,7 @@ jobs:
           --junitxml=native-publication-junit.xml
           tests/test_core_asset_materialization.py
           tests/test_core_asset_preparation.py
+          tests/test_core_asset_acquisition.py
 
       - name: Require that native publication tests really ran
         # A skip must not look like a pass: fail unless at least the minimum

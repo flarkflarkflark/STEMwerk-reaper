@@ -1476,6 +1476,7 @@ def test_real_https_unavailable_primary_uses_one_shared_fallback_attempt(
     assert result["assets"][0]["source_id"] == "fallback"
 
 
+@pytest.mark.native_publication
 def test_every_descriptor_open_requests_binary_mode(
     tmp_path, local_https_server, monkeypatch
 ):
@@ -1550,10 +1551,7 @@ def test_every_descriptor_open_requests_binary_mode(
         assert Path(result["sources"][name]).read_bytes() == content
 
 
-@pytest.mark.skipif(
-    not sys.platform.startswith("linux"),
-    reason="materializer publication requires Linux renameat2",
-)
+@pytest.mark.native_publication
 def test_acquired_mapping_feeds_existing_materializer(tmp_path):
     policy, contents = controlled_policy()
     acquired = acquire(

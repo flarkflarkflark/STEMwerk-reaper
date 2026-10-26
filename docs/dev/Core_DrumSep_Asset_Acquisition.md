@@ -145,8 +145,14 @@ Every descriptor-level open (partial-file creation, transfer writes,
 verification reads and the final copy) requests `O_BINARY` where the platform
 defines it, so Windows does not translate line endings or treat `0x1A` as end
 of file; it is a no-op on Linux and macOS. A regression test records the flags
-of each open with a sentinel bit. It runs on Linux and does not qualify the
-Windows behavior natively.
+of each open with a sentinel bit. The binary-mode test and the
+acquisition-to-materializer test are part of the `native_publication` CI
+selection, so the macOS and Windows jobs will exercise them; until those jobs
+have run, the Windows behavior is not natively qualified.
+
+Acquisition's destination check rejects symbolic links only. Windows junctions
+and other reparse points on the destination path are rejected by the
+materializer but not by acquisition, and no acquisition test covers them.
 
 Both downloaded files are re-opened and verified from storage. Final files are
 created with exclusive no-replace opens and verified again before their paths

@@ -173,21 +173,38 @@ symlinks/reparse points, existing destinations, aliases, interruption,
 incomplete copies, publication failure, post-publication errors and
 interrupts, competing processes, and incomplete cleanup reporting. Tests that
 require POSIX FIFO support or unprivileged POSIX permission behavior skip
-explicitly when that capability is unavailable, as do the symbolic-link
-variants when the host cannot create symbolic links. Simulated adapter tests
-are marked separately from native publication tests and do not qualify a
-platform.
+explicitly when that capability is unavailable. Simulated adapter tests are
+marked separately from native publication tests and do not qualify a platform.
+
+Link and reparse-point rejection has real-link tests in addition to the mocked
+reparse-point cleanup test. A shared test helper creates a directory junction on
+Windows (`_winapi.CreateJunction`, no fallback, with an assertion that the result
+is a reparse point) and a directory symlink elsewhere, so these tests need no
+symlink privilege and exist unchanged on every OS. Covered roles: a
+pre-existing directory link at the destination itself, a directory link as the
+destination parent, a directory link as a deeper destination ancestor, a
+directory link as a source ancestor, a directory link substituted at an owned
+cleanup path, and a directory link substituted for the staging directory during
+a failed operation. Each asserts the documented error or cleanup result and
+that the link target's content is untouched. The Windows junction branch of the
+helper cannot run on Linux and is exercised only by the native Windows job.
 
 The `native_publication` selection runs in the `asset-publication-native` CI
-job on Linux, macOS and Windows. Its junit guard fails the job unless at least
-`MIN_NATIVE_PUBLICATION_TESTS` tests ran (the current selection size, set once
-in the job environment) and none were skipped, errored or failed. On native CI
-and for native qualification a skip therefore fails the run instead of passing
-silently. Windows native qualification needs permission to create symbolic
-links (an administrator account or Developer Mode), because the symbolic-link
-destination cases must execute rather than skip. The full portable selection
-keeps legitimate skips; it only reports them (`-rs`). The guard does not make
-macOS or Windows qualified until those jobs have actually run.
+job on Linux, macOS and Windows, over the materialization, preparation and
+acquisition test files (acquisition contributes its binary-mode and
+acquisition-to-materializer tests; its fixture uses only the standard library
+and an embedded localhost certificate). Its junit guard fails the job unless at
+least `MIN_NATIVE_PUBLICATION_TESTS` tests ran (the current selection size, set
+once in the job environment) and none were skipped, errored or failed. On
+native CI and for native qualification a skip therefore fails the run instead
+of passing silently. The selection contains no file-symlink test and needs no
+symlink privilege. Three file-symlink tests remain outside it, because Windows
+has no unprivileged file-level link: the materializer source-symlink test
+(skipped on Windows) and two acquisition substitution tests (partial file and
+staged source). They need symlink-creation permission (an administrator
+account or Developer Mode) if they are ever run on Windows. The full portable
+selection keeps legitimate skips; it only reports them (`-rs`). The guard does
+not make macOS or Windows qualified until those jobs have actually run.
 
 ## Native API references
 

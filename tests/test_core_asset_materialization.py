@@ -8,6 +8,7 @@ import multiprocessing
 import os
 from pathlib import Path
 import shutil
+import stat
 import sys
 import threading
 import uuid
@@ -52,6 +53,38 @@ def controlled_request(tmp_path: Path):
         destination=tmp_path / "published-assets",
     )
     return policy, request, contents
+
+
+def make_directory_link(link: Path, target: Path) -> None:
+    """Create a directory link at ``link`` pointing to the existing ``target``.
+
+    Windows gets a directory junction through ``_winapi.CreateJunction``; every
+    other platform gets a directory symlink. There is no fallback between
+    mechanisms: a failure to create the link, or a result of the wrong type,
+    fails the calling test. ``_winapi.CreateJunction`` was chosen over
+    ``cmd /c mklink /J`` because it needs no subprocess or shell quoting and no
+    symlink privilege, and CPython's own test suite creates junctions with it.
+    """
+
+    assert target.is_dir(), f"link target must be an existing directory: {target}"
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+        attributes = os.lstat(link).st_file_attributes
+        assert attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT, (
+            f"expected a reparse point at {link}"
+        )
+    else:
+        link.symlink_to(target, target_is_directory=True)
+        assert link.is_symlink(), f"expected a symbolic link at {link}"
+
+
+def is_directory_link(path: Path) -> bool:
+    attributes = getattr(os.lstat(path), "st_file_attributes", None)
+    if sys.platform == "win32":
+        return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    return path.is_symlink()
 
 
 @pytest.mark.native_publication
@@ -227,10 +260,7 @@ def _create_destination_object(destination: Path, kind: str) -> Path:
     marker = target / "keep.txt"
     marker.write_text("existing")
     if kind == "link":
-        try:
-            destination.symlink_to(target, target_is_directory=True)
-        except OSError as exc:
-            pytest.skip(f"directory symlink creation unavailable: {exc}")
+        make_directory_link(destination, target)
     return marker
 
 
@@ -276,6 +306,9 @@ def test_rejects_relative_or_traversing_paths(tmp_path, field, value):
 
 @pytest.mark.skipif(os.name == "nt", reason="requires unprivileged symlink creation")
 def test_rejects_source_and_destination_symlink_redirection(tmp_path):
+    # File symlink: no unprivileged equivalent exists on Windows, so this case
+    # keeps its platform condition. The directory-link half of this test now
+    # lives in test_rejects_destination_parent_directory_link_redirection.
     policy, request, _ = controlled_request(tmp_path)
     name = policy.assets[0][0]
     source_link = tmp_path / "source-link"
@@ -287,10 +320,14 @@ def test_rejects_source_and_destination_symlink_redirection(tmp_path):
         )
     assert exc.value.code == "symlink_not_allowed"
 
+
+@pytest.mark.native_publication
+def test_rejects_destination_parent_directory_link_redirection(tmp_path):
+    policy, request, _ = controlled_request(tmp_path)
     real_parent = tmp_path / "real-parent"
     real_parent.mkdir()
     parent_link = tmp_path / "parent-link"
-    parent_link.symlink_to(real_parent, target_is_directory=True)
+    make_directory_link(parent_link, real_parent)
     with pytest.raises(materialization.MaterializationError) as exc:
         materialization._materialize_asset_set(
             materialization.MaterializationRequest(
@@ -299,6 +336,47 @@ def test_rejects_source_and_destination_symlink_redirection(tmp_path):
             policy,
         )
     assert exc.value.code == "symlink_not_allowed"
+    assert list(real_parent.iterdir()) == []
+    assert is_directory_link(parent_link)
+
+
+@pytest.mark.native_publication
+def test_rejects_deeper_destination_ancestor_directory_link(tmp_path):
+    policy, request, _ = controlled_request(tmp_path)
+    real_root = tmp_path / "real-root"
+    (real_root / "child").mkdir(parents=True)
+    root_link = tmp_path / "root-link"
+    make_directory_link(root_link, real_root)
+    with pytest.raises(materialization.MaterializationError) as exc:
+        materialization._materialize_asset_set(
+            materialization.MaterializationRequest(
+                request.sources, root_link / "child" / "destination"
+            ),
+            policy,
+        )
+    assert exc.value.code == "symlink_not_allowed"
+    assert list((real_root / "child").iterdir()) == []
+    assert is_directory_link(root_link)
+
+
+@pytest.mark.native_publication
+def test_rejects_source_ancestor_directory_link(tmp_path):
+    policy, request, contents = controlled_request(tmp_path)
+    source_dir = tmp_path / "sources"
+    source_link = tmp_path / "sources-link"
+    make_directory_link(source_link, source_dir)
+    sources = {
+        name: source_link / Path(path).name for name, path in request.sources.items()
+    }
+    with pytest.raises(materialization.MaterializationError) as exc:
+        materialization._materialize_asset_set(
+            materialization.MaterializationRequest(sources, request.destination),
+            policy,
+        )
+    assert exc.value.code == "symlink_not_allowed"
+    assert not request.destination.exists()
+    for name, expected in contents.items():
+        assert (source_dir / name).read_bytes() == expected
 
 
 def test_rejects_source_destination_alias_and_duplicate_source_inode(tmp_path):
@@ -967,6 +1045,57 @@ def test_cleanup_refuses_reparse_point_even_if_identity_matches(tmp_path, monkey
 
     assert materialization._cleanup_owned(owned) == [str(path)]
     assert path.is_dir()
+
+
+@pytest.mark.native_publication
+def test_cleanup_does_not_follow_directory_link_at_owned_path(tmp_path):
+    path = tmp_path / "owned-stage"
+    path.mkdir()
+    path_stat = path.stat()
+    owned = materialization._OwnedPath(
+        path, path_stat.st_dev, path_stat.st_ino, is_directory=True
+    )
+    path.rename(tmp_path / "original-stage")
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("preserve")
+    make_directory_link(path, victim)
+
+    assert materialization._cleanup_owned(owned) == [str(path)]
+
+    assert (victim / "keep.txt").read_text() == "preserve"
+    assert is_directory_link(path)
+
+
+@pytest.mark.native_publication
+def test_failed_operation_does_not_follow_directory_link_substituted_for_staging(
+    tmp_path,
+):
+    policy, request, _ = controlled_request(tmp_path)
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("preserve")
+    swapped = []
+
+    def substitute_staging(source, target):
+        staging = target.parent
+        staging.rename(staging.with_name(staging.name + "-moved"))
+        make_directory_link(staging, victim)
+        swapped.append(staging)
+        raise RuntimeError("interrupted after staging substitution")
+
+    with pytest.raises(materialization.MaterializationError) as exc:
+        materialization._materialize_asset_set(
+            request, policy, copy_file=substitute_staging
+        )
+
+    assert exc.value.code == "materialization_failed"
+    assert exc.value.published is False
+    assert [str(path) for path in swapped] == list(exc.value.cleanup_remaining)
+    assert (victim / "keep.txt").read_text() == "preserve"
+    assert [path.name for path in victim.iterdir()] == ["keep.txt"]
+    assert is_directory_link(swapped[0])
+    assert not request.destination.exists()
 
 
 @pytest.mark.native_publication
