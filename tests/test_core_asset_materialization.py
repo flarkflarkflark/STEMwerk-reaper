@@ -329,6 +329,7 @@ def test_keyboard_interrupt_during_lock_write_does_not_leak_lock(
     assert exc.value.cleanup_remaining == ()
     assert exc.value.destination == str(request.destination)
     assert exc.value.receipt_path is None
+    assert exc.value.operation_id
     assert sorted(path.name for path in tmp_path.iterdir()) == ["sources"]
 
 
@@ -410,7 +411,8 @@ def test_failure_after_publication_reports_destination_and_receipt(tmp_path):
     assert exc.value.published is True
     assert exc.value.destination == str(request.destination)
     assert exc.value.receipt_path == str(receipt)
-    assert json.loads(receipt.read_text())["operation"]["operation_id"]
+    receipt_operation_id = json.loads(receipt.read_text())["operation"]["operation_id"]
+    assert exc.value.operation_id == receipt_operation_id
     error = materialization._error_document(exc.value)["error"]
     assert error["published"] is True
     assert error["destination"] == str(request.destination)
@@ -438,6 +440,9 @@ def test_interrupt_after_publication_preserves_original_with_context(tmp_path):
     assert exc.value.cleanup_remaining == ()
     assert exc.value.destination == str(request.destination)
     assert exc.value.receipt_path == str(receipt)
+    assert exc.value.operation_id == json.loads(receipt.read_text())["operation"][
+        "operation_id"
+    ]
     assert receipt.is_file()
 
 

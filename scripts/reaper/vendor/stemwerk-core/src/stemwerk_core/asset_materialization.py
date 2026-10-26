@@ -44,6 +44,7 @@ class MaterializationError(Exception):
         published: bool | None = False,
         destination: str | None = None,
         receipt_path: str | None = None,
+        operation_id: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -51,6 +52,7 @@ class MaterializationError(Exception):
         self.published = published
         self.destination = destination
         self.receipt_path = receipt_path
+        self.operation_id = operation_id
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,13 @@ class _ValidatedRequest:
     parent_inode: int
     sources: tuple[_ValidatedSource, ...]
     policy: _TrustedAssetPolicy
+
+
+@dataclass(frozen=True)
+class _ValidatedDestination:
+    path: Path
+    parent_device: int
+    parent_inode: int
 
 
 def _production_policy() -> _TrustedAssetPolicy:
@@ -246,6 +255,33 @@ def _validate_asset_set(
                 "source_destination_alias",
                 "an asset source aliases or is contained by the destination",
             )
+    validated_destination = _validate_destination(destination)
+    sources = tuple(
+        _validate_source(name, request.sources[name], expected)
+        for name, expected in policy.assets
+    )
+    identities = {(source.device, source.inode) for source in sources}
+    if len(identities) != len(sources):
+        raise MaterializationError(
+            "source_conflict", "asset sources must be distinct regular files"
+        )
+    for source in sources:
+        if source.path == destination or destination in source.path.parents:
+            raise MaterializationError(
+                "source_destination_alias",
+                "an asset source aliases or is contained by the destination",
+            )
+    return _ValidatedRequest(
+        destination=destination,
+        parent_device=validated_destination.parent_device,
+        parent_inode=validated_destination.parent_inode,
+        sources=sources,
+        policy=policy,
+    )
+
+
+def _validate_destination(value: Any) -> _ValidatedDestination:
+    destination = _absolute_path(value, "destination")
     _reject_symlink_components(destination.parent, "destination parent")
     try:
         parent_stat = os.stat(destination.parent, follow_symlinks=False)
@@ -283,27 +319,10 @@ def _validate_asset_set(
             "destination_exists", "destination already contains filesystem content"
         )
 
-    sources = tuple(
-        _validate_source(name, request.sources[name], expected)
-        for name, expected in policy.assets
-    )
-    identities = {(source.device, source.inode) for source in sources}
-    if len(identities) != len(sources):
-        raise MaterializationError(
-            "source_conflict", "asset sources must be distinct regular files"
-        )
-    for source in sources:
-        if source.path == destination or destination in source.path.parents:
-            raise MaterializationError(
-                "source_destination_alias",
-                "an asset source aliases or is contained by the destination",
-            )
-    return _ValidatedRequest(
-        destination=destination,
+    return _ValidatedDestination(
+        path=destination,
         parent_device=parent_stat.st_dev,
         parent_inode=parent_stat.st_ino,
-        sources=sources,
-        policy=policy,
     )
 
 
@@ -327,6 +346,20 @@ def validate_drumsep_materialization(request: MaterializationRequest) -> dict[st
     }
 
 
+def preflight_drumsep_materialization(destination: Path) -> dict[str, Any]:
+    """Validate publication support and a new destination without source I/O."""
+
+    _linux_renameat2()
+    validated = _validate_destination(destination)
+    return {
+        "kind": "stemwerk_asset_materialization_preflight",
+        "schema_version": SCHEMA_VERSION,
+        "outcome": "validated",
+        "destination": str(validated.path),
+        "publication_platform": "linux_renameat2_noreplace",
+    }
+
+
 @dataclass(frozen=True)
 class _OwnedPath:
     path: Path
@@ -342,6 +375,7 @@ def _set_interruption_context(
     published: bool | None,
     destination: Path,
     receipt_path: Path | None,
+    operation_id: str | None,
 ) -> None:
     """Attach recovery facts without replacing a cancellation exception."""
 
@@ -351,11 +385,13 @@ def _set_interruption_context(
     exc.receipt_path = (  # type: ignore[attr-defined]
         str(receipt_path) if receipt_path is not None else None
     )
+    exc.operation_id = operation_id  # type: ignore[attr-defined]
     if hasattr(exc, "add_note"):
         exc.add_note(
             "STEMwerk materialization state: "
             f"published={published}, destination={destination}, "
             f"receipt_path={receipt_path}, "
+            f"operation_id={operation_id}, "
             f"cleanup_remaining={list(cleanup_remaining)}"
         )
 
@@ -393,6 +429,7 @@ def _open_lock(validated: _ValidatedRequest, operation_id: str) -> tuple[int, _O
             published=False,
             destination=validated.destination,
             receipt_path=None,
+            operation_id=operation_id,
         )
         raise
     return handle, owned
@@ -610,8 +647,8 @@ def _publication_status(
     )
 
 
-def _publish_noreplace(staging: Path, destination: Path) -> None:
-    """Atomically rename a directory only when destination is absent on Linux."""
+def _linux_renameat2():
+    """Return the Linux no-replace publication syscall or fail explicitly."""
 
     if not sys.platform.startswith("linux"):
         raise MaterializationError(
@@ -626,6 +663,13 @@ def _publish_noreplace(staging: Path, destination: Path) -> None:
         ) from exc
     renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     renameat2.restype = ctypes.c_int
+    return renameat2
+
+
+def _publish_noreplace(staging: Path, destination: Path) -> None:
+    """Atomically rename a directory only when destination is absent on Linux."""
+
+    renameat2 = _linux_renameat2()
     result = renameat2(
         -100,
         os.fsencode(staging),
@@ -704,6 +748,7 @@ def _materialize_asset_set(
             if published is not False
             else None
         )
+        exc.operation_id = operation_id
         raise
     except Exception as exc:
         observed = True if published else _publication_status(validated, staging)
@@ -726,6 +771,7 @@ def _materialize_asset_set(
                 if published is not False
                 else None
             ),
+            operation_id=operation_id,
         ) from exc
     except BaseException as exc:
         observed = (
@@ -752,6 +798,7 @@ def _materialize_asset_set(
             published=published,
             destination=validated.destination,
             receipt_path=receipt_path,
+            operation_id=operation_id,
         )
         raise
     finally:
