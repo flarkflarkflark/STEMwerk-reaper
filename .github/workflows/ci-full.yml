@@ -75,6 +75,7 @@ jobs:
           tests/test_core_readiness_hardening.py
           tests/test_core_installation_plan.py
           tests/test_core_asset_materialization.py
+          tests/test_core_asset_acquisition.py
           tests/test_core_catalog_sync.py
           tests/test_dependency_constraints.py::test_audio_separator_process_consumes_shared_managed_ffmpeg_candidates
 
