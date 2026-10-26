@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,30 @@ from typing import Any, Callable, Dict, Optional
 from . import managed_runtime
 from . import device_policy
 from .verdicts import FAIL, PASS, UNAVAILABLE
+
+
+def _stable_device_identity(properties: Any) -> Dict[str, str]:
+    """Return only physical-device identifiers exposed by Torch."""
+
+    identity: Dict[str, str] = {}
+    for key in ("uuid", "pci_bus_id"):
+        try:
+            value = getattr(properties, key, None)
+        except Exception:
+            value = None
+        text = "" if value is None else str(value).strip()
+        if text:
+            identity[key] = text
+    return identity
+
+
+def _has_stable_device_identity(identity: Any) -> bool:
+    if not isinstance(identity, dict):
+        return False
+    return any(
+        str(identity.get(key) or "").strip() for key in ("uuid", "pci_bus_id")
+    )
+
 
 # ---------------------------------------------------------------------------
 # Generic bounded subprocess JSON probe shared with
@@ -104,8 +129,15 @@ import json
 import pathlib
 import sys
 
-sys.path.insert(0, {str(source_dir)!r})
-import stemwerk_core
+_core_source_dir = {str(source_dir)!r}
+sys.path.insert(0, _core_source_dir)
+try:
+    import stemwerk_core
+finally:
+    if sys.path and sys.path[0] == _core_source_dir:
+        del sys.path[0]
+    else:
+        sys.path.remove(_core_source_dir)
 
 _captured = io.StringIO()
 with contextlib.redirect_stdout(_captured):
@@ -343,6 +375,29 @@ print(json.dumps(result, sort_keys=True))
 """
 
 
+_CUDA_DEVICE_IDENTITIES_PROBE_SRC = r"""
+import json
+
+from stemwerk_core.readiness_collect import _stable_device_identity
+
+result = {"device_identities": []}
+try:
+    import torch
+    if not bool(torch.cuda.is_available()):
+        raise RuntimeError("Torch CUDA namespace is unavailable")
+    for index in range(int(torch.cuda.device_count())):
+        result["device_identities"].append({
+            "id": "cuda:%d" % index,
+            "name": str(torch.cuda.get_device_name(index)),
+            "identity": _stable_device_identity(torch.cuda.get_device_properties(index)),
+        })
+except Exception as exc:
+    result["error"] = "%s: %s" % (type(exc).__name__, exc)
+
+print(json.dumps(result, sort_keys=True))
+"""
+
+
 def collect_drum_kit_resolution(
     requested_device: str,
     python_exe: Optional[Path],
@@ -401,17 +456,111 @@ def collect_drum_kit_resolution(
     raw_info = data.get("selection_info")
     if not isinstance(raw_info, dict):
         raw_info = {}
+    raw_info = dict(raw_info)
     resolved = (
         runtime_kind
         if selected_text and runtime_kind in device_policy.DRUMSEP_RUNTIME_KINDS
         else "unavailable"
     )
+    resolved_device_id = resolved
+    resolved_device_name = resolved
+    resolved_device_identity: Dict[str, str] = {}
+    indexed_device_error = ""
+    indexed_device_reason_code = "backend_unavailable"
+    identity_probe_error = ""
+    if resolved in {"cuda", "rocm"}:
+        identity_data = _run_core_probe(
+            Path(selected_text), _CUDA_DEVICE_IDENTITIES_PROBE_SRC
+        )
+        identity_probe_error = str(
+            identity_data.get("probe_error") or identity_data.get("error") or ""
+        )
+        raw_identities = identity_data.get("device_identities")
+        device_identities = (
+            [dict(item) for item in raw_identities if isinstance(item, dict)]
+            if isinstance(raw_identities, list)
+            else []
+        )
+        raw_info["device_identities"] = device_identities
+        execution = next(
+            (
+                item
+                for item in device_identities
+                if str(item.get("id") or "").strip().lower() == "cuda:0"
+            ),
+            {},
+        )
+        resolved_device_id = "cuda:0"
+        resolved_device_name = str(execution.get("name") or "").strip()
+        raw_identity = execution.get("identity")
+        if isinstance(raw_identity, dict):
+            resolved_device_identity = {
+                str(key): str(value)
+                for key, value in raw_identity.items()
+                if str(value).strip()
+            }
+        if not resolved_device_name:
+            selector_names = raw_info.get("device_names") or []
+            if isinstance(selector_names, list) and selector_names:
+                resolved_device_name = str(selector_names[0])
+        raw_info.update(
+            {
+                "execution_device_id": resolved_device_id,
+                "execution_device_name": resolved_device_name,
+                "execution_device_identity": resolved_device_identity,
+            }
+        )
+
+    indexed_match = re.fullmatch(
+        r"cuda:(\d+)", str(requested_device or "auto").strip().lower()
+    )
+    if indexed_match and resolved in {"cuda", "rocm"}:
+        requested_index = int(indexed_match.group(1))
+        device_names = raw_info.get("device_names") or []
+        if not isinstance(device_names, list):
+            device_names = []
+        device_names = [str(name) for name in device_names]
+        if not device_names:
+            device_names = [str(item.get("name") or "") for item in device_identities]
+        raw_info.update(
+            {
+                "requested_device_id": str(requested_device),
+                "requested_device_index": requested_index,
+                "execution_device_id": resolved_device_id,
+                "execution_device_name": resolved_device_name,
+                "execution_device_identity": resolved_device_identity,
+                "requested_device_index_preserved": (
+                    requested_index == 0
+                    and bool(resolved_device_name.strip())
+                    and _has_stable_device_identity(resolved_device_identity)
+                ),
+            }
+        )
+        if requested_index >= len(device_names) or not device_names[requested_index].strip():
+            indexed_device_error = (
+                f"requested DrumSep device {str(requested_device)!r} is not available "
+                f"in the selected {resolved} runtime"
+            )
+        elif requested_index != 0:
+            indexed_device_reason_code = "execution_contract_unsupported"
+            indexed_device_error = (
+                f"requested DrumSep device {str(requested_device)!r} cannot be preserved: "
+                "the existing execution handoff uses cuda:0"
+            )
+        elif not _has_stable_device_identity(resolved_device_identity):
+            indexed_device_reason_code = "runtime_evidence_broken"
+            detail = f": {identity_probe_error}" if identity_probe_error else ""
+            indexed_device_error = (
+                "selected DrumSep runtime supplied no stable identity for "
+                f"execution device cuda:0{detail}"
+            )
     resolution = {
         "requested": str(requested_device or "auto"),
-        "resolved_device_id": resolved,
-        "resolved_device_name": resolved,
+        "resolved_device_id": resolved_device_id,
+        "resolved_device_name": resolved_device_name,
         "resolved_backend": resolved,
-        "selection_info": dict(raw_info),
+        "resolved_device_identity": resolved_device_identity,
+        "selection_info": raw_info,
     }
     if resolved == "unavailable":
         detail = str(raw_info.get("detail") or runtime_kind or "malformed selector result")
@@ -446,7 +595,7 @@ def collect_drum_kit_resolution(
 
     selected_python = Path(selected_text)
     capability = {
-        "verdict": PASS,
+        "verdict": FAIL if indexed_device_error else PASS,
         "resolution": resolution,
         "evidence": {
             **evidence,
@@ -455,6 +604,9 @@ def collect_drum_kit_resolution(
             "core_origin": data.get("core_origin"),
         },
     }
+    if indexed_device_error:
+        capability["reason_code"] = indexed_device_reason_code
+        capability["reason"] = indexed_device_error
     runtime = collect_runtime_imports(
         selected_python, source_label="managed_drumsep", runtime_profile="drumsep"
     )
@@ -493,21 +645,115 @@ def build_drum_kit_collector(
 
 _NORMAL_RESOLUTION_PROBE_SRC = r"""
 import json
+import pathlib
 
-result = {}
+from stemwerk_core.readiness_collect import _stable_device_identity
+
+requested_text = %(requested)r
+probe_evidence = {
+    "torch_import": {"status": "NOT_RUN"},
+    "availability": {"status": "NOT_RUN"},
+    "enumeration": {"status": "NOT_RUN"},
+    "requested_device": {"id": requested_text, "available": False},
+}
+result = {"probe_evidence": probe_evidence}
 try:
-    from stemwerk_core import devices, device_policy
-    result["available_devices"] = devices.get_available_devices()
-    skips = getattr(devices, "_DEVICE_SKIPS", None) or []
-    result["device_skips"] = [dict(item) for item in skips]
-    requested, resolved, preview, live_ids = device_policy.resolve_normal_runtime_device(%(requested)r)
-    preview_id, _, preview_name = preview.partition("|")
-    result["requested"] = requested
-    result["resolved_device_id"] = preview_id
-    result["resolved_device_name"] = preview_name
-    result["resolved_backend"] = devices.runtime_kind_for_device(preview_id)
+    import torch
 except Exception as exc:
-    result["error"] = "%%s: %%s" %% (type(exc).__name__, exc)
+    probe_evidence["torch_import"] = {
+        "status": "FAIL",
+        "error_type": type(exc).__name__,
+        "error": str(exc)[:500],
+    }
+    result["error"] = "torch_import_failed: %%s: %%s" %% (type(exc).__name__, exc)
+else:
+    probe_evidence["torch_import"] = {
+        "status": "PASS",
+        "module_origin": str(pathlib.Path(torch.__file__).resolve()),
+        "version": str(getattr(torch, "__version__", "")),
+        "cuda_build": getattr(getattr(torch, "version", None), "cuda", None),
+        "hip_build": getattr(getattr(torch, "version", None), "hip", None),
+    }
+    try:
+        cuda_available = bool(torch.cuda.is_available())
+    except Exception as exc:
+        probe_evidence["availability"] = {
+            "status": "FAIL",
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+        }
+        result["error"] = "torch_availability_failed: %%s: %%s" %% (type(exc).__name__, exc)
+    else:
+        probe_evidence["availability"] = {
+            "status": "PASS",
+            "cuda_namespace_available": cuda_available,
+        }
+        if not cuda_available:
+            probe_evidence["enumeration"] = {
+                "status": "NOT_APPLICABLE",
+                "device_count": 0,
+                "devices": [],
+            }
+        else:
+            try:
+                device_count = int(torch.cuda.device_count())
+                observed_devices = []
+                for index in range(device_count):
+                    observed_devices.append({
+                        "id": "cuda:%%d" %% index,
+                        "name": str(torch.cuda.get_device_name(index)),
+                        "identity": _stable_device_identity(
+                            torch.cuda.get_device_properties(index)
+                        ),
+                    })
+            except Exception as exc:
+                probe_evidence["enumeration"] = {
+                    "status": "FAIL",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:500],
+                }
+                result["error"] = "torch_enumeration_failed: %%s: %%s" %% (type(exc).__name__, exc)
+            else:
+                probe_evidence["enumeration"] = {
+                    "status": "PASS",
+                    "device_count": device_count,
+                    "devices": observed_devices,
+                }
+
+if "error" not in result:
+    try:
+        from stemwerk_core import devices, device_policy
+        result["available_devices"] = devices.get_available_devices()
+        skips = getattr(devices, "_DEVICE_SKIPS", None) or []
+        result["device_skips"] = [dict(item) for item in skips]
+        requested, resolved, preview, live_ids = device_policy.resolve_normal_runtime_device(requested_text)
+        requested_normalized = str(requested or "auto").strip().lower()
+        requested_available = requested_normalized in {str(item).strip().lower() for item in live_ids}
+        if requested_normalized in {"cuda", "directml"}:
+            requested_available = any(
+                str(item).strip().lower().startswith(requested_normalized + ":")
+                for item in live_ids
+            )
+        probe_evidence["requested_device"] = {
+            "id": requested,
+            "available": requested_available,
+        }
+        preview_id, _, preview_name = preview.partition("|")
+        result["requested"] = requested
+        result["resolved_device_id"] = preview_id
+        result["resolved_device_name"] = preview_name
+        result["resolved_backend"] = devices.runtime_kind_for_device(preview_id)
+        resolved_evidence = next(
+            (
+                item
+                for item in probe_evidence["enumeration"].get("devices", [])
+                if item.get("id") == preview_id
+            ),
+            {},
+        )
+        result["resolved_device_identity"] = resolved_evidence.get("identity") or {}
+    except Exception as exc:
+        result["error"] = "device_policy_failed: %%s: %%s" %% (type(exc).__name__, exc)
 
 print(json.dumps(result))
 """
@@ -541,6 +787,14 @@ def collect_normal_stems_resolution(
         }
     src = _NORMAL_RESOLUTION_PROBE_SRC % {"requested": str(requested_device or "auto")}
     data = _run_core_probe(python_exe, src)
+    probe_evidence = data.get("probe_evidence")
+    if not isinstance(probe_evidence, dict):
+        probe_evidence = {
+            "protocol": {
+                "status": FAIL,
+                "error": "probe returned no structured device evidence",
+            }
+        }
     error = data.get("probe_error") or data.get("error")
     if error:
         return {
@@ -550,6 +804,7 @@ def collect_normal_stems_resolution(
                 **evidence,
                 "python_executable": str(python_exe),
                 "core_origin": data.get("core_origin"),
+                "probe_evidence": probe_evidence,
             },
         }
     required_keys = ("resolved_device_id", "resolved_device_name", "resolved_backend")
@@ -561,24 +816,39 @@ def collect_normal_stems_resolution(
                 **evidence,
                 "python_executable": str(python_exe),
                 "core_origin": data.get("core_origin"),
+                "probe_evidence": probe_evidence,
             },
         }
-    return {
+    resolution = {
+        "requested": data.get("requested") or str(requested_device or "auto"),
+        "resolved_device_id": str(data["resolved_device_id"]),
+        "resolved_device_name": str(data["resolved_device_name"]),
+        "resolved_backend": str(data["resolved_backend"]),
+        "resolved_device_identity": dict(data.get("resolved_device_identity") or {}),
+        "available_devices": data.get("available_devices") or [],
+        "device_skips": data.get("device_skips") or [],
+    }
+    result = {
         "verdict": PASS,
-        "resolution": {
-            "requested": data.get("requested") or str(requested_device or "auto"),
-            "resolved_device_id": str(data["resolved_device_id"]),
-            "resolved_device_name": str(data["resolved_device_name"]),
-            "resolved_backend": str(data["resolved_backend"]),
-            "available_devices": data.get("available_devices") or [],
-            "device_skips": data.get("device_skips") or [],
-        },
+        "resolution": resolution,
         "evidence": {
             **evidence,
             "python_executable": str(data["python_executable"]),
             "core_origin": str(data["core_origin"]),
+            "probe_evidence": probe_evidence,
         },
     }
+    requested_evidence = probe_evidence.get("requested_device") or {}
+    if requested_evidence.get("available") is False:
+        requested = str(requested_evidence.get("id") or requested_device or "auto")
+        result.update(
+            {
+                "verdict": FAIL,
+                "reason_code": "backend_unavailable",
+                "reason": f"requested device {requested!r} is not available",
+            }
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import venv
@@ -147,6 +148,24 @@ __version__ = 'test'
     return python
 
 
+def _probe_site_packages(python: Path) -> Path:
+    return Path(
+        subprocess.check_output(
+            [str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+            text=True,
+        ).strip()
+    )
+
+
+@pytest.mark.portable
+def test_stable_device_identity_preserves_zero_pci_bus_id():
+    properties = SimpleNamespace(uuid="", pci_bus_id=0)
+
+    assert readiness_collect._stable_device_identity(properties) == {
+        "pci_bus_id": "0"
+    }
+
+
 @pytest.mark.portable
 def test_probe_helper_owns_environment_scratch_and_bytecode_policy(tmp_path, monkeypatch):
     protected = tmp_path / "protected"
@@ -238,6 +257,178 @@ def test_real_core_probes_bootstrap_current_core_in_selected_interpreter(tmp_pat
     after = _tree_inventory(tmp_path)
     assert not any("__pycache__" in name or name.endswith(".pyc") for name in after)
     assert {name: digest for name, digest in after.items() if name in before} == before
+
+
+@pytest.mark.portable
+def test_core_probe_bootstrap_does_not_shadow_selected_runtime_dependencies(
+    tmp_path, monkeypatch
+):
+    python = _make_probe_venv(tmp_path / "probe-venv")
+    bootstrap_root = tmp_path / "bootstrap"
+    bootstrap_package = bootstrap_root / "stemwerk_core"
+    shutil.copytree(CORE_SRC / "stemwerk_core", bootstrap_package)
+    bootstrap_root.joinpath("torch.py").write_text(
+        "__version__ = 'bootstrap-decoy'\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        readiness_collect,
+        "__file__",
+        str(bootstrap_package / "readiness_collect.py"),
+    )
+
+    payload = readiness_collect._run_core_probe(
+        python,
+        "import json, pathlib, sys; "
+        "torch_preloaded = 'torch' in sys.modules; import torch; "
+        "print(json.dumps({'torch_preloaded': torch_preloaded, "
+        "'torch_version': torch.__version__, "
+        "'torch_origin': str(pathlib.Path(torch.__file__).resolve())}))",
+    )
+
+    assert payload["torch_preloaded"] is False
+    assert payload["torch_version"] == "test"
+    assert Path(payload["torch_origin"]).is_relative_to(tmp_path / "probe-venv")
+    assert Path(payload["core_origin"]).resolve() == (
+        bootstrap_package / "__init__.py"
+    ).resolve()
+
+
+@pytest.mark.portable
+def test_normal_probe_distinguishes_missing_torch_from_cpu_only(tmp_path):
+    missing_python = _make_probe_venv(tmp_path / "missing-torch")
+    _probe_site_packages(missing_python).joinpath("torch.py").unlink()
+    missing = readiness_collect.collect_normal_stems_resolution(
+        "cuda:0", missing_python, source_label="managed"
+    )
+
+    assert missing["verdict"] == FAIL
+    missing_probe = missing["evidence"]["probe_evidence"]
+    assert missing_probe["torch_import"]["status"] == FAIL
+    assert missing_probe["availability"]["status"] == "NOT_RUN"
+
+    cpu_python = _make_probe_venv(tmp_path / "cpu-only")
+    cpu_only = readiness_collect.collect_normal_stems_resolution(
+        "cpu", cpu_python, source_label="managed"
+    )
+
+    assert cpu_only["verdict"] == PASS
+    cpu_probe = cpu_only["evidence"]["probe_evidence"]
+    assert cpu_probe["torch_import"]["status"] == PASS
+    assert cpu_probe["availability"] == {
+        "status": PASS,
+        "cuda_namespace_available": False,
+    }
+    assert cpu_probe["enumeration"]["status"] == NOT_APPLICABLE
+    assert cpu_probe["requested_device"] == {"id": "cpu", "available": True}
+
+
+@pytest.mark.portable
+def test_normal_probe_records_index_identity_and_unavailable_index(tmp_path):
+    python = _make_probe_venv(tmp_path / "two-gpus")
+    _probe_site_packages(python).joinpath("torch.py").write_text(
+        """
+class _Properties:
+    gcnArchName = None
+    gcnArch = None
+    def __init__(self, index):
+        self.uuid = ['uuid-zero', 'uuid-one'][index]
+        self.pci_bus_id = [3, 4][index]
+class _Cuda:
+    @staticmethod
+    def is_available(): return True
+    @staticmethod
+    def device_count(): return 2
+    @staticmethod
+    def get_device_name(index): return ['GPU zero', 'GPU one'][index]
+    @staticmethod
+    def get_device_properties(index): return _Properties(index)
+cuda = _Cuda()
+class _Version:
+    cuda = None
+    hip = '7.0-test'
+version = _Version()
+class _Mps:
+    @staticmethod
+    def is_built(): return False
+    @staticmethod
+    def is_available(): return False
+class _Backends:
+    mps = _Mps()
+backends = _Backends()
+__version__ = 'test+rocm'
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    selected = readiness_collect.collect_normal_stems_resolution(
+        "cuda:1", python, source_label="managed"
+    )
+    unavailable = readiness_collect.collect_normal_stems_resolution(
+        "cuda:7", python, source_label="managed"
+    )
+
+    assert selected["verdict"] == PASS
+    assert selected["resolution"]["resolved_device_id"] == "cuda:1"
+    assert selected["resolution"]["resolved_device_name"] == "GPU one"
+    assert selected["resolution"]["resolved_backend"] == "rocm"
+    assert selected["resolution"]["resolved_device_identity"] == {
+        "uuid": "uuid-one",
+        "pci_bus_id": "4",
+    }
+    selected_probe = selected["evidence"]["probe_evidence"]
+    assert selected_probe["enumeration"]["devices"] == [
+        {
+            "id": "cuda:0",
+            "name": "GPU zero",
+            "identity": {"uuid": "uuid-zero", "pci_bus_id": "3"},
+        },
+        {
+            "id": "cuda:1",
+            "name": "GPU one",
+            "identity": {"uuid": "uuid-one", "pci_bus_id": "4"},
+        },
+    ]
+    assert selected_probe["requested_device"] == {"id": "cuda:1", "available": True}
+
+    assert unavailable["verdict"] == FAIL
+    assert unavailable["reason_code"] == "backend_unavailable"
+    assert "cuda:7" in unavailable["reason"]
+    assert unavailable["evidence"]["probe_evidence"]["requested_device"] == {
+        "id": "cuda:7",
+        "available": False,
+    }
+
+
+@pytest.mark.portable
+def test_normal_probe_reports_enumeration_failure(tmp_path):
+    python = _make_probe_venv(tmp_path / "broken-enumeration")
+    _probe_site_packages(python).joinpath("torch.py").write_text(
+        """
+class _Cuda:
+    @staticmethod
+    def is_available(): return True
+    @staticmethod
+    def device_count(): raise RuntimeError('controlled enumeration failure')
+cuda = _Cuda()
+class _Version:
+    cuda = None
+    hip = '7.0-test'
+version = _Version()
+__version__ = 'test+rocm'
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = readiness_collect.collect_normal_stems_resolution(
+        "cuda:0", python, source_label="managed"
+    )
+
+    assert result["verdict"] == FAIL
+    probe = result["evidence"]["probe_evidence"]
+    assert probe["torch_import"]["status"] == PASS
+    assert probe["availability"]["cuda_namespace_available"] is True
+    assert probe["enumeration"]["status"] == FAIL
+    assert probe["enumeration"]["error_type"] == "RuntimeError"
 
 
 @pytest.mark.portable
@@ -443,6 +634,128 @@ def _adapter_live_report(
         },
     )
     return report, calls
+
+
+def _controlled_drumsep_resolution(monkeypatch, requested, device_names, identities=None):
+    identity_rows = list(
+        identities
+        if identities is not None
+        else [
+            {"id": f"cuda:{index}", "name": name, "identity": {"uuid": f"uuid-{index}"}}
+            for index, name in enumerate(device_names)
+        ]
+    )
+
+    def controlled_probe(python_exe, src, timeout=60, **kwargs):
+        if "select_drumsep_runtime" in src:
+            return {
+                "selected_python": str(sys.executable),
+                "runtime_kind": "rocm",
+                "selection_info": {
+                    "kind": "rocm",
+                    "detail": "ok",
+                    "device_names": list(device_names),
+                    "selection_policy": "explicit_cuda_namespace_resolved_rocm",
+                    "fallback_reason": "cuda_skipped:cuda_runtime_is_rocm",
+                },
+                "core_origin": str(CORE_SRC / "stemwerk_core" / "__init__.py"),
+                "python_executable": str(python_exe),
+            }
+        return {
+            "device_identities": identity_rows,
+            "core_origin": str(CORE_SRC / "stemwerk_core" / "__init__.py"),
+            "python_executable": str(python_exe),
+        }
+
+    monkeypatch.setattr(
+        readiness_collect,
+        "_run_core_probe",
+        controlled_probe,
+    )
+    monkeypatch.setattr(
+        readiness_collect,
+        "collect_runtime_imports",
+        lambda python_exe, *, source_label, runtime_profile="main": {
+            "verdict": PASS,
+            "evidence": {
+                "source": "collected",
+                "evidence_kind": "required_imports",
+                "runtime_source": source_label,
+            },
+        },
+    )
+    return readiness_collect.collect_drum_kit_resolution(
+        requested,
+        Path(sys.executable),
+        source_label="managed",
+        runtime_base=Path("/controlled/runtime"),
+    )
+
+
+@pytest.mark.portable
+def test_drumsep_readiness_attributes_supported_default_cuda_index(monkeypatch):
+    result = _controlled_drumsep_resolution(
+        monkeypatch, "cuda:0", ["GPU zero", "GPU one"]
+    )
+
+    capability = result["capability"]
+    assert capability["verdict"] == PASS
+    assert capability["resolution"]["requested"] == "cuda:0"
+    assert capability["resolution"]["resolved_device_id"] == "cuda:0"
+    assert capability["resolution"]["resolved_device_name"] == "GPU zero"
+    assert capability["resolution"]["resolved_backend"] == "rocm"
+    assert capability["resolution"]["resolved_device_identity"] == {"uuid": "uuid-0"}
+    info = capability["resolution"]["selection_info"]
+    assert info["execution_device_id"] == "cuda:0"
+    assert info["requested_device_index_preserved"] is True
+
+
+@pytest.mark.portable
+def test_drumsep_readiness_rejects_nondefault_and_unavailable_cuda_indices(
+    monkeypatch
+):
+    nondefault = _controlled_drumsep_resolution(
+        monkeypatch, "cuda:1", ["GPU zero", "GPU one"]
+    )
+    assert nondefault["capability"]["verdict"] == FAIL
+    assert (
+        nondefault["capability"]["reason_code"]
+        == "execution_contract_unsupported"
+    )
+    assert "execution handoff uses cuda:0" in nondefault["capability"]["reason"]
+    assert nondefault["capability"]["resolution"]["resolved_device_id"] == "cuda:0"
+
+    unavailable = _controlled_drumsep_resolution(
+        monkeypatch, "cuda:7", ["GPU zero", "GPU one"]
+    )
+    assert unavailable["capability"]["verdict"] == FAIL
+    assert unavailable["capability"]["reason_code"] == "backend_unavailable"
+    assert "is not available" in unavailable["capability"]["reason"]
+
+    missing_identity = _controlled_drumsep_resolution(
+        monkeypatch, "cuda:0", ["GPU zero"], identities=[]
+    )
+    assert missing_identity["capability"]["verdict"] == FAIL
+    assert missing_identity["capability"]["reason_code"] == "runtime_evidence_broken"
+    assert "stable identity" in missing_identity["capability"]["reason"]
+
+
+@pytest.mark.portable
+@pytest.mark.parametrize("requested", ["auto", "cuda"])
+def test_drumsep_gpu_backend_reports_actual_cuda_zero_execution_device(
+    monkeypatch, requested
+):
+    result = _controlled_drumsep_resolution(
+        monkeypatch, requested, ["GPU zero", "GPU one"]
+    )
+
+    resolution = result["capability"]["resolution"]
+    assert result["capability"]["verdict"] == PASS
+    assert resolution["requested"] == requested
+    assert resolution["resolved_device_id"] == "cuda:0"
+    assert resolution["resolved_device_name"] == "GPU zero"
+    assert resolution["resolved_backend"] == "rocm"
+    assert resolution["resolved_device_identity"] == {"uuid": "uuid-0"}
 
 
 @pytest.mark.portable

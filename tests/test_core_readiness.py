@@ -41,7 +41,13 @@ import stemwerk_readiness_adapter as adapter  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-def _normal_capability(requested="auto", device_id="cuda:0", name="NVIDIA RTX", backend="cuda"):
+def _normal_capability(
+    requested="auto",
+    device_id="cuda:0",
+    name="NVIDIA RTX",
+    backend="cuda",
+    identity=None,
+):
     return {
         "verdict": PASS,
         "resolution": {
@@ -50,18 +56,26 @@ def _normal_capability(requested="auto", device_id="cuda:0", name="NVIDIA RTX", 
             "resolved_device_name": name,
             "resolved_backend": backend,
             "available_devices": [{"id": device_id, "name": name}],
+            "resolved_device_identity": dict(
+                identity or {"uuid": "fixture-gpu-0", "pci_bus_id": "1"}
+            ),
         },
     }
 
 
-def _drumsep_capability(requested="auto", kind="cuda", selection_info=None):
+def _drumsep_capability(
+    requested="auto", kind="cuda", selection_info=None, identity=None
+):
     return {
         "verdict": PASS,
         "resolution": {
             "requested": requested,
-            "resolved_device_id": kind,
+            "resolved_device_id": "cuda:0" if kind in {"cuda", "rocm"} else kind,
             "resolved_device_name": kind,
             "resolved_backend": kind,
+            "resolved_device_identity": dict(
+                identity or {"uuid": "fixture-gpu-0", "pci_bus_id": "1"}
+            ),
             "selection_info": dict(selection_info or {}),
         },
     }
@@ -396,6 +410,52 @@ def test_kit_split_stage1_invalid_despite_valid_stage2():
     assert report["readiness"]["verdict"] == FAIL
     assert report["components"]["feasibility"]["reason_code"] == "backend_unavailable"
     assert readiness.exit_code_for_report(report) == readiness.EXIT_NOT_READY
+
+
+@pytest.mark.portable
+def test_kit_split_rejects_same_name_with_different_physical_identity():
+    fixture = _fixture_drum_kit_split()
+    fixture["stages"][0]["capability"] = _normal_capability(
+        requested="cuda:0",
+        device_id="cuda:0",
+        name="Identical GPU",
+        backend="rocm",
+        identity={"uuid": "gpu-alpha", "pci_bus_id": "3"},
+    )
+    fixture["stages"][1]["capability"] = _drumsep_capability(
+        requested="cuda:0",
+        kind="rocm",
+        identity={"uuid": "gpu-beta", "pci_bus_id": "4"},
+    )
+    fixture["stages"][1]["capability"]["resolution"].update(
+        {
+            "resolved_device_id": "cuda:0",
+            "resolved_device_name": "Identical GPU",
+        }
+    )
+
+    report = _assess_fixture(
+        "drum_kit_split", fixture, requested_device="cuda:0"
+    )
+
+    assert report["readiness"]["verdict"] == FAIL
+    feasibility = report["components"]["feasibility"]
+    assert feasibility["reason_code"] == "device_identity_mismatch"
+    assert "different physical devices" in feasibility["reason"]
+
+
+@pytest.mark.portable
+def test_kit_split_requires_stable_identity_for_cuda_stage_comparison():
+    fixture = _fixture_drum_kit_split()
+    for stage in fixture["stages"]:
+        stage["capability"]["resolution"]["resolved_device_identity"] = {}
+
+    report = _assess_fixture("drum_kit_split", fixture, requested_device="cuda:0")
+
+    assert report["readiness"]["verdict"] == FAIL
+    feasibility = report["components"]["feasibility"]
+    assert feasibility["reason_code"] == readiness.REASON_RUNTIME_EVIDENCE_BROKEN
+    assert "stable physical identity" in feasibility["reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -1069,17 +1129,15 @@ def test_probe_subprocess_does_not_write(tmp_path):
     reason="ambient interpreter has torch; the no-torch real-subprobe path is "
     "covered on machines without an ambient torch install",
 )
-def test_live_normal_stems_real_subprobe_without_torch():
-    """On an interpreter without torch, the real bounded resolution probe
-    must still return a structured snapshot (CPU-class), never raise."""
+def test_live_normal_stems_real_subprobe_without_torch_fails_with_evidence():
+    """A missing Torch runtime is not evidence of a working CPU-only route."""
     from stemwerk_core import readiness_collect
 
     result = readiness_collect.collect_normal_stems_resolution(
         "auto", Path(sys.executable), source_label="ambient"
     )
-    assert result["verdict"] == PASS
-    assert result["resolution"]["resolved_device_id"] == "cpu"
-    assert result["resolution"]["resolved_backend"] == "cpu"
+    assert result["verdict"] == FAIL
+    assert result["evidence"]["probe_evidence"]["torch_import"]["status"] == FAIL
     assert Path(result["evidence"]["core_origin"]).resolve() == (
         CORE_SRC / "stemwerk_core" / "__init__.py"
     ).resolve()

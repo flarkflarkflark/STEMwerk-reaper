@@ -66,6 +66,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -113,6 +114,7 @@ REASON_ASSET_INTEGRITY_MISMATCH = "asset_integrity_mismatch"
 REASON_FFMPEG_UNAVAILABLE = "ffmpeg_unavailable"
 REASON_RUNTIME_EVIDENCE_MISSING = "runtime_evidence_missing"
 REASON_RUNTIME_EVIDENCE_BROKEN = "runtime_evidence_broken"
+REASON_DEVICE_IDENTITY_MISMATCH = "device_identity_mismatch"
 REASON_FIXTURE_INVALID = "evidence_fixture_invalid"
 REASON_FIXTURE_INCOMPLETE = "evidence_fixture_incomplete"
 REASON_DRUMSEP_LIVE_COLLECTION_UNSUPPORTED = "drumsep_live_collection_unsupported"
@@ -381,12 +383,14 @@ def _probe_from_resolution(
             resolve_auto_device=lambda _live: preferred,
         )
     kind = backend
-    already_resolved = {"id": kind, "name": kind}
+    device_id = str(resolution.get("resolved_device_id") or kind)
+    device_name = str(resolution.get("resolved_device_name") or device_id)
+    already_resolved = {"id": device_id, "name": device_name}
     selection_info = resolution.get("selection_info") or {}
     return CapabilityProbe(
         get_available_devices=lambda: [already_resolved],
-        select_device=lambda _requested: (kind, kind),
-        runtime_kind_for_device=device_policy.drumsep_backend_classifier,
+        select_device=lambda _requested: (device_id, device_name),
+        runtime_kind_for_device=lambda _device: device_policy.drumsep_backend_classifier(kind),
         is_unexpected_cpu_downgrade=device_policy.drum_kit_is_unexpected_cpu_downgrade(
             selection_info, platform_system=platform_system
         ),
@@ -882,6 +886,51 @@ def _evaluate_feasibility(
                 f"{capability.get('reason') or capability['verdict']}",
                 evidence=evidence,
             )
+
+    cuda_stage_identities = []
+    for info, components in zip(infos, stage_components):
+        resolution = components["capability"].get("resolution") or {}
+        resolved_id = str(resolution.get("resolved_device_id") or "").strip().lower()
+        if not re.fullmatch(r"cuda:\d+", resolved_id):
+            continue
+        identity = resolution.get("resolved_device_identity") or {}
+        stable = {
+            key: str(identity.get(key) or "").strip().lower()
+            for key in ("uuid", "pci_bus_id")
+            if str(identity.get(key) or "").strip()
+        }
+        cuda_stage_identities.append((str(info["stage"]["stage_id"]), stable))
+    if len(cuda_stage_identities) > 1:
+        if any(not identity for _, identity in cuda_stage_identities):
+            return _component(
+                FAIL,
+                reason_code=REASON_RUNTIME_EVIDENCE_BROKEN,
+                reason="CUDA workflow stages supplied no stable physical identity for comparison",
+                evidence=evidence,
+            )
+        reference_stage, reference = cuda_stage_identities[0]
+        for stage_id, identity in cuda_stage_identities[1:]:
+            common_keys = set(reference).intersection(identity)
+            if not common_keys:
+                return _component(
+                    FAIL,
+                    reason_code=REASON_RUNTIME_EVIDENCE_BROKEN,
+                    reason=(
+                        f"CUDA workflow stages {reference_stage!r} and {stage_id!r} "
+                        "supplied no common stable physical identity"
+                    ),
+                    evidence=evidence,
+                )
+            if any(reference[key] != identity[key] for key in common_keys):
+                return _component(
+                    FAIL,
+                    reason_code=REASON_DEVICE_IDENTITY_MISMATCH,
+                    reason=(
+                        f"CUDA workflow stages {reference_stage!r} and {stage_id!r} "
+                        "resolve to different physical devices"
+                    ),
+                    evidence=evidence,
+                )
 
     stage_fallback_reasons = []
     for info, components in zip(infos, stage_components):
