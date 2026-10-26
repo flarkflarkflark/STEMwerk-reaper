@@ -25,6 +25,7 @@ from urllib.parse import SplitResult, urljoin, urlsplit
 import uuid
 
 from . import model_assets
+from .asset_materialization import _is_link_or_reparse
 
 
 SCHEMA_VERSION = "1.0.0"
@@ -844,16 +845,17 @@ def _absolute_destination(value: Any) -> Path:
 def _reject_symlink_components(path: Path) -> None:
     for component in reversed([path, *path.parents]):
         try:
-            mode = os.lstat(component).st_mode
+            component_stat = os.lstat(component)
         except FileNotFoundError:
             continue
         except OSError as exc:
             raise AcquisitionError(
                 "destination_ineligible", f"cannot inspect destination path: {exc}"
             ) from exc
-        if stat.S_ISLNK(mode):
+        if _is_link_or_reparse(component_stat):
             raise AcquisitionError(
-                "destination_ineligible", "destination path contains a symbolic link"
+                "destination_ineligible",
+                "destination path contains a symbolic link or reparse point",
             )
 
 
@@ -911,6 +913,7 @@ def _matches_owned(current: os.stat_result, owned: _OwnedPath) -> bool:
         and current.st_ino == owned.inode
         and stat.S_ISDIR(current.st_mode) == owned.is_directory
         and stat.S_ISREG(current.st_mode) != owned.is_directory
+        and not _is_link_or_reparse(current)
     )
 
 

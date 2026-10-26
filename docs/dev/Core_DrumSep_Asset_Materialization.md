@@ -177,7 +177,7 @@ explicitly when that capability is unavailable. Simulated adapter tests are
 marked separately from native publication tests and do not qualify a platform.
 
 Link and reparse-point rejection has real-link tests in addition to the mocked
-reparse-point cleanup test. A shared test helper creates a directory junction on
+reparse-point cleanup test. A shared test helper (`tests/asset_link_helpers.py`) creates a directory junction on
 Windows (`_winapi.CreateJunction`, no fallback, with an assertion that the result
 is a reparse point) and a directory symlink elsewhere, so these tests need no
 symlink privilege and exist unchanged on every OS. Covered roles: a
@@ -192,9 +192,10 @@ helper cannot run on Linux and is exercised only by the native Windows job.
 The `native_publication` selection runs in the `asset-publication-native` CI
 job on Linux, macOS and Windows, over the materialization, preparation and
 acquisition test files (acquisition contributes its binary-mode and
-acquisition-to-materializer tests; its fixture uses only the standard library
-and an embedded localhost certificate). Its junit guard fails the job unless at
-least `MIN_NATIVE_PUBLICATION_TESTS` tests ran (the current selection size, set
+acquisition-to-materializer tests and its real directory-link reparse tests; its
+fixture uses only the standard library and an embedded localhost certificate).
+Its junit guard fails the job unless at least `MIN_NATIVE_PUBLICATION_TESTS`
+tests ran (the current selection size, set
 once in the job environment) and none were skipped, errored or failed. On
 native CI and for native qualification a skip therefore fails the run instead
 of passing silently. The selection contains no file-symlink test and needs no

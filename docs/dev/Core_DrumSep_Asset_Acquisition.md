@@ -135,8 +135,8 @@ size and SHA-256 checks.
 
 ## Filesystem and failure behavior
 
-The destination must be absolute, have an existing symlink-free parent, and be
-absent. It is created exclusively with user-only permissions. A second thread
+The destination must be absolute, have an existing parent free of symbolic
+links and other reparse points, and be absent. It is created exclusively with user-only permissions. A second thread
 or process targeting the same destination fails rather than sharing or
 replacing it. An exclusively created private staging directory and partial
 files hold incoming bytes. There is no resume support or persistent cache.
@@ -150,9 +150,22 @@ acquisition-to-materializer test are part of the `native_publication` CI
 selection, so the macOS and Windows jobs will exercise them; until those jobs
 have run, the Windows behavior is not natively qualified.
 
-Acquisition's destination check rejects symbolic links only. Windows junctions
-and other reparse points on the destination path are rejected by the
-materializer but not by acquisition, and no acquisition test covers them.
+Acquisition rejects every link on the destination path, with parity to the
+materializer: symbolic links and, on Windows, all other reparse points
+(junctions, cloud placeholders, deduplicated files). Detection is shared, not
+copied: acquisition imports the materializer's `_is_link_or_reparse`, and a test
+asserts both modules use the same function. The checks apply to the destination
+parent and every ancestor (`destination_ineligible`, the code already used for a
+symbolic link), to the destination itself when it exists as a link
+(`destination_exists`, as for any existing object), and to owned paths before
+cleanup or removal, where a link or reparse point is never removed or followed
+(`path_substituted`, or reported in `cleanup_remaining`). Real-link tests use a
+directory junction on Windows and a directory symlink elsewhere; mocked tests
+inject Windows-style reparse attributes at each checked position so that branch
+runs on Linux. The Windows junction branch itself has run only in review, not
+natively. Acquisition has no publication step, so it has no equivalent of the
+materializer's pre-publication parent re-check; ancestor swaps after validation
+fall under the same cooperative ancestor-stability assumption.
 
 Both downloaded files are re-opened and verified from storage. Final files are
 created with exclusive no-replace opens and verified again before their paths

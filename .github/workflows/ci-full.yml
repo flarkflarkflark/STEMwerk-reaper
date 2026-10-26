@@ -103,7 +103,7 @@ jobs:
       # Number of tests selected by -m native_publication in the three files
       # below. Raise it when native publication tests are added; the guard
       # fails if fewer ran, so a deselected or removed test cannot pass.
-      MIN_NATIVE_PUBLICATION_TESTS: "25"
+      MIN_NATIVE_PUBLICATION_TESTS: "30"
     strategy:
       fail-fast: false
       matrix:

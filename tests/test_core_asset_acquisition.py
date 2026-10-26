@@ -25,6 +25,10 @@ sys.path.insert(0, str(CORE_SRC))
 from stemwerk_core import asset_acquisition as acquisition  # noqa: E402
 from stemwerk_core import asset_materialization as materialization  # noqa: E402
 from stemwerk_core import model_assets  # noqa: E402
+from tests.asset_link_helpers import (  # noqa: E402
+    is_directory_link,
+    make_directory_link,
+)
 
 pytestmark = pytest.mark.portable
 
@@ -1237,6 +1241,222 @@ def test_destination_collision_fails_without_using_transport(tmp_path):
     assert exc.value.code == "destination_exists"
     assert marker.read_text(encoding="utf-8") == "preserve"
     assert transport.calls == []
+
+
+def _acquire_to(destination: Path, policy, transport):
+    clock = FakeClock()
+    return acquisition._acquire_asset_set(
+        acquisition.AcquisitionRequest(destination),
+        policy,
+        transport=transport,
+        clock=clock,
+        sleeper=clock.sleep,
+    )
+
+
+@pytest.mark.native_publication
+def test_rejects_destination_parent_directory_link(tmp_path):
+    policy, _ = controlled_policy()
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    parent_link = tmp_path / "parent-link"
+    make_directory_link(parent_link, real_parent)
+    transport = ScriptedTransport([])
+
+    with pytest.raises(acquisition.AcquisitionError) as exc:
+        _acquire_to(parent_link / "acquired", policy, transport)
+
+    assert exc.value.code == "destination_ineligible"
+    assert transport.calls == []
+    assert list(real_parent.iterdir()) == []
+    assert is_directory_link(parent_link)
+
+
+@pytest.mark.native_publication
+def test_rejects_deeper_destination_ancestor_directory_link(tmp_path):
+    policy, _ = controlled_policy()
+    real_root = tmp_path / "real-root"
+    (real_root / "child").mkdir(parents=True)
+    root_link = tmp_path / "root-link"
+    make_directory_link(root_link, real_root)
+    transport = ScriptedTransport([])
+
+    with pytest.raises(acquisition.AcquisitionError) as exc:
+        _acquire_to(root_link / "child" / "acquired", policy, transport)
+
+    assert exc.value.code == "destination_ineligible"
+    assert transport.calls == []
+    assert list((real_root / "child").iterdir()) == []
+    assert is_directory_link(root_link)
+
+
+@pytest.mark.native_publication
+def test_rejects_destination_that_is_a_directory_link(tmp_path):
+    policy, _ = controlled_policy()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("preserve", encoding="utf-8")
+    destination = tmp_path / "acquired"
+    make_directory_link(destination, victim)
+    transport = ScriptedTransport([])
+
+    with pytest.raises(acquisition.AcquisitionError) as exc:
+        _acquire_to(destination, policy, transport)
+
+    assert exc.value.code == "destination_exists"
+    assert transport.calls == []
+    assert [path.name for path in victim.iterdir()] == ["keep.txt"]
+    assert (victim / "keep.txt").read_text(encoding="utf-8") == "preserve"
+    assert is_directory_link(destination)
+
+
+@pytest.mark.native_publication
+def test_cleanup_does_not_follow_directory_link_at_owned_path(tmp_path):
+    path = tmp_path / "owned-stage"
+    path.mkdir()
+    owned = acquisition._owned(path)
+    path.rename(tmp_path / "original-stage")
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("preserve", encoding="utf-8")
+    make_directory_link(path, victim)
+
+    assert acquisition._cleanup_owned([owned]) == [str(path)]
+    with pytest.raises(acquisition.AcquisitionError) as exc:
+        acquisition._remove_owned(owned)
+
+    assert exc.value.code == "path_substituted"
+    assert (victim / "keep.txt").read_text(encoding="utf-8") == "preserve"
+    assert is_directory_link(path)
+
+
+@pytest.mark.native_publication
+def test_failed_acquisition_does_not_follow_directory_link_substituted_for_staging(
+    tmp_path,
+):
+    policy, _ = controlled_policy()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("preserve", encoding="utf-8")
+    (victim / "controlled-model.ckpt.part").write_text("preserve", encoding="utf-8")
+    swapped = []
+
+    def substitute_staging(source, asset, target, deadline):
+        staging = target.parent
+        staging.rename(staging.with_name(staging.name + "-moved"))
+        make_directory_link(staging, victim)
+        swapped.append(staging)
+        raise OSError("interrupted after staging substitution")
+
+    with pytest.raises(acquisition.AcquisitionError) as exc:
+        _acquire_to(tmp_path / "acquired", policy, ScriptedTransport([substitute_staging]))
+
+    assert exc.value.code == "write_failed"
+    assert str(swapped[0]) in exc.value.cleanup_remaining
+    assert sorted(path.name for path in victim.iterdir()) == [
+        "controlled-model.ckpt.part",
+        "keep.txt",
+    ]
+    assert (victim / "keep.txt").read_text(encoding="utf-8") == "preserve"
+    assert (victim / "controlled-model.ckpt.part").read_text(encoding="utf-8") == (
+        "preserve"
+    )
+    assert is_directory_link(swapped[0])
+
+
+class _WindowsStyleStat:
+    """lstat result for a Windows reparse point whose st_mode is not a link."""
+
+    def __init__(self, real: os.stat_result, attributes: int) -> None:
+        self.st_mode = real.st_mode
+        self.st_dev = real.st_dev
+        self.st_ino = real.st_ino
+        self.st_file_attributes = attributes
+
+
+REPARSE_POINT_ATTRIBUTE = 0x400
+ARCHIVE_ATTRIBUTE = 0x20
+
+
+def _lstat_with_fake(monkeypatch, fake_path: Path, attributes: int) -> None:
+    real_lstat = os.lstat
+
+    def lstat(candidate, *args, **kwargs):
+        result = real_lstat(candidate, *args, **kwargs)
+        if Path(candidate) == fake_path:
+            return _WindowsStyleStat(result, attributes)
+        return result
+
+    monkeypatch.setattr(os, "lstat", lstat)
+
+
+def test_link_detection_is_shared_with_the_materializer():
+    assert acquisition._is_link_or_reparse is materialization._is_link_or_reparse
+
+
+@pytest.mark.parametrize("position", ["parent", "ancestor"])
+def test_windows_reparse_point_in_destination_path_is_rejected(
+    tmp_path, monkeypatch, position
+):
+    policy, _ = controlled_policy()
+    fake = tmp_path if position == "parent" else tmp_path.parent
+    _lstat_with_fake(monkeypatch, fake, REPARSE_POINT_ATTRIBUTE)
+    transport = ScriptedTransport([])
+
+    with pytest.raises(acquisition.AcquisitionError) as exc:
+        _acquire_to(tmp_path / "acquired", policy, transport)
+
+    assert exc.value.code == "destination_ineligible"
+    assert "reparse point" in str(exc.value)
+    assert transport.calls == []
+    assert not (tmp_path / "acquired").exists()
+
+
+@pytest.mark.parametrize("position", ["parent", "ancestor"])
+def test_windows_non_reparse_attributes_in_destination_path_are_accepted(
+    tmp_path, monkeypatch, position
+):
+    policy, contents = controlled_policy()
+    fake = tmp_path if position == "parent" else tmp_path.parent
+    _lstat_with_fake(monkeypatch, fake, ARCHIVE_ATTRIBUTE)
+
+    result = _acquire_to(
+        tmp_path / "acquired",
+        policy,
+        ScriptedTransport([contents[name] for name in contents]),
+    )
+
+    assert result["outcome"] == "success"
+
+
+def test_windows_reparse_point_at_owned_path_is_not_cleaned_up(tmp_path, monkeypatch):
+    path = tmp_path / "owned-stage"
+    path.mkdir()
+    owned = acquisition._owned(path)
+    _lstat_with_fake(monkeypatch, path, REPARSE_POINT_ATTRIBUTE)
+
+    assert acquisition._matches_owned(os.lstat(path), owned) is False
+    assert acquisition._cleanup_owned([owned]) == [str(path)]
+    with pytest.raises(acquisition.AcquisitionError) as exc:
+        acquisition._remove_owned(owned)
+
+    assert exc.value.code == "path_substituted"
+    monkeypatch.undo()
+    assert path.is_dir()
+
+
+def test_windows_non_reparse_attributes_at_owned_path_are_cleaned_up(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "owned-stage"
+    path.mkdir()
+    owned = acquisition._owned(path)
+    _lstat_with_fake(monkeypatch, path, ARCHIVE_ATTRIBUTE)
+
+    assert acquisition._matches_owned(os.lstat(path), owned) is True
+    assert acquisition._cleanup_owned([owned]) == []
+    monkeypatch.undo()
+    assert not path.exists()
 
 
 def test_competing_operations_cannot_both_acquire(tmp_path):

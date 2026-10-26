@@ -8,7 +8,6 @@ import multiprocessing
 import os
 from pathlib import Path
 import shutil
-import stat
 import sys
 import threading
 import uuid
@@ -20,6 +19,10 @@ CORE_SRC = ROOT / "scripts/reaper/vendor/stemwerk-core/src"
 sys.path.insert(0, str(CORE_SRC))
 
 from stemwerk_core import asset_materialization as materialization  # noqa: E402
+from tests.asset_link_helpers import (  # noqa: E402
+    is_directory_link,
+    make_directory_link,
+)
 
 pytestmark = pytest.mark.portable
 NATIVE_PUBLICATION = (
@@ -53,38 +56,6 @@ def controlled_request(tmp_path: Path):
         destination=tmp_path / "published-assets",
     )
     return policy, request, contents
-
-
-def make_directory_link(link: Path, target: Path) -> None:
-    """Create a directory link at ``link`` pointing to the existing ``target``.
-
-    Windows gets a directory junction through ``_winapi.CreateJunction``; every
-    other platform gets a directory symlink. There is no fallback between
-    mechanisms: a failure to create the link, or a result of the wrong type,
-    fails the calling test. ``_winapi.CreateJunction`` was chosen over
-    ``cmd /c mklink /J`` because it needs no subprocess or shell quoting and no
-    symlink privilege, and CPython's own test suite creates junctions with it.
-    """
-
-    assert target.is_dir(), f"link target must be an existing directory: {target}"
-    if sys.platform == "win32":
-        import _winapi
-
-        _winapi.CreateJunction(str(target), str(link))
-        attributes = os.lstat(link).st_file_attributes
-        assert attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT, (
-            f"expected a reparse point at {link}"
-        )
-    else:
-        link.symlink_to(target, target_is_directory=True)
-        assert link.is_symlink(), f"expected a symbolic link at {link}"
-
-
-def is_directory_link(path: Path) -> bool:
-    attributes = getattr(os.lstat(path), "st_file_attributes", None)
-    if sys.platform == "win32":
-        return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
-    return path.is_symlink()
 
 
 @pytest.mark.native_publication
