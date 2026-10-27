@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
+import errno
 import hashlib
 import http.client
 import http.server
@@ -10,11 +11,13 @@ import json
 import os
 from pathlib import Path
 import socket
+import socketserver
 import ssl
 import sys
 import threading
 import time
 import traceback
+import warnings
 
 import pytest
 
@@ -89,6 +92,52 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+DUAL_STACK_BIND_ATTEMPTS = 20
+IPV6_UNAVAILABLE_ERRNOS = {errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT}
+
+
+class _LoopbackV6Server(http.server.ThreadingHTTPServer):
+    """IPv6-only loopback twin of the IPv4 test server (same handler and port)."""
+
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
+
+def _bind_loopback_servers(handler_type):
+    """Bind 127.0.0.1:P and [::1]:P for one port P, loopback addresses only.
+
+    ``localhost`` resolves to ``::1`` before ``127.0.0.1`` on some hosts, and a
+    refused ``::1`` connect can cost seconds there; listening on both families
+    makes the first address answer immediately. Returns ``(servers,
+    ipv6_available)``. When IPv6 loopback truly does not exist only the IPv4
+    server is returned and the caller must report it.
+    """
+
+    for _ in range(DUAL_STACK_BIND_ATTEMPTS):
+        v4 = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_type)
+        if not socket.has_ipv6:
+            return [v4], False
+        try:
+            v6 = _LoopbackV6Server(("::1", v4.server_address[1]), handler_type)
+        except OSError as exc:
+            if exc.errno in IPV6_UNAVAILABLE_ERRNOS:
+                return [v4], False
+            v4.server_close()
+            if exc.errno == errno.EADDRINUSE:
+                continue  # the port is taken on ::1; choose another port
+            raise
+        return [v4, v6], True
+    raise RuntimeError(
+        f"could not bind one port on both loopback families in {DUAL_STACK_BIND_ATTEMPTS} attempts"
+    )
+
+
 @pytest.fixture
 def local_https_server(tmp_path):
     certificate = tmp_path / "localhost-cert.pem"
@@ -101,29 +150,43 @@ def local_https_server(tmp_path):
     servers = []
 
     def start(handler_type):
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_type)
-        server.daemon_threads = True
-        server.socket = server_context.wrap_socket(server.socket, server_side=True)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        servers.append((server, thread))
+        listeners, ipv6_available = _bind_loopback_servers(handler_type)
+        start.ipv6_available = ipv6_available
+        if not ipv6_available:
+            warnings.warn(
+                "IPv6 loopback is unavailable on this host; the local HTTPS test "
+                "server listens on 127.0.0.1 only",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        for server in listeners:
+            server.daemon_threads = True
+            server.socket = server_context.wrap_socket(server.socket, server_side=True)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            servers.append((server, thread))
+        port = listeners[0].server_address[1]
 
-        def connection_factory(host, port, timeout, context):
+        def connection_factory(host, port_, timeout, context):
             assert host == "localhost"
-            assert port == 443
+            assert port_ == 443
             return http.client.HTTPSConnection(
                 "localhost",
-                server.server_address[1],
+                port,
                 timeout=timeout,
                 context=context,
             )
 
-        return connection_factory, client_context, server.server_address[1]
+        return connection_factory, client_context, port
+
+    start.servers = servers
+    start.ipv6_available = None
 
     yield start
 
     for server, thread in servers:
         server.shutdown()
+    for server, thread in servers:
         server.server_close()
         thread.join(2)
 
@@ -1173,6 +1236,59 @@ def localhost_transport_asset(content=b"verified", path="/asset"):
         total_timeout=3.0,
     )
     return source, asset
+
+
+def test_local_https_server_answers_on_both_loopback_families_on_one_port(
+    local_https_server,
+):
+    class OkHandler(QuietHandler):
+        def do_GET(self):
+            body = b"same-response"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+
+    _, context, port = local_https_server(OkHandler)
+
+    # The fixture decides IPv6 availability once and never skips a test for it.
+    assert local_https_server.ipv6_available in {True, False}
+    families = [(socket.AF_INET, "127.0.0.1")]
+    if local_https_server.ipv6_available:
+        families.append((socket.AF_INET6, "::1"))
+    bodies = []
+    for family, address in families:
+        with socket.socket(family, socket.SOCK_STREAM) as raw:
+            raw.settimeout(5)
+            raw.connect((address, port))
+            with context.wrap_socket(raw, server_hostname="localhost") as tls:
+                tls.sendall(
+                    b"GET /x HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+                )
+                data = b""
+                while True:
+                    chunk = tls.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+        assert data.startswith(b"HTTP/1.1 200")
+        bodies.append(data.partition(b"\r\n\r\n")[2])
+
+    assert bodies == [b"same-response"] * len(families)
+
+
+def test_local_https_server_listens_on_loopback_addresses_only(local_https_server):
+    _, _, port = local_https_server(QuietHandler)
+
+    bound = sorted(
+        server.socket.getsockname()[:2] for server, _ in local_https_server.servers
+    )
+
+    expected = ["127.0.0.1"] + (["::1"] if local_https_server.ipv6_available else [])
+    assert sorted(host for host, _ in bound) == sorted(expected)
+    assert {listening_port for _, listening_port in bound} == {port}
 
 
 def test_real_https_transport_rejects_bytes_after_declared_body(
