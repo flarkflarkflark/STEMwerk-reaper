@@ -117,7 +117,18 @@ read. A `ValueError` raised by a TLS socket that the watchdog has just closed
 (`ssl.SSLSocket.read` raises it when the watchdog's `shutdown` clears the TLS
 object between `recv_into`'s check and the read) is classified as the deadline
 outcome in both phases; without a fired watchdog a `ValueError` is never
-reclassified and propagates unchanged. A transient failure is retried within the three-attempt budget and, once
+reclassified and propagates unchanged. As the last rule, any other `Exception`
+raised after the watchdog has fired (an `AttributeError` or `TypeError` from
+`http.client` on a response or connection that was torn down underneath it, for
+example) is also the deadline outcome, and its message names only the original
+exception type ("... bounded deadline (after AttributeError)"), because the
+original message may carry an unredacted URL. The original exception is not
+used as the cause and its display is suppressed (`from None`); it remains
+reachable as `__context__`, but no consumer in the codebase emits it. This
+never applies to `BaseException`
+(`KeyboardInterrupt`, `SystemExit`, `GeneratorExit` always propagate), and
+without a fired watchdog such an exception propagates as the same object. A
+transient failure is retried within the three-attempt budget and, once
 the attempts are exhausted, ends as `source_unavailable` (or
 `deadline_exceeded` when the retry wait would pass the asset budget). Tests
 inject the exact exception at the status-line and body phases with a controlled
@@ -132,9 +143,26 @@ second unbounded lookup.
 
 TCP connection setup is bounded to 30 seconds or the remaining attempt time,
 whichever is shorter. TLS negotiation, request transmission, response headers
-and body reads share an attempt watchdog. The watchdog shuts down both the
-connection socket and the response-owned socket; this matters when HTTP
-connection-close framing transfers socket ownership to `HTTPResponse`. An
+and body reads share an attempt watchdog. At the deadline the watchdog first
+sets its `reached` flag and then only shuts down the connection socket and the
+response-owned socket (this matters when HTTP connection-close framing
+transfers socket ownership to `HTTPResponse`), which wakes a blocked read. It
+never closes the response or the connection: the attempt thread does that once,
+in its `finally`, on every path (success, failure and deadline). Closing from
+the timer thread raced the woken reader inside `http.client` and could escape
+as an `AttributeError`. The watchdog also takes no action once the attempt has
+started closing, so its shutdown never overlaps the close performed in
+`finish()`. `http.client`'s own internal closes on the attempt thread (on EOF
+of the response, or the connection close inside `getresponse` that hands the
+socket to the response) are not serialized with it; that leaves a narrow
+window, which also existed before. Whether a shutdown wakes a blocked TLS read
+on macOS and Windows is not assumed: the `native_publication` selection, which
+the macOS and Windows jobs run, has a header stall whose socket timeout is far
+beyond the attempt deadline (only the watchdog can wake it), a chunked body
+whose chunk-size line is trickled on a response-owned socket (only the
+watchdog's shutdown of that socket can end the read), a header stall at the
+deadline, and an idle read on a response-owned socket. The qualification note
+below applies until those jobs have run. An
 individual blocked body read is additionally bounded to 60 seconds. The
 monotonic deadline is checked after every socket-delivered chunk, so a
 trickling response cannot extend the attempt.

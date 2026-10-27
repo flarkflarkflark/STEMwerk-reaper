@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import traceback
+import types
 import warnings
 
 import pytest
@@ -1225,6 +1226,364 @@ def test_value_error_from_a_watchdog_closed_socket_follows_the_deadline(
     ]
 
 
+class _RecordingSocket(FakeSocket):
+    """Records the thread and the watchdog state of every shutdown."""
+
+    def __init__(self, log, label, reached):
+        super().__init__()
+        self.log = log
+        self.label = label
+        self.reached = reached
+
+    def shutdown(self, how):
+        self.log.append(
+            (
+                self.label + ".shutdown",
+                threading.current_thread().name,
+                self.reached(),
+            )
+        )
+
+
+class _RecordingResponse(FakeResponse):
+    """Owns a socket like a real response and records who closes it."""
+
+    def __init__(self, log, socket_, body=b"", headers=None, on_read=None):
+        super().__init__(status=200, body=body, headers=headers)
+        self.log = log
+        self.fp = types.SimpleNamespace(raw=types.SimpleNamespace(_sock=socket_))
+        self.on_read = on_read
+
+    def read(self, amount=-1):
+        if self.on_read is not None:
+            self.on_read()
+        return super().read(amount)
+
+    def close(self):
+        self.log.append(("response.close", threading.current_thread().name, None))
+
+
+class _RecordingConnection(FakeConnection):
+    def __init__(self, log, response, socket_, on_getresponse=None):
+        super().__init__(response)
+        self.sock = socket_
+        self.log = log
+        self.on_getresponse = on_getresponse
+
+    def getresponse(self):
+        if self.on_getresponse is not None:
+            self.on_getresponse()
+        return self.response
+
+    def close(self):
+        self.log.append(("connection.close", threading.current_thread().name, None))
+
+
+def _fire_on_watchdog_thread(timers):
+    thread = threading.Thread(target=timers.timers[-1].fire, name="watchdog-thread")
+    thread.start()
+    thread.join(5)
+    assert not thread.is_alive()
+
+
+WATCHDOG_CASES = ["success", "ordinary-failure", "deadline-in-body", "deadline-in-status"]
+
+
+@pytest.mark.parametrize("case", WATCHDOG_CASES)
+def test_watchdog_thread_only_shuts_down_and_the_attempt_thread_closes_once(tmp_path, case):
+    content = b"verified"
+    log = []
+    timers = _ManualTimers()
+
+    def reached():
+        return timers.timers[-1].callback.__self__.reached.is_set()
+
+    connection_socket = _RecordingSocket(log, "connection.sock", reached)
+    response_socket = _RecordingSocket(log, "response.sock", reached)
+    if case == "ordinary-failure":
+        # right size, wrong bytes: a terminal integrity failure
+        body = b"corrupted"[: len(content)]
+        on_read = None
+    elif case == "deadline-in-body":
+        body = content
+        on_read = lambda: _fire_on_watchdog_thread(timers)  # noqa: E731
+    else:
+        body = content
+        on_read = None
+    response = _RecordingResponse(
+        log,
+        response_socket,
+        body=body,
+        headers={"Content-Length": str(len(content))},
+        on_read=on_read,
+    )
+
+    def status_deadline():
+        _fire_on_watchdog_thread(timers)
+        raise ConnectionResetError(104, "reset")
+
+    connection = _RecordingConnection(
+        log,
+        response,
+        connection_socket,
+        on_getresponse=status_deadline if case == "deadline-in-status" else None,
+    )
+    clock = FakeClock()
+    transport = acquisition._HttpsTransport(
+        connection_factory=lambda *args: connection,
+        timer_factory=timers,
+        clock=clock,
+    )
+    source, asset = transport_asset(content)
+    target = tmp_path / "asset.part"
+    target.touch()
+    attempt_thread = threading.current_thread().name
+
+    if case == "success":
+        transport.download(source, asset, target, deadline=clock() + 20)
+    elif case == "ordinary-failure":
+        with pytest.raises(acquisition.AcquisitionError) as exc:
+            transport.download(source, asset, target, deadline=clock() + 20)
+        assert exc.value.code == "source_integrity_mismatch"
+    else:
+        with pytest.raises(acquisition._AttemptFailure) as exc:
+            transport.download(source, asset, target, deadline=clock() + 20)
+        assert DEADLINE in str(exc.value)
+
+    closes = [entry for entry in log if entry[0].endswith(".close")]
+    shutdowns = [entry for entry in log if entry[0].endswith(".shutdown")]
+    # Closing is the attempt thread's job, on every path, exactly once.
+    assert [name for name, _, _ in closes].count("connection.close") == 1
+    expected_response_closes = 0 if case == "deadline-in-status" else 1
+    assert [name for name, _, _ in closes].count("response.close") == expected_response_closes
+    assert {thread for _, thread, _ in closes} == {attempt_thread}
+    if case.startswith("deadline"):
+        # The watchdog thread only woke the attempt: it set `reached` first and
+        # then shut down what the attempt owns. Nothing else ran on it.
+        assert {thread for _, thread, _ in log} == {attempt_thread, "watchdog-thread"}
+        assert shutdowns
+        assert {thread for _, thread, _ in shutdowns} == {"watchdog-thread"}
+        assert all(flag is True for _, _, flag in shutdowns)
+        assert {name for name, _, _ in shutdowns} >= {"connection.sock.shutdown"}
+    else:
+        assert not shutdowns
+
+
+@pytest.mark.parametrize("owner", ["response-owned", "both-sockets"])
+def test_watchdog_shuts_down_the_response_owned_socket_during_the_body_read(
+    tmp_path, owner
+):
+    content = b"verified"
+    log = []
+    timers = _ManualTimers()
+
+    def reached():
+        return timers.timers[-1].callback.__self__.reached.is_set()
+
+    connection_socket = _RecordingSocket(log, "connection.sock", reached)
+    response_socket = _RecordingSocket(log, "response.sock", reached)
+    response = _RecordingResponse(
+        log,
+        response_socket,
+        body=content,
+        headers={"Content-Length": str(len(content))},
+        on_read=lambda: _fire_on_watchdog_thread(timers),
+    )
+
+    def hand_over_socket():
+        if owner == "response-owned":
+            # With `Connection: close` http.client hands the socket to the
+            # response: the connection has none left during the body read.
+            connection.sock = None
+
+    connection = _RecordingConnection(
+        log, response, connection_socket, on_getresponse=hand_over_socket
+    )
+    clock = FakeClock()
+    transport = acquisition._HttpsTransport(
+        connection_factory=lambda *args: connection,
+        timer_factory=timers,
+        clock=clock,
+    )
+    source, asset = transport_asset(content)
+    target = tmp_path / "asset.part"
+    target.touch()
+    attempt_thread = threading.current_thread().name
+
+    with pytest.raises(acquisition._AttemptFailure) as exc:
+        transport.download(source, asset, target, deadline=clock() + 20)
+
+    assert DEADLINE in str(exc.value)
+    shutdowns = [entry for entry in log if entry[0].endswith(".shutdown")]
+    expected = ["response.sock.shutdown"]
+    if owner == "both-sockets":
+        expected.append("connection.sock.shutdown")
+    # Each owned socket is shut down exactly once, by the watchdog thread,
+    # after `reached` was set.
+    assert sorted(name for name, _, _ in shutdowns) == sorted(expected)
+    assert {thread for _, thread, _ in shutdowns} == {"watchdog-thread"}
+    assert all(flag is True for _, _, flag in shutdowns)
+    assert [
+        name for name, thread, _ in log
+        if thread == "watchdog-thread" and not name.endswith(".shutdown")
+    ] == []
+    closes = [(name, thread) for name, thread, _ in log if name.endswith(".close")]
+    assert sorted(closes) == [
+        ("connection.close", attempt_thread),
+        ("response.close", attempt_thread),
+    ]
+
+
+def _finished_download(tmp_path):
+    """A successful download, then its watchdog and the recorded events."""
+
+    content = b"verified"
+    log = []
+    timers = _ManualTimers()
+
+    def reached():
+        return timers.timers[-1].callback.__self__.reached.is_set()
+
+    response = _RecordingResponse(
+        log,
+        _RecordingSocket(log, "response.sock", reached),
+        body=content,
+        headers={"Content-Length": str(len(content))},
+    )
+    connection = _RecordingConnection(
+        log, response, _RecordingSocket(log, "connection.sock", reached)
+    )
+    clock = FakeClock()
+    transport = acquisition._HttpsTransport(
+        connection_factory=lambda *args: connection,
+        timer_factory=timers,
+        clock=clock,
+    )
+    source, asset = transport_asset(content)
+    target = tmp_path / "asset.part"
+    target.touch()
+    transport.download(source, asset, target, deadline=clock() + 20)
+    assert sorted(name for name, _, _ in log) == ["connection.close", "response.close"]
+    return timers, log
+
+
+def test_watchdog_firing_after_finish_touches_no_socket(tmp_path):
+    timers, log = _finished_download(tmp_path)
+    before = list(log)
+
+    # A timer that fires late, after the attempt thread already closed.
+    _fire_on_watchdog_thread(timers)
+
+    assert timers.timers[-1].callback.__self__.reached.is_set()
+    assert log == before
+
+
+def test_watchdog_finish_closes_only_once(tmp_path):
+    timers, log = _finished_download(tmp_path)
+    before = list(log)
+
+    timers.timers[-1].callback.__self__.finish()
+
+    assert log == before
+
+
+ESCAPE_ERRORS = [
+    pytest.param(
+        lambda: AttributeError("'NoneType' object has no attribute 'close'"),
+        id="attribute-error",
+    ),
+    pytest.param(lambda: TypeError("argument of type 'NoneType' is not iterable"), id="type-error"),
+]
+
+
+def _escape_download(tmp_path, phase, make_error, deadline_reached):
+    content = b"verified"
+    error = make_error()
+    timers = _ManualTimers()
+    if phase == "status":
+        connection = _FailingStatusConnection(error, timers, deadline_reached)
+    else:
+        connection = FakeConnection(
+            _FailingBodyResponse(error, timers, deadline_reached, content)
+        )
+    clock = FakeClock()
+    transport = acquisition._HttpsTransport(
+        connection_factory=lambda *args: connection,
+        timer_factory=timers,
+        clock=clock,
+    )
+    source, asset = transport_asset(content)
+    target = tmp_path / "asset.part"
+    target.touch()
+    return error, lambda: transport.download(source, asset, target, deadline=clock() + 20)
+
+
+@pytest.mark.parametrize("phase", ["status", "body"])
+@pytest.mark.parametrize("make_error", ESCAPE_ERRORS)
+def test_unexpected_exception_after_the_deadline_is_the_deadline_outcome(
+    tmp_path, phase, make_error
+):
+    secret_url = "https://leak.example/object?Signature=exception-secret"
+    error, download = _escape_download(
+        tmp_path,
+        phase,
+        lambda: type(make_error())(f"failed at {secret_url}"),
+        True,
+    )
+
+    with pytest.raises(acquisition._AttemptFailure) as exc:
+        download()
+
+    outcome = exc.value
+    assert outcome.kind == "transient"
+    assert DEADLINE in str(outcome)
+    assert f"after {type(error).__name__}" in str(outcome)
+    rendered = "".join(traceback.format_exception(outcome))
+    for text in (str(outcome), rendered):
+        assert "exception-secret" not in text
+        assert "leak.example" not in text
+        assert "initial-secret" not in text
+    # Neither chained nor embedded: only the type name is carried over.
+    assert outcome.__cause__ is None
+    assert outcome.__suppress_context__
+
+
+@pytest.mark.parametrize("phase", ["status", "body"])
+@pytest.mark.parametrize("make_error", ESCAPE_ERRORS)
+def test_unexpected_exception_without_the_deadline_propagates_unchanged(
+    tmp_path, phase, make_error
+):
+    error, download = _escape_download(tmp_path, phase, make_error, False)
+
+    with pytest.raises(type(error)) as exc:
+        download()
+
+    assert exc.value is error
+    assert exc.value.__cause__ is None and not exc.value.__suppress_context__
+    raise_site = "getresponse" if phase == "status" else "read"
+    assert raise_site in [
+        frame.name for frame in traceback.extract_tb(exc.value.__traceback__)
+    ]
+
+
+@pytest.mark.parametrize("phase", ["status", "body"])
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        pytest.param(lambda: KeyboardInterrupt("cancelled"), id="keyboard-interrupt"),
+        pytest.param(lambda: SystemExit(3), id="system-exit"),
+        pytest.param(GeneratorExit, id="generator-exit"),
+    ],
+)
+def test_base_exceptions_after_the_deadline_are_never_caught(tmp_path, phase, make_error):
+    error, download = _escape_download(tmp_path, phase, make_error, True)
+
+    with pytest.raises(type(error)) as exc:
+        download()
+
+    assert exc.value is error
+
+
 def test_closed_without_response_is_retried_and_the_bytes_are_verified(tmp_path):
     policy, contents = controlled_policy()
     timers = _ManualTimers()
@@ -1421,6 +1780,7 @@ def test_real_https_transport_rejects_bytes_after_declared_body(
     assert exc.value.code == "transfer_excess"
 
 
+@pytest.mark.native_publication
 def test_real_https_response_owned_socket_obeys_idle_read_timeout(
     tmp_path, local_https_server, monkeypatch
 ):
@@ -1462,6 +1822,7 @@ def test_real_https_response_owned_socket_obeys_idle_read_timeout(
     assert target.stat().st_size == size_at_return
 
 
+@pytest.mark.native_publication
 def test_real_https_header_stall_is_stopped_at_attempt_deadline(
     tmp_path, local_https_server
 ):
@@ -1494,6 +1855,103 @@ def test_real_https_header_stall_is_stopped_at_attempt_deadline(
 
     assert exc.value.kind == "transient"
     assert time.monotonic() - started < 0.45
+
+
+@pytest.mark.native_publication
+def test_real_https_watchdog_alone_wakes_a_stalled_status_read(
+    tmp_path, local_https_server
+):
+    class StalledHeaderHandler(QuietHandler):
+        def do_GET(self):
+            time.sleep(0.6)
+            try:
+                self.send_response(200)
+                self.send_header("Content-Length", "8")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(b"verified")
+            except OSError:
+                pass
+            self.close_connection = True
+
+    factory, context, _ = local_https_server(StalledHeaderHandler)
+
+    def slow_socket_factory(host, port, timeout, ssl_context):
+        # The socket would only time out long after the attempt deadline, so
+        # the shutdown from the watchdog thread is the only thing that can
+        # wake the read in time.
+        return factory(host, port, 30.0, ssl_context)
+
+    transport = acquisition._HttpsTransport(
+        connection_factory=slow_socket_factory, ssl_context=context
+    )
+    source, asset = localhost_transport_asset()
+    target = tmp_path / "asset.part"
+    target.touch()
+    started = time.monotonic()
+
+    with pytest.raises(acquisition._AttemptFailure) as exc:
+        transport.download(
+            source, asset, target, deadline=time.monotonic() + 0.15
+        )
+
+    assert exc.value.kind == "transient"
+    assert DEADLINE in str(exc.value)
+    assert time.monotonic() - started < 0.45
+
+
+@pytest.mark.native_publication
+def test_real_https_watchdog_wakes_a_chunked_body_read_on_a_response_owned_socket(
+    tmp_path, local_https_server
+):
+    # The chunk-size line is trickled one byte every 50 ms for 6 s. http.client
+    # reads that line inside a single read1() call, so neither the per-chunk
+    # deadline check nor the per-receive timeout (set to the remaining attempt
+    # time, far above 50 ms) can end the read: only the watchdog's shutdown of
+    # the response-owned socket (`Connection: close`) can.
+    trickle_interval = 0.05
+    trickle_steps = 120
+
+    class TrickledChunkHeaderHandler(QuietHandler):
+        def do_GET(self):
+            try:
+                self.connection.sendall(
+                    b"HTTP/1.1 200 OK\r\n"
+                    b"Transfer-Encoding: chunked\r\n"
+                    b"Connection: close\r\n\r\n"
+                )
+                for _ in range(trickle_steps):
+                    time.sleep(trickle_interval)
+                    self.connection.sendall(b"0")
+            except OSError:
+                pass
+            self.close_connection = True
+
+    factory, context, _ = local_https_server(TrickledChunkHeaderHandler)
+
+    def slow_socket_factory(host, port, timeout, ssl_context):
+        return factory(host, port, 30.0, ssl_context)
+
+    transport = acquisition._HttpsTransport(
+        connection_factory=slow_socket_factory, ssl_context=context
+    )
+    source, asset = localhost_transport_asset()
+    target = tmp_path / "asset.part"
+    target.touch()
+    started = time.monotonic()
+
+    with pytest.raises(acquisition._AttemptFailure) as exc:
+        transport.download(
+            source, asset, target, deadline=time.monotonic() + 0.5
+        )
+
+    elapsed = time.monotonic() - started
+    assert exc.value.kind == "transient"
+    assert DEADLINE in str(exc.value)
+    # Without the wake-up the read lasts as long as the trickle (6 s). The
+    # bound leaves 2 s after the 0.5 s deadline for slow runners.
+    assert elapsed < 2.5
+    assert target.stat().st_size == 0
 
 
 def test_real_https_rejects_untrusted_certificate(tmp_path, local_https_server):

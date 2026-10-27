@@ -475,12 +475,19 @@ def _classify_attempt_exception(
 
 
 class _DeadlineWatchdog:
-    """Close both connection-owned and response-owned sockets at a deadline."""
+    """Wake a stalled attempt at its deadline; the attempt thread closes.
+
+    The timer thread only sets ``reached`` and shuts down the sockets the
+    attempt owns. It never closes the response or the connection: closing is
+    done by ``finish`` on the attempt thread, exactly once, so it cannot race
+    the read that the shutdown wakes up.
+    """
 
     def __init__(self, connection: Any, seconds: float, timer_factory) -> None:
         self.reached = threading.Event()
         self._connection = connection
         self._response = None
+        self._finished = False
         self._lock = threading.Lock()
         self._timer = timer_factory(seconds, self._abort)
         if hasattr(self._timer, "daemon"):
@@ -494,27 +501,18 @@ class _DeadlineWatchdog:
             self._response = response
             reached = self.reached.is_set()
         if reached:
-            self._abort_response(response)
-
-    @staticmethod
-    def _abort_response(response: Any) -> None:
-        _shutdown_socket(_response_socket(response))
-        try:
-            response.close()
-        except Exception:
-            pass
+            _shutdown_socket(_response_socket(response))
 
     def _abort(self) -> None:
         self.reached.set()
+        # Held across the shutdowns so that ``finish`` cannot close a socket
+        # while this thread is still using it.
         with self._lock:
-            response = self._response
-        if response is not None:
-            self._abort_response(response)
-        _shutdown_socket(getattr(self._connection, "sock", None))
-        try:
-            self._connection.close()
-        except Exception:
-            pass
+            if self._finished:
+                return
+            _shutdown_socket(getattr(self._connection, "sock", None))
+            if self._response is not None:
+                _shutdown_socket(_response_socket(self._response))
 
     def finish(self) -> None:
         self._timer.cancel()
@@ -523,6 +521,9 @@ class _DeadlineWatchdog:
         except (AttributeError, RuntimeError):
             pass
         with self._lock:
+            if self._finished:
+                return
+            self._finished = True
             response = self._response
         if response is not None:
             try:
@@ -731,6 +732,18 @@ class _HttpsTransport:
                 if outcome is exc:
                     raise
                 raise outcome from None
+            except Exception as exc:
+                # Anything else is not ours to classify, unless the deadline
+                # already fired: then the shutdown that woke the attempt is the
+                # likely cause. Only the type is named; the message may carry
+                # an unredacted URL.
+                if watchdog is None or not watchdog.reached.is_set():
+                    raise
+                raise _AttemptFailure(
+                    "transient",
+                    "source attempt exceeded its bounded deadline "
+                    f"(after {type(exc).__name__})",
+                ) from None
             finally:
                 if watchdog is not None:
                     watchdog.finish()
