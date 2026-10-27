@@ -96,13 +96,37 @@ DUAL_STACK_BIND_ATTEMPTS = 20
 IPV6_UNAVAILABLE_ERRNOS = {errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT}
 
 
-class _LoopbackV6Server(http.server.ThreadingHTTPServer):
+class _ExclusiveBindMixin:
+    """Make a bind on a port that is already in use fail instead of sharing it.
+
+    ``http.server`` sets SO_REUSEADDR, which on Windows lets a second socket
+    bind a port another socket holds, with indeterminate delivery afterwards.
+    Where SO_EXCLUSIVEADDRUSE exists (Windows) it is set before the bind.
+    """
+
+    allow_reuse_address = False
+
+    def _set_exclusive_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+
+
+class _LoopbackV4Server(_ExclusiveBindMixin, http.server.ThreadingHTTPServer):
+    """IPv4 loopback test server with an exclusive bind."""
+
+    def server_bind(self):
+        self._set_exclusive_bind()
+        super().server_bind()
+
+
+class _LoopbackV6Server(_ExclusiveBindMixin, http.server.ThreadingHTTPServer):
     """IPv6-only loopback twin of the IPv4 test server (same handler and port)."""
 
     address_family = socket.AF_INET6
 
     def server_bind(self):
         self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        self._set_exclusive_bind()
         socketserver.TCPServer.server_bind(self)
         host, port = self.server_address[:2]
         self.server_name = host
@@ -120,7 +144,7 @@ def _bind_loopback_servers(handler_type):
     """
 
     for _ in range(DUAL_STACK_BIND_ATTEMPTS):
-        v4 = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_type)
+        v4 = _LoopbackV4Server(("127.0.0.1", 0), handler_type)
         if not socket.has_ipv6:
             return [v4], False
         try:
@@ -1157,6 +1181,50 @@ def test_tls_failure_while_reading_body_follows_the_deadline(tmp_path, deadline_
         assert exc.value.code == "tls_failed"
 
 
+@pytest.mark.parametrize("phase", ["status", "body"])
+@pytest.mark.parametrize("deadline_reached", [True, False])
+def test_value_error_from_a_watchdog_closed_socket_follows_the_deadline(
+    tmp_path, phase, deadline_reached
+):
+    content = b"verified"
+    error = ValueError("Read on closed or unwrapped SSL socket.")
+    timers = _ManualTimers()
+    if phase == "status":
+        connection = _FailingStatusConnection(error, timers, deadline_reached)
+    else:
+        connection = FakeConnection(
+            _FailingBodyResponse(error, timers, deadline_reached, content)
+        )
+    clock = FakeClock()
+    transport = acquisition._HttpsTransport(
+        connection_factory=lambda *args: connection,
+        timer_factory=timers,
+        clock=clock,
+    )
+    source, asset = transport_asset(content)
+    target = tmp_path / "asset.part"
+    target.touch()
+
+    if deadline_reached:
+        with pytest.raises(acquisition._AttemptFailure) as exc:
+            transport.download(source, asset, target, deadline=clock() + 20)
+        assert exc.value.kind == "transient"
+        assert DEADLINE in str(exc.value)
+        return
+
+    with pytest.raises(ValueError) as exc:
+        transport.download(source, asset, target, deadline=clock() + 20)
+
+    # Never wrapped or reclassified: the same object, with its original traceback.
+    assert exc.value is error
+    assert str(exc.value) == "Read on closed or unwrapped SSL socket."
+    assert exc.value.__cause__ is None and not exc.value.__suppress_context__
+    raise_site = "getresponse" if phase == "status" else "read"
+    assert raise_site in [
+        frame.name for frame in traceback.extract_tb(exc.value.__traceback__)
+    ]
+
+
 def test_closed_without_response_is_retried_and_the_bytes_are_verified(tmp_path):
     policy, contents = controlled_policy()
     timers = _ManualTimers()
@@ -1289,6 +1357,36 @@ def test_local_https_server_listens_on_loopback_addresses_only(local_https_serve
     expected = ["127.0.0.1"] + (["::1"] if local_https_server.ipv6_available else [])
     assert sorted(host for host, _ in bound) == sorted(expected)
     assert {listening_port for _, listening_port in bound} == {port}
+    for server, _ in local_https_server.servers:
+        # Exclusive binding: no SO_REUSEADDR; SO_EXCLUSIVEADDRUSE where it exists.
+        assert not server.socket.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            assert server.socket.getsockopt(
+                socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE
+            )
+
+
+@pytest.mark.parametrize("family", ["ipv4", "ipv6"])
+def test_local_https_server_bind_on_a_port_in_use_fails_loudly(family):
+    address_family, address = (
+        (socket.AF_INET, "127.0.0.1") if family == "ipv4" else (socket.AF_INET6, "::1")
+    )
+    server_class = _LoopbackV4Server if family == "ipv4" else _LoopbackV6Server
+    try:
+        holder = socket.socket(address_family, socket.SOCK_STREAM)
+        holder.bind((address, 0))
+    except OSError as exc:
+        # A loopback family that does not exist cannot hold a port to collide on.
+        assert family == "ipv6" and exc.errno in IPV6_UNAVAILABLE_ERRNOS
+        return
+    with holder:
+        holder.listen(1)
+        port = holder.getsockname()[1]
+
+        with pytest.raises(OSError) as exc:
+            server_class((address, port), QuietHandler)
+
+        assert exc.value.errno == errno.EADDRINUSE
 
 
 def test_real_https_transport_rejects_bytes_after_declared_body(

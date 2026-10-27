@@ -113,7 +113,11 @@ is terminal (`tls_failed`); a connection closed without any response
 (an invalid status line, an over-long line, other `http.client` protocol
 errors) is terminal (`http_rejected`); and socket and timeout errors are
 transient. The same deadline precedence applies to TLS errors while the body is
-read. A transient failure is retried within the three-attempt budget and, once
+read. A `ValueError` raised by a TLS socket that the watchdog has just closed
+(`ssl.SSLSocket.read` raises it when the watchdog's `shutdown` clears the TLS
+object between `recv_into`'s check and the read) is classified as the deadline
+outcome in both phases; without a fired watchdog a `ValueError` is never
+reclassified and propagates unchanged. A transient failure is retried within the three-attempt budget and, once
 the attempts are exhausted, ends as `source_unavailable` (or
 `deadline_exceeded` when the retry wait would pass the asset budget). Tests
 inject the exact exception at the status-line and body phases with a controlled
@@ -178,9 +182,11 @@ symbolic link), to the destination itself when it exists as a link
 cleanup or removal, where a link or reparse point is never removed or followed
 (`path_substituted`, or reported in `cleanup_remaining`). Real-link tests use a
 directory junction on Windows and a directory symlink elsewhere; mocked tests
-inject Windows-style reparse attributes at each checked position so that branch
-runs on Linux. The Windows junction branch itself has run only in review, not
-natively. Acquisition has no publication step, so it has no equivalent of the
+inject Windows-style reparse attributes for the destination parent, an
+ancestor and the owned path so that branch runs on Linux. The `fstat` of the
+staged source in `_copy_to_final` is also covered by the reparse check but is
+not exercised by a mocked test. The Windows junction branch itself has run only
+in review, not natively. Acquisition has no publication step, so it has no equivalent of the
 materializer's pre-publication parent re-check; ancestor swaps after validation
 fall under the same cooperative ancestor-stability assumption.
 

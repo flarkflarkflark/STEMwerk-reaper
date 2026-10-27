@@ -441,7 +441,10 @@ def _classify_attempt_exception(
     The deadline watchdog stops a stalled attempt by shutting its socket down,
     and the exception type that surfaces for that varies with the TLS library
     (RemoteDisconnected, BrokenPipeError, an SSL EOF error, ...). A reached
-    deadline therefore wins over the exception type.
+    deadline therefore wins over the exception type. That includes the
+    ``ValueError`` that ``ssl.SSLSocket.read`` raises when the watchdog's
+    ``shutdown`` clears the TLS object between ``recv_into``'s check and the
+    read. A ``ValueError`` without a fired watchdog is returned as is.
     """
 
     if deadline_reached:
@@ -461,6 +464,10 @@ def _classify_attempt_exception(
         return AcquisitionError(
             "http_rejected", f"source returned malformed HTTP at {_redacted_url(url)}"
         )
+    if isinstance(exc, ValueError) and not isinstance(exc, OSError):
+        # Not an I/O failure: without a fired watchdog it is never reclassified.
+        # The caller re-raises the original exception object unchanged.
+        return exc
     return _AttemptFailure(
         "transient",
         f"transport failed for {_redacted_url(url)}: {type(exc).__name__}",
@@ -714,12 +721,16 @@ class _HttpsTransport:
                 TimeoutError,
                 ConnectionError,
                 OSError,
+                ValueError,
             ) as exc:
-                raise _classify_attempt_exception(
+                outcome = _classify_attempt_exception(
                     exc,
                     watchdog is not None and watchdog.reached.is_set(),
                     current_url,
-                ) from None
+                )
+                if outcome is exc:
+                    raise
+                raise outcome from None
             finally:
                 if watchdog is not None:
                     watchdog.finish()
