@@ -2740,6 +2740,139 @@ def test_cli_rejects_relative_destination_without_network(capsys):
     assert captured.out == ""
 
 
+LEAKY_INTERNAL_MESSAGE = "boom https://user:secret@example.invalid/x?token=SECRET"
+
+
+def _key_shape(document):
+    if isinstance(document, dict):
+        return {key: _key_shape(value) for key, value in document.items()}
+    return None
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, TypeError])
+def test_cli_unexpected_exception_is_a_redacted_internal_error(
+    monkeypatch, tmp_path, capsys, error_type
+):
+    def fail(request):
+        error = error_type(LEAKY_INTERNAL_MESSAGE)
+        if hasattr(error, "add_note"):
+            error.add_note(LEAKY_INTERNAL_MESSAGE)
+        raise error
+
+    monkeypatch.setattr(acquisition, "acquire_drumsep_sources", fail)
+    destination = str(tmp_path / "published")
+
+    status = acquisition.main(["--destination", destination])
+
+    captured = capsys.readouterr()
+    assert status == 3
+    assert captured.out == ""
+    document = json.loads(captured.err)
+    handled = acquisition._error_payload(acquisition.AcquisitionError("code", "message"))
+    assert _key_shape(document) == _key_shape(handled)
+    assert document["kind"] == "stemwerk_asset_acquisition_error"
+    assert document["schema_version"] == acquisition.SCHEMA_VERSION
+    assert document["outcome"] == "error"
+    assert document["destination"] == destination
+    assert document["error"] == {
+        "code": "internal_error",
+        "message": f"unexpected internal error ({error_type.__name__})",
+    }
+    assert document["cleanup"] == {"complete": None, "remaining_paths": None}
+    assert document["materialization"] == {"performed": False, "published": False}
+    for leaked in ("secret", "SECRET", "token", "example.invalid", "boom"):
+        assert leaked not in captured.err
+
+
+def test_cli_keyboard_interrupt_is_not_converted(monkeypatch, tmp_path, capsys):
+    def interrupt(request):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(acquisition, "acquire_drumsep_sources", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        acquisition.main(["--destination", str(tmp_path / "published")])
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def _internal_error_document(monkeypatch, tmp_path, capsys, error):
+    def fail(request):
+        raise error
+
+    monkeypatch.setattr(acquisition, "acquire_drumsep_sources", fail)
+
+    status = acquisition.main(["--destination", str(tmp_path / "published")])
+
+    captured = capsys.readouterr()
+    assert status == 3
+    assert captured.out == ""
+    for leaked in ("secret", "SECRET", "token", "example.invalid", "boom"):
+        assert leaked not in captured.err
+    return json.loads(captured.err)
+
+
+def test_cli_internal_error_lists_the_recorded_remaining_paths(
+    monkeypatch, tmp_path, capsys
+):
+    remaining = (str(tmp_path / "published" / "stage"), str(tmp_path / "published"))
+    error = RuntimeError(LEAKY_INTERNAL_MESSAGE)
+    error.cleanup_remaining = remaining
+    if hasattr(error, "add_note"):
+        error.add_note(LEAKY_INTERNAL_MESSAGE)
+
+    document = _internal_error_document(monkeypatch, tmp_path, capsys, error)
+
+    assert document["error"]["code"] == "internal_error"
+    assert document["cleanup"] == {"complete": None, "remaining_paths": list(remaining)}
+
+
+def test_cli_internal_error_reports_the_real_cleanup_result(monkeypatch, tmp_path, capsys):
+    class FailingTransport:
+        def __init__(self, **kwargs):
+            pass
+
+        def download(self, *args, **kwargs):
+            raise RuntimeError(LEAKY_INTERNAL_MESSAGE)
+
+    monkeypatch.setattr(acquisition, "_HttpsTransport", FailingTransport)
+    destination = tmp_path / "published"
+
+    status = acquisition.main(["--destination", str(destination)])
+
+    captured = capsys.readouterr()
+    assert status == 3
+    assert captured.out == ""
+    for leaked in ("secret", "SECRET", "token", "example.invalid", "boom"):
+        assert leaked not in captured.err
+    document = json.loads(captured.err)
+    assert document["error"]["code"] == "internal_error"
+    assert document["cleanup"] == {"complete": None, "remaining_paths": []}
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize(
+    "recorded",
+    [
+        pytest.param(["/a"], id="list"),
+        pytest.param("/a", id="string"),
+        pytest.param(("/a", 1), id="non-string-item"),
+        pytest.param(None, id="none"),
+    ],
+)
+def test_cli_internal_error_ignores_malformed_remaining_paths(
+    monkeypatch, tmp_path, capsys, recorded
+):
+    error = RuntimeError(LEAKY_INTERNAL_MESSAGE)
+    error.cleanup_remaining = recorded
+
+    document = _internal_error_document(monkeypatch, tmp_path, capsys, error)
+
+    assert document["cleanup"] == {"complete": None, "remaining_paths": None}
+
+
 def test_cli_help_does_not_contact_network(capsys):
     with pytest.raises(SystemExit) as exc:
         acquisition.main(["--help"])

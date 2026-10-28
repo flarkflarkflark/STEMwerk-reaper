@@ -469,3 +469,80 @@ def test_cli_rejects_mixed_modes_without_calling_api(monkeypatch, tmp_path, caps
     error = json.loads(capsys.readouterr().err)
     assert status == 2
     assert error["error"]["code"] == "invalid_source_mode"
+
+
+LEAKY_INTERNAL_MESSAGE = "boom https://user:secret@example.invalid/x?token=SECRET"
+
+
+def _key_shape(document):
+    if isinstance(document, dict):
+        return {key: _key_shape(value) for key, value in document.items()}
+    return None
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, TypeError])
+def test_cli_unexpected_exception_is_a_redacted_internal_error(
+    monkeypatch, tmp_path, capsys, error_type
+):
+    def fail(request):
+        error = error_type(LEAKY_INTERNAL_MESSAGE)
+        if hasattr(error, "add_note"):
+            error.add_note(LEAKY_INTERNAL_MESSAGE)
+        raise error
+
+    monkeypatch.setattr(preparation, "prepare_drumsep_assets", fail)
+    destination = str(tmp_path / "published")
+
+    status = preparation.main(["--destination", destination, "--acquire"])
+
+    captured = capsys.readouterr()
+    assert status == 3
+    assert captured.out == ""
+    document = json.loads(captured.err)
+    handled = preparation._error_document(
+        preparation.PreparationError(
+            "code",
+            "message",
+            phase="validation",
+            source_mode=None,
+            acquisition_completed=False,
+            publication_state="not_started",
+            destination=None,
+        )
+    )
+    assert _key_shape(document) == _key_shape(handled)
+    assert document["kind"] == "stemwerk_asset_preparation_error"
+    assert document["schema_version"] == preparation.SCHEMA_VERSION
+    assert document["outcome"] == "error"
+    assert document["phase"] is None
+    assert document["source_mode"] is None
+    assert document["destination"] == destination
+    assert document["acquisition"] == {"completed": None, "evidence": None}
+    assert document["publication"] == {
+        "state": "unknown",
+        "operation_id": None,
+        "receipt_path": None,
+    }
+    assert document["temporary_sources"] == {"path": None, "retained": None}
+    assert document["cleanup"] == {"complete": None, "remaining_paths": None}
+    assert document["error"] == {
+        "code": "internal_error",
+        "message": f"unexpected internal error ({error_type.__name__})",
+        "primitive": None,
+    }
+    for leaked in ("secret", "SECRET", "token", "example.invalid", "boom"):
+        assert leaked not in captured.err
+
+
+def test_cli_keyboard_interrupt_is_not_converted(monkeypatch, tmp_path, capsys):
+    def interrupt(request):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(preparation, "prepare_drumsep_assets", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        preparation.main(["--destination", str(tmp_path / "published"), "--acquire"])
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""

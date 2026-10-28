@@ -1367,6 +1367,33 @@ def _error_payload(exc: AcquisitionError) -> dict[str, Any]:
     }
 
 
+def _internal_error_payload(exc: Exception, destination: str) -> dict[str, Any]:
+    # Only the exception type is reported: its message, arguments and notes may
+    # carry unredacted URLs or paths. Remaining paths come only from the tuple
+    # that _set_failure_context records after cleanup; whether cleanup
+    # completed is not recorded, so it stays unknown.
+    remaining = getattr(exc, "cleanup_remaining", None)
+    if not (
+        isinstance(remaining, tuple) and all(isinstance(path, str) for path in remaining)
+    ):
+        remaining = None
+    return {
+        "kind": "stemwerk_asset_acquisition_error",
+        "schema_version": SCHEMA_VERSION,
+        "outcome": "error",
+        "destination": destination,
+        "error": {
+            "code": "internal_error",
+            "message": f"unexpected internal error ({type(exc).__name__})",
+        },
+        "cleanup": {
+            "complete": None,
+            "remaining_paths": None if remaining is None else list(remaining),
+        },
+        "materialization": {"performed": False, "published": False},
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Acquire Core-pinned DrumSep source files into a new directory."
@@ -1392,6 +1419,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    except Exception as exc:
+        print(
+            json.dumps(
+                _internal_error_payload(exc, args.destination),
+                indent=2 if args.pretty else None,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 3
     print(json.dumps(result, indent=2 if args.pretty else None, sort_keys=True))
     return 0
 

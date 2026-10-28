@@ -83,6 +83,17 @@ only one of the two local source options) is such a validation failure, not an
 argparse error. Other argument errors are printed by argparse in its own format
 and also exit `2`.
 
+Any other `Exception` is reported as the same versioned error document on stderr
+with code `internal_error`, exit `3` and nothing on stdout. Its message names
+only the exception type (for example "unexpected internal error
+(RuntimeError)"); the exception's message, arguments, notes and traceback are
+never printed, because they may carry unredacted URLs or paths. `destination` is
+the destination argument as given and `publication.state` is `unknown`; facts
+the CLI does not know are `null`: `phase`, `source_mode`, the `acquisition`,
+`temporary_sources` and `cleanup` fields, and `error.primitive`.
+`KeyboardInterrupt`, `SystemExit` and other `BaseException`s are not converted
+and propagate unchanged.
+
 ## Preflight and publication
 
 The orchestrator first validates that exactly one mode was selected. It then
@@ -111,10 +122,11 @@ operation ID and receipt path. Overall success requires a materializer success
 document for the requested destination with both operation and receipt
 identity.
 
-Errors report the failed `phase`: `validation`, `acquisition`, `publication`
-or `cleanup`. Publication state is `not_started`, `not_published`, `published`
-or `unknown`. A materializer's `published=None` remains `unknown`; the
-orchestrator does not infer absence or retry the whole operation. Primitive
+Errors report the failed `phase`: `validation`, `acquisition`, `publication` or
+`cleanup`; when the CLI reports an unexpected internal error (`internal_error`),
+`phase` is `null`. Publication state is `not_started`, `not_published`,
+`published` or `unknown`. A materializer's `published=None` remains `unknown`;
+the orchestrator does not infer absence or retry the whole operation. Primitive
 error evidence, acquisition success evidence, receipt location and cleanup
 leftovers remain separate fields.
 

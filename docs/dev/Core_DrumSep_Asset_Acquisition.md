@@ -45,6 +45,19 @@ operation-owned paths that could not be cleaned, and exits `2`; callers must
 read stderr for the error document. Argument errors are printed by argparse in
 its own format and also exit `2`.
 
+Any other `Exception` is reported as the same versioned error document on stderr
+with code `internal_error`, exit `3` and nothing on stdout. Its message names
+only the exception type (for example "unexpected internal error
+(RuntimeError)"); the exception's message, arguments, notes and traceback are
+never printed, because they may carry unredacted URLs or paths. `destination` is
+the destination argument as given. When the exception passed through the
+acquisition's own failure cleanup, `cleanup.remaining_paths` lists the
+operation-owned paths that cleanup recorded as remaining (a structured value,
+never parsed from exception text); otherwise it is `null`. Whether cleanup
+completed is not recorded, so `cleanup.complete` is `null`.
+`KeyboardInterrupt`, `SystemExit` and other `BaseException`s are not converted
+and propagate unchanged.
+
 The returned `sources` mapping may be passed explicitly into
 `asset_materialization.MaterializationRequest`. Acquisition never calls the
 materializer, and its result never claims that installation publication took

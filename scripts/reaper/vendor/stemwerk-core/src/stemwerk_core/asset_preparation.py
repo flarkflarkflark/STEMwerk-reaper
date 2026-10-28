@@ -731,6 +731,33 @@ def _error_document(exc: PreparationError) -> dict[str, Any]:
     }
 
 
+def _internal_error_document(exc: Exception, destination: str) -> dict[str, Any]:
+    # Only the exception type is reported: its message, arguments and notes may
+    # carry unredacted URLs or paths. Facts the CLI cannot know are null, and
+    # the publication state is the existing "unknown".
+    return {
+        "kind": "stemwerk_asset_preparation_error",
+        "schema_version": SCHEMA_VERSION,
+        "outcome": "error",
+        "phase": None,
+        "source_mode": None,
+        "destination": destination,
+        "acquisition": {"completed": None, "evidence": None},
+        "publication": {
+            "state": "unknown",
+            "operation_id": None,
+            "receipt_path": None,
+        },
+        "temporary_sources": {"path": None, "retained": None},
+        "cleanup": {"complete": None, "remaining_paths": None},
+        "error": {
+            "code": "internal_error",
+            "message": f"unexpected internal error ({type(exc).__name__})",
+            "primitive": None,
+        },
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", required=True)
@@ -791,6 +818,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    except Exception as exc:
+        print(
+            json.dumps(
+                _internal_error_document(exc, args.destination),
+                indent=2 if args.pretty else None,
+                sort_keys=True,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=None if args.pretty else (",", ":"),
+            ),
+            file=sys.stderr,
+        )
+        return 3
     print(
         json.dumps(
             result,
