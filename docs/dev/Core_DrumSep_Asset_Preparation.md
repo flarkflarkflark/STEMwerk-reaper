@@ -92,7 +92,10 @@ revalidates source identities, destination eligibility and parent identity,
 then performs its normal collision-safe publication. Filesystem support for a
 particular no-replace rename is established by the actual publication call;
 successful API preflight does not promise successful publication on every
-filesystem. macOS and Windows: implemented, not natively qualified.
+filesystem. Preparation, including the CLI with the real pinned DrumSep files,
+has run on Linux, macOS and Windows hosts, and its native publication tests run
+in CI on all three; commits, environments and scope are in the platform status
+of `Core_DrumSep_Asset_Materialization.md`.
 
 ## Evidence and phases
 

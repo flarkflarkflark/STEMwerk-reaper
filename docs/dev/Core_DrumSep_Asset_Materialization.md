@@ -105,12 +105,21 @@ ancestor-stability assumption and is not defended against.
 
 Platform status:
 
-- Linux: exercised by the native publication tests, in the portable CI
-  selection and in the native publication job under the guard described below.
-- macOS and Windows: implemented, not natively qualified. Native CI jobs are
-  configured for the macOS and Windows runner filesystems, and simulated
-  adapter tests do not qualify a platform. No result is generalized to every
-  local or network filesystem.
+| Platform | CI `asset-publication-native` job | Host runs |
+| --- | --- | --- |
+| Linux | ubuntu-24.04: green through 5d57bf6 | EndeavourOS dev host, worktree on NTFS: every change; Arch laptop, kernel 7.2, ext4, non-root: 0ff9db9 |
+| macOS | macOS arm64: green through 5d57bf6 | Apple M1, macOS 26.7.1, APFS: 377612e; Intel i7, macOS 15.7.9, APFS: 0ff9db9 |
+| Windows | Windows Server 2025: green through 0ff9db9; on 5d57bf6 33 of 34 passed, only the watchdog-alone header-stall time bound failed (see the Windows wake-up note in `Core_DrumSep_Asset_Acquisition.md`) | Windows 11 Pro 25H2, NTFS, Defender real-time protection on: 0ff9db9 |
+
+Each host run covered the `native_publication` selection, the three asset test
+files and the preparation CLI with the real pinned DrumSep files (a second run
+was refused with `destination_exists`; the sources were unchanged). The host
+runs predate 5d57bf6, the watchdog change; CI ran 5d57bf6 on all three
+operating systems. In scope: native no-replace publication, the controlled
+acquisition tests and local-source preparation. Not covered: model inference,
+external downloads, full installation and release qualification. Simulated
+adapter tests do not qualify a platform, and no result is generalized to every
+local or network filesystem.
 
 Known Windows limits: open handles, ACLs, sharing rules, and the documented
 `MoveFileExW` path-length rules can cause a normal `publication_failed` result.
@@ -202,10 +211,11 @@ of passing silently. The selection contains no file-symlink test and needs no
 symlink privilege. Three file-symlink tests remain outside it, because Windows
 has no unprivileged file-level link: the materializer source-symlink test
 (skipped on Windows) and two acquisition substitution tests (partial file and
-staged source). They need symlink-creation permission (an administrator
-account or Developer Mode) if they are ever run on Windows. The full portable
-selection keeps legitimate skips; it only reports them (`-rs`). The guard does
-not make macOS or Windows qualified until those jobs have actually run.
+staged source, skipped where a file symlink cannot be created without
+privilege, as on Windows without Developer Mode or administrator rights). All
+three skip with "requires unprivileged symlink creation". The full portable
+selection keeps legitimate skips; it only reports them (`-rs`). The jobs have
+run on all three operating systems; see the platform status above.
 
 ## Native API references
 

@@ -146,8 +146,9 @@ whichever is shorter. TLS negotiation, request transmission, response headers
 and body reads share an attempt watchdog. At the deadline the watchdog first
 sets its `reached` flag and then only shuts down the connection socket and the
 response-owned socket (this matters when HTTP connection-close framing
-transfers socket ownership to `HTTPResponse`), which wakes a blocked read. It
-never closes the response or the connection: the attempt thread does that once,
+transfers socket ownership to `HTTPResponse`). On Linux and macOS that
+shutdown wakes a blocked read; on Windows it does not wake an idle wait (see
+below). It never closes the response or the connection: the attempt thread does that once,
 in its `finally`, on every path (success, failure and deadline). Closing from
 the timer thread raced the woken reader inside `http.client` and could escape
 as an `AttributeError`. The watchdog also takes no action once the attempt has
@@ -155,17 +156,32 @@ started closing, so its shutdown never overlaps the close performed in
 `finish()`. `http.client`'s own internal closes on the attempt thread (on EOF
 of the response, or the connection close inside `getresponse` that hands the
 socket to the response) are not serialized with it; that leaves a narrow
-window, which also existed before. Whether a shutdown wakes a blocked TLS read
-on macOS and Windows is not assumed: the `native_publication` selection, which
-the macOS and Windows jobs run, has a header stall whose socket timeout is far
-beyond the attempt deadline (only the watchdog can wake it), a chunked body
-whose chunk-size line is trickled on a response-owned socket (only the
-watchdog's shutdown of that socket can end the read), a header stall at the
-deadline, and an idle read on a response-owned socket. The qualification note
-below applies until those jobs have run. An
-individual blocked body read is additionally bounded to 60 seconds. The
-monotonic deadline is checked after every socket-delivered chunk, so a
-trickling response cannot extend the attempt.
+window, which also existed before.
+
+Wake-up by shutdown differs per operating system:
+
+- Linux and macOS: the shutdown wakes a blocked read at the deadline. The
+  `native_publication` jobs prove it on 5d57bf6 with a header stall whose
+  socket timeout is far beyond the attempt deadline and a chunked body whose
+  chunk-size line is trickled on a response-owned socket; only the watchdog
+  can end either read in time.
+- Windows: Winsock does not document that a shutdown wakes an idle `select()`,
+  and CI run 40603074419 shows that it does not. A waiting read ends when data
+  arrives (data after `shutdown(SD_RECEIVE)` resets the connection, as
+  documented) or at its socket timeout, which is set from the remaining
+  attempt time. In the status phase that timeout is set when the TLS handshake
+  starts, so a stalled response ends at most about the handshake plus request
+  time after the deadline. The header-stall test therefore expects the wait to
+  end when the server's data arrives (bound 2 s on Windows), and the chunked
+  test proves boundedness on Windows, not idle wake-up.
+
+Every body read gets a socket timeout of 60 seconds or the remaining attempt
+time, whichever is shorter, so an idle body read ends at the deadline on every
+OS. The monotonic deadline is also checked after every socket-delivered chunk.
+A response trickled inside a single read (for example a chunk-size line sent
+one byte at a time) is ended at the deadline by the shutdown on Linux and
+macOS; on Windows it ends at the next byte after the deadline (the reset) or
+at the socket timeout, whichever comes first.
 
 The checkpoint has a 1,800-second attempt bound and 3,600-second total asset
 budget. The YAML has a 120-second attempt bound and 300-second total asset
@@ -196,8 +212,8 @@ defines it, so Windows does not translate line endings or treat `0x1A` as end
 of file; it is a no-op on Linux and macOS. A regression test records the flags
 of each open with a sentinel bit. The binary-mode test and the
 acquisition-to-materializer test are part of the `native_publication` CI
-selection, so the macOS and Windows jobs will exercise them; until those jobs
-have run, the Windows behavior is not natively qualified.
+selection, which runs on Linux, macOS and Windows; commits, environments and
+scope are in the platform status of `Core_DrumSep_Asset_Materialization.md`.
 
 Acquisition rejects every link on the destination path, with parity to the
 materializer: symbolic links and, on Windows, all other reparse points
@@ -213,8 +229,12 @@ directory junction on Windows and a directory symlink elsewhere; mocked tests
 inject Windows-style reparse attributes for the destination parent, an
 ancestor and the owned path so that branch runs on Linux. The `fstat` of the
 staged source in `_copy_to_final` is also covered by the reparse check but is
-not exercised by a mocked test. The Windows junction branch itself has run only
-in review, not natively. Acquisition has no publication step, so it has no equivalent of the
+not exercised by a mocked test. The Windows junction branch runs natively in
+the Windows `native_publication` job and on the Windows 11 host. The two
+file-symlink substitution tests (partial file and staged source) skip with
+"requires unprivileged symlink creation" when a file symlink cannot be created
+without privilege, as on Windows without Developer Mode or administrator
+rights. Acquisition has no publication step, so it has no equivalent of the
 materializer's pre-publication parent re-check; ancestor swaps after validation
 fall under the same cooperative ancestor-stability assumption.
 

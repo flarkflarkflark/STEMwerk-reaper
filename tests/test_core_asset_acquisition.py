@@ -14,6 +14,7 @@ import socket
 import socketserver
 import ssl
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -1897,7 +1898,14 @@ def test_real_https_watchdog_alone_wakes_a_stalled_status_read(
 
     assert exc.value.kind == "transient"
     assert DEADLINE in str(exc.value)
-    assert time.monotonic() - started < 0.45
+    if sys.platform == "win32":
+        # Winsock documents no wake-up of an idle select() by shutdown(); the
+        # wait ends when the server's data arrives at ~0.6 s, because data
+        # after shutdown(SD_RECEIVE) resets the connection (CI run
+        # 40603074419). The bound still catches a hang.
+        assert time.monotonic() - started < 2.0
+    else:
+        assert time.monotonic() - started < 0.45
 
 
 @pytest.mark.native_publication
@@ -2070,6 +2078,29 @@ def test_deadline_watchdog_aborts_even_before_response_headers_complete(tmp_path
     assert exc.value.kind == "transient"
 
 
+def _can_create_file_symlink() -> bool:
+    """Whether this process can create a file symlink without extra privilege.
+
+    Windows refuses it without Developer Mode or administrator rights
+    (ERROR_PRIVILEGE_NOT_HELD, 1314); elsewhere it normally succeeds.
+    """
+
+    with tempfile.TemporaryDirectory() as directory:
+        target = Path(directory) / "target"
+        target.touch()
+        try:
+            (Path(directory) / "link").symlink_to(target)
+        except (OSError, NotImplementedError):
+            return False
+    return True
+
+
+CAN_CREATE_FILE_SYMLINK = _can_create_file_symlink()
+
+
+@pytest.mark.skipif(
+    not CAN_CREATE_FILE_SYMLINK, reason="requires unprivileged symlink creation"
+)
 def test_transport_refuses_partial_path_substitution_without_touching_target(tmp_path):
     content = b"verified"
     factory = ConnectionFactory([FakeResponse(status=200, body=content)])
@@ -2455,6 +2486,9 @@ def test_never_returns_mapping_after_second_asset_failure(tmp_path):
     assert not (tmp_path / "acquired").exists()
 
 
+@pytest.mark.skipif(
+    not CAN_CREATE_FILE_SYMLINK, reason="requires unprivileged symlink creation"
+)
 def test_substituted_staged_source_is_preserved_and_not_followed(tmp_path):
     policy, contents = controlled_policy()
     victim = tmp_path / "external-matching-content"
