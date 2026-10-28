@@ -107,19 +107,22 @@ Platform status:
 
 | Platform | CI `asset-publication-native` job | Host runs |
 | --- | --- | --- |
-| Linux | ubuntu-24.04: green through 5d57bf6 | EndeavourOS dev host, worktree on NTFS: every change; Arch laptop, kernel 7.2, ext4, non-root: 0ff9db9 |
-| macOS | macOS arm64: green through 5d57bf6 | Apple M1, macOS 26.7.1, APFS: 377612e; Intel i7, macOS 15.7.9, APFS: 0ff9db9 |
-| Windows | Windows Server 2025: green through 0ff9db9; on 5d57bf6 33 of 34 passed, only the watchdog-alone header-stall time bound failed (see the Windows wake-up note in `Core_DrumSep_Asset_Acquisition.md`) | Windows 11 Pro 25H2, NTFS, Defender real-time protection on: 0ff9db9 |
+| Linux | ubuntu-24.04: 34 of 34, green on f2865b1 | EndeavourOS dev host, worktree on NTFS: every change; Arch laptop, kernel 7.2, ext4, non-root: 0ff9db9 |
+| macOS | macOS arm64: 34 of 34, green on f2865b1 | Apple M1, macOS 26.7.1, APFS: 377612e; Intel i7, macOS 15.7.9, APFS: 0ff9db9 |
+| Windows | Windows Server 2025: 34 of 34, green on f2865b1 | Windows 11 Pro 25H2, NTFS, Defender real-time protection on: 0ff9db9 |
 
 Each host run covered the `native_publication` selection, the three asset test
 files and the preparation CLI with the real pinned DrumSep files (a second run
 was refused with `destination_exists`; the sources were unchanged). The host
-runs predate 5d57bf6, the watchdog change; CI ran 5d57bf6 on all three
-operating systems. In scope: native no-replace publication, the controlled
-acquisition tests and local-source preparation. Not covered: model inference,
-external downloads, full installation and release qualification. Simulated
-adapter tests do not qualify a platform, and no result is generalized to every
-local or network filesystem.
+runs predate 5d57bf6, the watchdog change. The latest green CI run is
+40610308255 on f2865b1, on all three operating systems. History: on 5d57bf6 (run
+40603074419) Windows passed 33 of 34, failing only the watchdog-alone
+header-stall time bound, which f2865b1 replaced with a per-OS bound (see the
+Windows wake-up note in `Core_DrumSep_Asset_Acquisition.md`). In scope: native
+no-replace publication, the controlled acquisition tests and local-source
+preparation. Not covered: model inference, external downloads, full installation
+and release qualification. Simulated adapter tests do not qualify a platform,
+and no result is generalized to every local or network filesystem.
 
 Known Windows limits: open handles, ACLs, sharing rules, and the documented
 `MoveFileExW` path-length rules can cause a normal `publication_failed` result.

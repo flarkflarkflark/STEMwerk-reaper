@@ -38,9 +38,12 @@ python -I -B -m stemwerk_core.asset_acquisition \
   --pretty
 ```
 
-Exit `0` returns a complete verified mapping in JSON. Exit `2` returns a
-versioned JSON error on stderr, including a stable code and any operation-owned
-paths that could not be cleaned. Normal argparse errors also exit `2`.
+On success the CLI prints the complete verified mapping as one JSON document on
+stdout and exits `0`. A handled failure (`AcquisitionError`) prints a versioned
+JSON error document on stderr instead, including a stable code and any
+operation-owned paths that could not be cleaned, and exits `2`; callers must
+read stderr for the error document. Argument errors are printed by argparse in
+its own format and also exit `2`.
 
 The returned `sources` mapping may be passed explicitly into
 `asset_materialization.MaterializationRequest`. Acquisition never calls the
@@ -148,15 +151,23 @@ sets its `reached` flag and then only shuts down the connection socket and the
 response-owned socket (this matters when HTTP connection-close framing
 transfers socket ownership to `HTTPResponse`). On Linux and macOS that
 shutdown wakes a blocked read; on Windows it does not wake an idle wait (see
-below). It never closes the response or the connection: the attempt thread does that once,
-in its `finally`, on every path (success, failure and deadline). Closing from
-the timer thread raced the woken reader inside `http.client` and could escape
-as an `AttributeError`. The watchdog also takes no action once the attempt has
-started closing, so its shutdown never overlaps the close performed in
-`finish()`. `http.client`'s own internal closes on the attempt thread (on EOF
+below). It never closes the response or the connection: the attempt thread does
+that once, in its `finally`, on every path (success, failure and deadline).
+Closing from the timer thread raced the woken reader inside `http.client` and
+could escape as an `AttributeError`. The watchdog also takes no action once the
+attempt has started closing, so its shutdown never overlaps the close performed
+in `finish()`. `http.client`'s own internal closes on the attempt thread (on EOF
 of the response, or the connection close inside `getresponse` that hands the
-socket to the response) are not serialized with it; that leaves a narrow
-window, which also existed before.
+socket to the response) are not serialized with it; that leaves a narrow window,
+which also existed before.
+
+The watchdog reaches the response-owned socket through `response.fp.raw._sock`,
+the private `_sock` attribute of the standard library's
+`socket.SocketIO`. If any attribute in that chain is missing, the lookup yields
+`None` and that shutdown is skipped; the read is then bounded by its socket
+timeout, which is set from the remaining attempt time. The package declares
+`requires-python = ">=3.10,<3.13"` in `pyproject.toml`, and this dependency must
+be re-checked before a newer CPython is supported.
 
 Wake-up by shutdown differs per operating system:
 
@@ -200,11 +211,12 @@ size and SHA-256 checks.
 
 ## Filesystem and failure behavior
 
-The destination must be absolute, have an existing parent free of symbolic
-links and other reparse points, and be absent. It is created exclusively with user-only permissions. A second thread
-or process targeting the same destination fails rather than sharing or
-replacing it. An exclusively created private staging directory and partial
-files hold incoming bytes. There is no resume support or persistent cache.
+The destination must be absolute, have an existing parent free of symbolic links
+and other reparse points, and be absent. It is created exclusively with
+user-only permissions. A second thread or process targeting the same destination
+fails rather than sharing or replacing it. An exclusively created private
+staging directory and partial files hold incoming bytes. There is no resume
+support or persistent cache.
 
 Every descriptor-level open (partial-file creation, transfer writes,
 verification reads and the final copy) requests `O_BINARY` where the platform

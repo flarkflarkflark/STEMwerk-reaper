@@ -74,9 +74,14 @@ python -I -B -m stemwerk_core.asset_preparation \
 ```
 
 Exit `0` is returned only after the materializer reports verified publication
-and temporary acquisition cleanup succeeds. Exit `2` returns a versioned JSON
-error for validation, acquisition, publication or cleanup failure. Normal
-argument-parser errors also exit `2`.
+and temporary acquisition cleanup succeeds; the success document is printed as
+one JSON document on stdout. A handled validation, acquisition, publication or
+cleanup failure (`PreparationError`) prints a versioned JSON error document on
+stderr instead and exits `2`; callers must read stderr for the error document.
+An invalid source-mode combination (`--acquire` with a local source option, or
+only one of the two local source options) is such a validation failure, not an
+argparse error. Other argument errors are printed by argparse in its own format
+and also exit `2`.
 
 ## Preflight and publication
 
