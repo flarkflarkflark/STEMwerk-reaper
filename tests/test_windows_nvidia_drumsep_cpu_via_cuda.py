@@ -43,6 +43,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIO_PROCESS = ROOT / "scripts" / "reaper" / "audio_separator_process.py"
+CORE_RUNTIME = ROOT / "scripts" / "reaper" / "vendor" / "stemwerk-core" / "src" / "stemwerk_core" / "drumsep_runtime.py"
 
 
 def _load_module(path: Path, name: str):
@@ -422,16 +423,16 @@ def test_direct_kit_and_kit_split_both_call_shared_resolver():
 
 
 def test_cuda_as_cpu_fallback_is_scoped_to_windows_explicit_cpu_branch():
-    text = AUDIO_PROCESS.read_text(encoding="utf-8")
+    text = CORE_RUNTIME.read_text(encoding="utf-8")
     explicit_cpu_idx = text.index("if explicit_cpu:")
-    next_top_level_idx = text.index("\n    if explicit_cuda and sys.platform.startswith(\"linux\"):", explicit_cpu_idx)
+    next_top_level_idx = text.index("\n    if explicit_cuda and _platform_name().startswith(\"linux\"):", explicit_cpu_idx)
     explicit_cpu_block = text[explicit_cpu_idx:next_top_level_idx]
 
     assert "explicit_cpu_via_rocm_runtime" in explicit_cpu_block
     assert "explicit_cpu_via_directml_runtime" in explicit_cpu_block
     assert "explicit_cpu_via_cuda_runtime" in explicit_cpu_block
 
-    rocm_guard_idx = explicit_cpu_block.index('if sys.platform.startswith("linux"):')
+    rocm_guard_idx = explicit_cpu_block.index('if _platform_name().startswith("linux"):')
     directml_guard_idx = explicit_cpu_block.index("if _is_windows_runtime():")
     cuda_guard_idx = explicit_cpu_block.rindex("if _is_windows_runtime():")
 

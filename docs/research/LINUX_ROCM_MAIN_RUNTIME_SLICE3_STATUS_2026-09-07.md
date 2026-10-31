@@ -1,0 +1,235 @@
+# Slice 3 (2.4.0.0) — Linux ROCm main-runtime modernization status (2026-09-07)
+
+## Summary / verdict
+
+NO_PIN_CHANGE_FOR_MAIN_RUNTIME. The audio-separator 0.44.3 / NumPy 2 migration
+for the Linux "main" (Normal Stems) runtime was investigated, found to have
+already been attempted and deliberately reverted before shipping, and that
+revert is independently corroborated by a fresh dependency-resolution
+reproduction in this slice. The current shipped pins remain the correct,
+defensible target. DrumSep is unaffected and already runs a newer, isolated
+stack; it is not touched here either.
+
+This is a validation/investigation slice, not a version-bump slice. See
+`docs/research/MAC_LINUX_ROFORMER_ASEP_0443_RND.md` and
+`docs/research/ASEP_0443_PIN_MATRIX_2026-07-14.md` for the prior R&D this
+builds on.
+
+## What was investigated
+
+Two prior branches attempted the Linux main-runtime bump to
+audio-separator 0.44.3:
+
+- `feature/linux-rocm-asep-0443-main-runtime` (`12a6c344`) — bumps
+  `PINNED_AUDIO_SEPARATOR_VERSION` to `0.44.3` with a `--no-deps` install
+  fallback, keeping `PINNED_NUMPY_VERSION="1.26.4"` unchanged. Never merged
+  to `main`.
+- `feature/linux-rocm-asep-0443-numpy2-main-runtime` (`94fb94a2`,
+  `bb49dc8c`, merged via PR #78, `90f39a42`) — bumps the same pin, but pairs
+  it with `numpy==2.4.4`, `numba==0.66.0`, `llvmlite==0.48.0`,
+  `scipy==1.18.0`, `beartype==0.18.5`. This one **was** merged into `main`.
+
+`main`'s current `scripts/reaper/STEMwerk_Bootstrap_Linux.sh` was checked
+directly: it has **no** `PINNED_AUDIO_SEPARATOR_VERSION` at all, and
+`PINNED_NUMPY_VERSION`/`PINNED_NUMBA_VERSION`/`PINNED_LLVM_VERSION` are back
+at `1.26.4`/`0.59.1`/`0.42.0`. A file-level diff between `94fb94a2` and
+`main` on this script shows the NumPy-2 pin block explicitly reverted to
+the pre-migration values in a later commit on the way to `main`, alongside
+unrelated new work (DrumSep ROCm tmpdir validation, ready-to-go state
+fields) in the same commit — i.e. this was a deliberate hand-revert of the
+migration, not an accidental loss. `tools/build_linux_wheelhouse.py`'s
+`("main", *)` specs on `main` likewise still read `audio-separator==0.23.0`.
+
+## Independent reproduction (this slice)
+
+An isolated venv (Python 3.12.9, scratch-only, no system/production
+packages touched) was built with the exact `feature/.../numpy2` candidate
+stack: `torch/torchaudio==2.10.0+rocm7.0`, `torchvision==0.25.0+rocm7.0`,
+then `pip install -c {numpy==1.26.4, numba==0.59.1, llvmlite==0.42.0}
+audio-separator==0.44.3`.
+
+Result: **pip's resolver fails immediately** —
+`audio-separator 0.44.3 depends on numpy>=2`, directly conflicting with the
+`numpy==1.26.4` constraint. This independently reproduces, from first
+principles and without reading the prior branches' code, the exact
+conflict that most likely motivated the revert.
+
+The `--no-deps` fallback from `12a6c344` was also reproduced: downgrading
+numpy back to `1.26.4` after installing audio-separator's other runtime
+deps, then force-installing `audio-separator==0.44.3 --no-deps`, does
+produce an importable environment (`import audio_separator` succeeds, all
+verify-list modules import). Whether it is *correct* at runtime despite
+audio-separator's own declared `numpy>=2` floor was not exhaustively
+proven either way in this slice; the point is moot since this approach
+was not the one that shipped.
+
+## Current production baseline (confirmed on this machine)
+
+This machine already has a real, fully-bootstrapped STEMwerk runtime at
+`~/.local/share/STEMwerk/` (not touched — read-only inspection only). Its
+actual installed "main" runtime:
+
+```
+audio-separator  0.23.0
+torch            2.10.0+rocm7.0
+torchaudio       2.10.0+rocm7.0
+torchvision      0.25.0+rocm7.0
+numpy            1.26.4
+numba            0.59.1
+llvmlite         0.42.0
+scipy            1.17.1
+onnxruntime      1.29.0 (unpinned policy, resolved at install time)
+```
+
+`state/ready_to_go.env`: `READY_TO_GO_STATUS=ok`, `MAIN_RUNTIME_STATUS=ok`,
+`NORMAL_STEMS_MODEL_READY=yes`, `QUALITY_READY=yes`, `SIX_STEM_READY=yes`,
+`DIRECT_KIT_READY=yes`, `KIT_SPLIT_READY=yes` — this exact pin combination
+is the one already shipped and already green on real AMD Linux/ROCm
+hardware (RX 9070 discrete + 780M integrated), independent of anything
+this slice did.
+
+A fresh isolated venv built to this exact same combination (not the
+production one) additionally proved, in this slice: a real matmul on
+`cuda:0`; a real `htdemucs` separation of a real 20s clip via
+`stemwerk_core.separator.StemSeparator` (4 stems, `device_used=cuda:0`,
+7.9s elapsed); and that `stemwerk_core.runtime_resolution.resolve_execution_plan`
+via the real `stemwerk_runtime_seam.build_normal_stems_capability_probe()`
+independently resolves the same plan (`rocm`/`cuda:0`) that the real
+separation actually used, proving contract/runtime agreement against the
+*true* production-matching runtime for the first time (Slice 1/2's
+real-hardware validation used ambient system Python's torch, which happens
+to be a different, newer build than the managed runtime).
+
+DrumSep (unaffected, unchanged, isolated stack, `audio-separator==0.34.1`)
+was independently proven on this same real production runtime base: real
+`_select_drumsep_runtime` explicit-`rocm` and `auto` calls both resolve to
+the real ROCm venv (`AMD Radeon RX 9070`, `AMD Radeon 780M Graphics`
+detected); an explicit `cuda:0` request (no real NVIDIA hardware present)
+correctly fails closed (`python_path=None`, `reason=missing`,
+`selection_policy=explicit_cuda`) rather than silently downgrading —
+confirming Slice 2's fail-closed fix holds on genuine hardware absence,
+not only in mocks.
+
+## hdemucs_mmi (Slice 2 open question)
+
+Slice 2 could not find any evidence for `hdemucs_mmi`'s stem semantics
+anywhere in this repository or this machine's installed/deployed state.
+This slice extends that check to the actual installed `audio-separator`
+package contents: `grep -rl hdemucs_mmi` across the entire installed
+0.23.0 venv (including its vendored `demucs` implementation and
+`torchaudio`'s own HDemucs code) returns **no matches**. The model is
+resolved generically via `stemwerk_core.models.py`'s friendly-name mapping
+to a `hdemucs_mmi.yaml` file that does not exist in this repo or this
+machine's model cache; audio-separator itself has no special-cased
+knowledge of it. This remains unprovable locally. The Slice 2 catalog
+entry (`role: internal`, 4-stem, output_semantic_ids inferred from the
+support bundle's own generic fallback) is left unchanged, per Slice 3's
+instruction not to broaden into unrelated internet research.
+
+## Non-goals honored
+
+No system package, Linux kernel, Mesa, or system Python was touched. The
+production runtime at `~/.local/share/STEMwerk/` was read-only inspected,
+never written to. All package installs happened in a disposable venv under
+this session's scratch directory. DrumSep, Direct Kit/Split contract
+authority, and macOS/Windows constraint files are unchanged.
+
+## Addendum (completion pass) — CPU, remaining models, hdemucs_mmi catalog entry
+
+Closes the real-validation gaps left open above.
+
+**Real CPU separation.** Same isolated venv, `device="cpu"` explicit:
+`resolve_execution_plan` resolves `requested_device="cpu"`,
+`resolved_backend="cpu"`, `resolved_device="cpu"`; the real
+`StemSeparator(model="htdemucs", device="cpu")` run produced
+`device_used="cpu"` and all four expected stems (`vocals`, `drums`, `bass`,
+`other`), non-empty files, no GPU backend touched. 7.0s for a 20s clip.
+
+**htdemucs_ft and htdemucs_6s — locally available, both proven for real on
+ROCm.** Both have complete local weights in the real production model
+cache (`htdemucs_ft.yaml` + its 4-file bag; `htdemucs_6s.yaml` + its single
+file). Copied (not moved/linked) into per-test scratch, `device="auto"`:
+both resolve `rocm`/`cuda:0` and the real separator run's `device_used`
+matches exactly. `htdemucs_ft` produced the expected 4 stems (10.9s);
+`htdemucs_6s` produced the expected 6 stems -- `vocals`, `drums`, `bass`,
+`other`, `guitar`, `piano` (1.7s).
+
+**hdemucs_mmi — still not locally available, now with one more layer of
+evidence.** The production model cache's own `download_checks.json` (part
+of audio-separator's model registry, not something this slice wrote) lists
+`"Demucs v4: hdemucs_mmi"` as a single file,
+`75fc33f5-1941ce65.th` (`dl.fbaipublicfiles.com/demucs/hybrid_transformer/...`,
+the same URL family as plain `htdemucs`'s single `955717e8-...th`, not the
+4-file `htdemucs_ft` bag and not distinctly "6s"-labeled like
+`htdemucs_6s`). Neither that file nor `hdemucs_mmi.yaml` exists locally --
+this is a download manifest entry, not proof of the model's actual stem
+output, and per instruction was not downloaded to find out. This is
+consistent with, but does not upgrade, the Slice 2 catalog entry's
+4-stem/`role: internal` classification. The gap remains explicitly
+recorded (`test_hdemucs_mmi_local_availability_is_recorded`) rather than
+silently dropped.
+
+**Production hygiene note.** `audio_separator`'s `Separator` writes/updates
+a `download_checks.json` in whatever `AUDIO_SEPARATOR_MODEL_DIR` points at,
+even when loading an already-local model -- observed directly when it
+appeared unprompted in the scratch model directory after the first
+htdemucs run. The completion-pass tests now always stage a copy of the
+needed model files into a pytest-owned `tmp_path` and point execution at
+that copy, never at the live model cache directly, so no test run can
+write into `~/.local/share/STEMwerk/models/`. Confirmed after this pass:
+every file under that directory retains its original 2026-09-03 mtime.
+
+## Candidate note (2.4.0.0-r1 transplant, 2026-10-25)
+
+This document is preserved verbatim as historical evidence from the
+original `integration/2.4.0.0` line (status date 2026-09-07, AMD Linux
+RX 9070/780M ROCm). Its hardware PASS results describe that branch's code
+and that machine's runtime; they are **not** validation of the
+2.4.0.0-r1 candidate built on v2.3.1.3.
+
+One conclusion does not carry over to the candidate: the observation above
+that an explicit `cuda:0` request "correctly fails closed
+(`python_path=None`, `reason=missing`, `selection_policy=explicit_cuda`)"
+reflects the source branch's Slice-2 fail-closed variant. The r1 candidate
+deliberately keeps the 2.3.1.3 production chain instead: on a machine with
+no genuine NVIDIA runtime and a healthy ROCm runtime, an explicit `cuda:N`
+request resolves the torch.cuda namespace through ROCm with attribution
+(`selection_policy=explicit_cuda_namespace_resolved_rocm`,
+`fallback_reason=cuda_skipped:...`), fails closed only when a provisioned
+ROCm runtime proves broken, and otherwise keeps the attributed CPU
+fallback. The corresponding test
+(`test_real_drumsep_explicit_rocm_and_cuda_namespace_against_production_runtime`)
+was adapted to encode this candidate policy; all other observations in
+this document are unchanged. The fail-closed explicit-`rocm` behavior this
+document also references **is** part of the candidate.
+
+Two background references in this document
+(`docs/research/MAC_LINUX_ROFORMER_ASEP_0443_RND.md`,
+`docs/research/ASEP_0443_PIN_MATRIX_2026-07-14.md`) live on the 2.3.1.3
+release-candidate branches and are not present on the v2.3.1.3 tag, on the
+source integration branch, or on this candidate; they are cited here as
+prior R&D history only.
+
+### Evidence status on the r1 candidate (2026-10-25, transplant run)
+
+- **Historical smokes:** every hardware PASS in the body above is historical
+  evidence from the source branch and that machine's runtime; none of it
+  validates this candidate.
+- **New ROCm tensor operation:**
+  `test_rocm_tensor_op_on_selected_device` PASSED on the candidate against
+  ambient ROCm torch -- this proves a working GPU tensor op only, **not**
+  working model separation.
+- **New runtime-selection probe:**
+  `test_real_drumsep_explicit_rocm_and_cuda_namespace_against_production_runtime`
+  PASSED against the real production runtime state -- this proves runtime
+  *selection* behavior (probing and attribution), not inference.
+- **Model inference not executed:** all four separation tests
+  (`test_real_cpu_separation_htdemucs`,
+  `test_real_rocm_separation_matches_contract_plan[htdemucs|htdemucs_6s|htdemucs_ft]`)
+  SKIPPED because `audio_separator` is not importable in the ambient
+  Python 3.14 environment. No model inference has been run on this
+  candidate: real separation remains NOT TESTED.
+- **hdemucs_mmi:**
+  `test_hdemucs_mmi_local_availability_is_recorded` PASSED, proving only
+  that the model is absent locally; that absence is **not** evidence of
+  supported execution.

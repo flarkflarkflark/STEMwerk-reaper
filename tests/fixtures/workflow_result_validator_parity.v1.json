@@ -1,0 +1,273 @@
+{
+  "schema_version": "1.0.0",
+  "scope": "WorkflowResult structural and state-dependent validator parity",
+  "cases": [
+    {
+      "id": "golden_new_tracks_result",
+      "fixture": "golden_2310/normal_stems_new_tracks.json",
+      "document_path": ["contracts", "workflow_result"],
+      "expected": {"python": true, "lua": true, "schema": true}
+    },
+    {
+      "id": "golden_in_place_result",
+      "fixture": "golden_2310/normal_stems_in_place.json",
+      "document_path": ["contracts", "workflow_result"],
+      "expected": {"python": true, "lua": true, "schema": true}
+    },
+    {
+      "id": "succeeded_with_runtime_evidence",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_001",
+        "workflow_id": "normal_stems",
+        "state": "succeeded",
+        "actual_runtime": {
+          "model_id": "htdemucs",
+          "requested_device": "auto",
+          "actual_device": "cpu",
+          "fallback_applied": true
+        },
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": true, "lua": true, "schema": true}
+    },
+    {
+      "id": "succeeded_with_null_runtime",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_002",
+        "workflow_id": "normal_stems",
+        "state": "succeeded",
+        "actual_runtime": null,
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": false, "lua": false, "schema": false}
+    },
+    {
+      "id": "succeeded_with_missing_runtime",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_003",
+        "workflow_id": "normal_stems",
+        "state": "succeeded",
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": false, "lua": false, "schema": false}
+    },
+    {
+      "id": "queued_with_null_runtime",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_004",
+        "workflow_id": "normal_stems",
+        "state": "queued",
+        "actual_runtime": null,
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": true, "lua": true, "schema": true}
+    },
+    {
+      "id": "running_with_null_runtime",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_005",
+        "workflow_id": "normal_stems",
+        "state": "running",
+        "actual_runtime": null,
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": true, "lua": true, "schema": true}
+    },
+    {
+      "id": "failed_with_null_runtime",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_006",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "actual_runtime": null,
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": true, "lua": true, "schema": true}
+    },
+    {
+      "id": "cancelled_with_null_runtime",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_007",
+        "workflow_id": "normal_stems",
+        "state": "cancelled",
+        "actual_runtime": null,
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": true, "lua": true, "schema": true}
+    },
+    {
+      "id": "blocked_with_null_runtime",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_008",
+        "workflow_id": "normal_stems",
+        "state": "blocked",
+        "actual_runtime": null,
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": true, "lua": true, "schema": true}
+    },
+    {
+      "id": "failed_with_missing_runtime",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_009",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": true, "lua": true, "schema": true}
+    },
+    {
+      "id": "failed_with_valid_runtime_evidence",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_010",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "actual_runtime": {
+          "model_id": "htdemucs",
+          "requested_device": "auto",
+          "actual_device": "cpu",
+          "fallback_applied": true
+        },
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": true, "lua": true, "schema": true}
+    },
+    {
+      "id": "failed_with_empty_runtime_object",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_011",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "actual_runtime": {},
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": false, "lua": false, "schema": false}
+    },
+    {
+      "id": "failed_with_runtime_array",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_012",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "actual_runtime": [],
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": false, "lua": false, "schema": false}
+    },
+    {
+      "id": "failed_with_runtime_scalar",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_013",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "actual_runtime": "cpu",
+        "artifacts": [],
+        "deliverables": []
+      },
+      "expected": {"python": false, "lua": false, "schema": false}
+    },
+    {
+      "id": "failed_with_artifacts_object",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_014",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "actual_runtime": null,
+        "artifacts": {},
+        "deliverables": []
+      },
+      "expected": {"python": false, "lua": false, "schema": false}
+    },
+    {
+      "id": "failed_with_deliverables_object",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_015",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "actual_runtime": null,
+        "artifacts": [],
+        "deliverables": {}
+      },
+      "expected": {"python": false, "lua": false, "schema": false}
+    },
+    {
+      "id": "failed_with_artifacts_null",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_016",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "actual_runtime": null,
+        "artifacts": null,
+        "deliverables": []
+      },
+      "expected": {"python": false, "lua": false, "schema": false}
+    },
+    {
+      "id": "failed_with_artifacts_scalar",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_017",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "actual_runtime": null,
+        "artifacts": "none",
+        "deliverables": []
+      },
+      "expected": {"python": false, "lua": false, "schema": false}
+    },
+    {
+      "id": "failed_with_nested_empty_array_artifact",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_018",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "actual_runtime": null,
+        "artifacts": [[]],
+        "deliverables": []
+      },
+      "expected": {"python": false, "lua": false, "schema": false}
+    },
+    {
+      "id": "failed_with_nested_empty_object_artifact",
+      "document": {
+        "schema_version": "1.0.0",
+        "request_id": "request_parity_019",
+        "workflow_id": "normal_stems",
+        "state": "failed",
+        "actual_runtime": null,
+        "artifacts": [{}],
+        "deliverables": []
+      },
+      "expected": {"python": false, "lua": false, "schema": false}
+    }
+  ]
+}

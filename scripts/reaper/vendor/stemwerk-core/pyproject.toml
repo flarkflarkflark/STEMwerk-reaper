@@ -21,3 +21,6 @@ rocm = []
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"stemwerk_core.catalog" = ["*.json", "schemas/*.json"]
