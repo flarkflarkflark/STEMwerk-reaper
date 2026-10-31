@@ -802,11 +802,14 @@ def _request_from_args(args: argparse.Namespace) -> PreparationRequest:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    try:
+        args = _parser().parse_args(argv)
+    finally:
+        materialization._flush_cli_streams()
     try:
         result = prepare_drumsep_assets(_request_from_args(args))
     except PreparationError as exc:
-        print(
+        materialization._write_cli_document(
             json.dumps(
                 _error_document(exc),
                 indent=2 if args.pretty else None,
@@ -815,11 +818,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 allow_nan=False,
                 separators=None if args.pretty else (",", ":"),
             ),
-            file=sys.stderr,
+            sys.stderr,
         )
         return 2
     except Exception as exc:
-        print(
+        materialization._write_cli_document(
             json.dumps(
                 _internal_error_document(exc, args.destination),
                 indent=2 if args.pretty else None,
@@ -828,10 +831,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 allow_nan=False,
                 separators=None if args.pretty else (",", ":"),
             ),
-            file=sys.stderr,
+            sys.stderr,
         )
         return 3
-    print(
+    materialization._write_cli_document(
         json.dumps(
             result,
             indent=2 if args.pretty else None,
@@ -839,7 +842,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             ensure_ascii=False,
             allow_nan=False,
             separators=None if args.pretty else (",", ":"),
-        )
+        ),
+        sys.stdout,
     )
     return 0
 

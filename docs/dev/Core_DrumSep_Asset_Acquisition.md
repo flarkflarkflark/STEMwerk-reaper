@@ -58,6 +58,14 @@ completed is not recorded, so `cleanup.complete` is `null`.
 `KeyboardInterrupt`, `SystemExit` and other `BaseException`s are not converted
 and propagate unchanged.
 
+If the caller closes stdout or stderr before the CLI writes to it (a broken
+pipe; on Windows also `EINVAL` from a closed pipe), that output is dropped and
+the exit code stays the operation's own: `0`, `2` or `3`, and argparse's `0` or
+`2` for help and usage output. Nothing is written to the other stream instead,
+and no traceback or shutdown warning appears. Any other write failure, such as
+`ENOSPC` on a redirected file, is reported by Python as before. `SIGPIPE`
+handling is not changed.
+
 The returned `sources` mapping may be passed explicitly into
 `asset_materialization.MaterializationRequest`. Acquisition never calls the
 materializer, and its result never claims that installation publication took

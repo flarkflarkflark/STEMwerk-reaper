@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -546,3 +548,176 @@ def test_cli_keyboard_interrupt_is_not_converted(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+
+
+# Real child processes (O2): the CLI runs in its own interpreter with real
+# pipes. A closed stream is a pipe whose read end is closed before the child
+# writes, so every write fails as it does for a reader that went away early.
+CLI_MODULE = "stemwerk_core.asset_preparation"
+CLI_API = "prepare_drumsep_assets"
+CLI_TIMEOUT = 60
+CLI_CHILD = """
+import importlib
+import sys
+
+sys.path.insert(0, sys.argv[1])
+module = importlib.import_module(sys.argv[2])
+mode, message = sys.argv[4], sys.argv[5]
+
+
+def replacement(request):
+    if mode == "success":
+        return {"detail": "controlled", "outcome": "success"}
+    if mode == "interrupt":
+        raise KeyboardInterrupt
+    error = RuntimeError(message)
+    if hasattr(error, "add_note"):
+        error.add_note(message)
+    raise error
+
+
+setattr(module, sys.argv[3], replacement)
+raise SystemExit(module.main(sys.argv[6:]))
+"""
+
+
+def _cli_arguments(tmp_path, destination):
+    return ["--destination", destination, "--acquire"]
+
+
+def _run_cli(arguments, *, closed=None):
+    streams = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+    write_end = None
+    if closed is not None:
+        read_end, write_end = os.pipe()
+        os.close(read_end)
+        streams[closed] = write_end
+    try:
+        return subprocess.run(
+            [sys.executable, "-B", *arguments],
+            env=dict(os.environ, PYTHONPATH=str(CORE_SRC)),
+            stdin=subprocess.DEVNULL,
+            timeout=CLI_TIMEOUT,
+            **streams,
+        )
+    finally:
+        if write_end is not None:
+            os.close(write_end)
+
+
+def _run_patched_cli(mode, message, arguments, *, closed=None):
+    return _run_cli(
+        ["-c", CLI_CHILD, str(CORE_SRC), CLI_MODULE, CLI_API, mode, message, *arguments],
+        closed=closed,
+    )
+
+
+def _assert_quiet(stream):
+    assert b"Traceback" not in stream
+    assert b"Exception ignored" not in stream
+
+
+def _secret_message(tmp_path):
+    return f"{LEAKY_INTERNAL_MESSAGE} {tmp_path / 'secret-source.ckpt'}"
+
+
+@pytest.mark.native_publication
+@pytest.mark.parametrize("closed", [None, "stdout"])
+def test_cli_child_success_output_or_closed_stdout_keeps_exit_0(tmp_path, closed):
+    result = _run_patched_cli(
+        "success",
+        "",
+        _cli_arguments(tmp_path, str(tmp_path / "published")),
+        closed=closed,
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == b""
+    if closed is None:
+        lines = result.stdout.decode("utf-8").splitlines()
+        assert len(lines) == 1
+        assert json.loads(lines[0]) == {"detail": "controlled", "outcome": "success"}
+
+
+@pytest.mark.native_publication
+def test_cli_child_internal_error_is_one_redacted_document(tmp_path):
+    destination = str(tmp_path / "published")
+    secret = _secret_message(tmp_path)
+
+    result = _run_patched_cli("internal", secret, _cli_arguments(tmp_path, destination))
+
+    assert result.returncode == 3
+    assert result.stdout == b""
+    _assert_quiet(result.stderr)
+    text = result.stderr.decode("utf-8")
+    lines = text.splitlines()
+    assert len(lines) == 1
+    document = json.loads(lines[0])
+    assert document["kind"] == "stemwerk_asset_preparation_error"
+    assert document["destination"] == destination
+    assert document["error"]["code"] == "internal_error"
+    assert document["error"]["message"] == "unexpected internal error (RuntimeError)"
+    for leaked in ("secret", "SECRET", "token", "example.invalid", "boom", str(CORE_SRC)):
+        assert leaked not in text
+
+
+@pytest.mark.native_publication
+def test_cli_child_internal_error_with_stderr_closed_keeps_exit_3(tmp_path):
+    result = _run_patched_cli(
+        "internal",
+        _secret_message(tmp_path),
+        _cli_arguments(tmp_path, str(tmp_path / "published")),
+        closed="stderr",
+    )
+
+    assert result.returncode == 3
+    assert result.stdout == b""
+
+
+@pytest.mark.native_publication
+def test_cli_child_keyboard_interrupt_is_not_converted(tmp_path):
+    result = _run_patched_cli(
+        "interrupt", "", _cli_arguments(tmp_path, str(tmp_path / "published"))
+    )
+
+    assert result.returncode not in (0, 2, 3)
+    assert result.stdout == b""
+    assert b"KeyboardInterrupt" in result.stderr
+    assert b"internal_error" not in result.stderr
+
+
+@pytest.mark.native_publication
+@pytest.mark.parametrize("closed", [None, "stderr"])
+def test_cli_child_handled_error_is_unchanged(tmp_path, capsys, closed):
+    arguments = _cli_arguments(tmp_path, str(tmp_path / "published")) + [
+        "--checkpoint-source",
+        str(tmp_path / "model.ckpt"),
+        "--config-source",
+        str(tmp_path / "model.yaml"),
+    ]
+    assert preparation.main(arguments) == 2
+    expected = json.loads(capsys.readouterr().err)
+
+    result = _run_cli(["-m", CLI_MODULE, *arguments], closed=closed)
+
+    assert result.returncode == 2
+    assert result.stdout == b""
+    if closed is None:
+        _assert_quiet(result.stderr)
+        lines = result.stderr.decode("utf-8").splitlines()
+        assert len(lines) == 1
+        assert json.loads(lines[0]) == expected
+        assert expected["error"]["code"] == "invalid_source_mode"
+
+
+@pytest.mark.native_publication
+@pytest.mark.parametrize(
+    ("arguments", "closed", "status"), [(["--help"], "stdout", 0), ([], "stderr", 2)]
+)
+def test_cli_child_argparse_output_with_a_closed_stream_keeps_its_status(
+    arguments, closed, status
+):
+    result = _run_cli(["-m", CLI_MODULE, *arguments], closed=closed)
+
+    assert result.returncode == status
+    assert (result.stderr if closed == "stdout" else result.stdout) == b""

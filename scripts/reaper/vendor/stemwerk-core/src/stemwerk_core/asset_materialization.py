@@ -1055,34 +1055,117 @@ def _error_document(exc: MaterializationError) -> dict[str, Any]:
     }
 
 
+def _internal_error_document(exc: Exception, destination: str) -> dict[str, Any]:
+    # Only the exception type is reported: its message, arguments and notes may
+    # carry unredacted paths. Facts the CLI cannot know are null.
+    return {
+        "kind": "stemwerk_asset_materialization_error",
+        "schema_version": SCHEMA_VERSION,
+        "error": {
+            "code": "internal_error",
+            "message": f"unexpected internal error ({type(exc).__name__})",
+            "published": None,
+            "destination": destination,
+            "receipt_path": None,
+            "cleanup_remaining": None,
+        },
+    }
+
+
+def _is_closed_stream_error(exc: BaseException, *, windows: bool | None = None) -> bool:
+    # The reader of a CLI stream went away. Windows can report a closed pipe as
+    # EINVAL; elsewhere EINVAL means something else and is not treated as closed.
+    if isinstance(exc, BrokenPipeError):
+        return True
+    if windows is None:
+        windows = os.name == "nt"
+    return windows and isinstance(exc, OSError) and exc.errno == errno.EINVAL
+
+
+def _discard_closed_stream(stream: Any) -> None:
+    # Python's documented pattern for a closed pipe: point the descriptor at
+    # os.devnull so the interpreter's final flush stays silent.
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, fd)
+    finally:
+        os.close(devnull)
+
+
+def _flush_cli_stream(stream: Any) -> None:
+    try:
+        stream.flush()
+    except OSError as exc:
+        if _is_closed_stream_error(exc):
+            _discard_closed_stream(stream)
+        # Any other error leaves the output buffered, so the interpreter's
+        # final flush reports it as it did before.
+
+
+def _flush_cli_streams() -> None:
+    _flush_cli_stream(sys.stdout)
+    _flush_cli_stream(sys.stderr)
+
+
+def _write_cli_document(text: str, stream: Any) -> None:
+    """Write one CLI output document; a closed reader never changes the exit code."""
+
+    try:
+        print(text, file=stream)
+    except OSError as exc:
+        if not _is_closed_stream_error(exc):
+            raise
+        _discard_closed_stream(stream)
+        return
+    _flush_cli_stream(stream)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint-source", required=True)
     parser.add_argument("--config-source", required=True)
     parser.add_argument("--destination", required=True)
     parser.add_argument("--pretty", action="store_true")
-    args = parser.parse_args(argv)
-    request = MaterializationRequest(
-        sources={
-            model_assets.DIRECT_DKS_MODEL_FILENAME: Path(args.checkpoint_source),
-            model_assets.DIRECT_DKS_MODEL_YAML: Path(args.config_source),
-        },
-        destination=Path(args.destination),
-    )
     try:
+        args = parser.parse_args(argv)
+    finally:
+        _flush_cli_streams()
+    try:
+        request = MaterializationRequest(
+            sources={
+                model_assets.DIRECT_DKS_MODEL_FILENAME: Path(args.checkpoint_source),
+                model_assets.DIRECT_DKS_MODEL_YAML: Path(args.config_source),
+            },
+            destination=Path(args.destination),
+        )
         result = materialize_drumsep_assets(request)
     except MaterializationError as exc:
-        print(
+        _write_cli_document(
             json.dumps(
                 _error_document(exc),
                 sort_keys=True,
                 ensure_ascii=False,
                 allow_nan=False,
             ),
-            file=sys.stderr,
+            sys.stderr,
         )
         return 2
-    print(
+    except Exception as exc:
+        _write_cli_document(
+            json.dumps(
+                _internal_error_document(exc, args.destination),
+                sort_keys=True,
+                ensure_ascii=False,
+                allow_nan=False,
+            ),
+            sys.stderr,
+        )
+        return 3
+    _write_cli_document(
         json.dumps(
             result,
             indent=2 if args.pretty else None,
@@ -1090,7 +1173,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             ensure_ascii=False,
             allow_nan=False,
             separators=None if args.pretty else (",", ":"),
-        )
+        ),
+        sys.stdout,
     )
     return 0
 

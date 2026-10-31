@@ -25,7 +25,11 @@ from urllib.parse import SplitResult, urljoin, urlsplit
 import uuid
 
 from . import model_assets
-from .asset_materialization import _is_link_or_reparse
+from .asset_materialization import (
+    _flush_cli_streams,
+    _is_link_or_reparse,
+    _write_cli_document,
+)
 
 
 SCHEMA_VERSION = "1.0.0"
@@ -1404,32 +1408,38 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    try:
+        args = _parser().parse_args(argv)
+    finally:
+        _flush_cli_streams()
     try:
         result = acquire_drumsep_sources(
             AcquisitionRequest(destination=Path(args.destination))
         )
     except AcquisitionError as exc:
-        print(
+        _write_cli_document(
             json.dumps(
                 _error_payload(exc),
                 indent=2 if args.pretty else None,
                 sort_keys=True,
             ),
-            file=sys.stderr,
+            sys.stderr,
         )
         return 2
     except Exception as exc:
-        print(
+        _write_cli_document(
             json.dumps(
                 _internal_error_payload(exc, args.destination),
                 indent=2 if args.pretty else None,
                 sort_keys=True,
             ),
-            file=sys.stderr,
+            sys.stderr,
         )
         return 3
-    print(json.dumps(result, indent=2 if args.pretty else None, sort_keys=True))
+    _write_cli_document(
+        json.dumps(result, indent=2 if args.pretty else None, sort_keys=True),
+        sys.stdout,
+    )
     return 0
 
 
