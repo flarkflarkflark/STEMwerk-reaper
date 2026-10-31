@@ -1,12 +1,19 @@
 # Core module installation: design and first route
 
-Status: design proposal for review, revision 5 (2026-10-30). It applies the
+Status: design proposal for review, revision 6 (2026-10-30). It applies the
 owner's decisions D1-D12, F1-F9 and G1-G4, the independent reviews of
 revisions 1 and 3, and the installation research of 2026-10-30. Nothing in
 this document is implemented unless it is marked as existing behavior with
 a `file:line` citation at `9c410f951c8e9160ee64c883938f9420b654577d`.
 All paths are relative to the repository root; `CORE` abbreviates
 `scripts/reaper/vendor/stemwerk-core/src/stemwerk_core`.
+
+This is the design of record for the first route. Inventories, candidate
+pins, research findings, the parked and resolved open points and the
+later-routes list are in the companion
+[appendix](Core_Module_Installation_Appendix.md).
+Revision 6 split them out of revision 5a without change of meaning and
+applied review notes R5-01 to R5-05.
 
 ## Evidence conventions
 
@@ -22,6 +29,9 @@ Every statement in this document has exactly one of five kinds.
 
 Open points appear only in section 12. Each is classified "blocks the first
 route" or "parked"; resolved items keep their ID in section 12.3.
+Since revision 6, section 12 of this document holds the blocking points;
+the parked and resolved registers and the later-routes list are in the
+[appendix](Core_Module_Installation_Appendix.md) with unchanged IDs and classes.
 
 "Astra research 2026-10-30" is the owner-commissioned research note
 `STEMwerk-2.4-installation-research.md` (outside the repository). Every
@@ -351,42 +361,9 @@ Repair is defined here but not built in the first route (section 10.3).
 
 ### 3.6 FFmpeg
 
-**Today (EXISTING, re-read at HEAD).** Each 2.3 route gets FFmpeg
-differently, and none validates more than "the tools run and print an
-FFmpeg banner":
-
-| Route | Source today | Pin and integrity | Validation |
-| --- | --- | --- | --- |
-| Windows bundled | Gyan 9.0.1 essentials from Gyan's GitHub release | URL and SHA-256 pinned (`installer/windows/fetch_runtime_assets.sh:26-28`, `fetch_runtime_assets.ps1:36-38`), verified by `verify_sha256` / `Verify-Sha256` (`.sh:53-84`, `.ps1:86-87`); fetched by `.github/workflows/release-installers.yml:196-201`, embedded by `installer/windows/STEMwerk.iss:154-155` | Pair check below |
-| Windows online | Rolling `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip` (`scripts/reaper/STEMwerk_Bootstrap_Windows.ps1:159-160`) | No version or hash; the archive check is a 1 MB minimum and `bin/ffmpeg.exe`/`bin/ffprobe.exe` entries (`TestFfmpegArchive`, same file `:730-746`); SHA-256 is only used for DrumSep assets (`:2548-2600`) | Pair check below |
-| Linux | First executable of `<runtime>/bin`, `<runtime>/ffmpeg/bin`, `/usr/local/bin`, `/usr/bin`, `/snap/bin` (`scripts/reaper/STEMwerk_Bootstrap_Linux.sh:2775-2786`); else `imageio-ffmpeg==0.6.0` in the venv (`:16`, `:843-870`, `:2788-2798`) | Package version only; no archive pin; no `ffprobe` | `-version` exit code only (`:2799-2805`) |
-| macOS arm64 bundled | STEMwerk's own build of official FFmpeg 8.0.3 source, LGPL-2.1-or-later, static, `--disable-network`, `--disable-autodetect` (`tools/macos_ffmpeg.py:19-22,39-51`) | Source SHA-256 checked before build (`:436-439`); build only on native Apple Silicon (`:430-431`); `CONFIG_GPL`/`CONFIG_NONFREE` must be 0 (`:459-465`); release audit `validate_ffmpeg_pair` and `validate_official_provenance` (`:313`, `:511`); no LAME, so no MP3 encoder (no `lame`/`mp3` in the file) | Runtime: sibling `ffprobe`, executable, `-version`, banner check below (`scripts/reaper/STEMwerk_Bootstrap_macOS.sh:107-160`) |
-| macOS online | Any validated pair from bundled, runtime, Homebrew, MacPorts, `/usr/local` or `PATH` (`STEMwerk_Bootstrap_macOS.sh:2078-2112`) | None | Same runtime check |
-
-The Windows "invalid FFmpeg pair" check (`TestFfmpegPair`,
-`scripts/reaper/STEMwerk_Bootstrap_Windows.ps1:706-727`) requires a sibling
-`ffprobe.exe` and a zero exit code from `-version` of both; line 920 logs
-`Ignoring invalid FFmpeg pair: <path> reason=<reason>`. It compares no
-versions, checks no codecs, verifies no hash and establishes no licence.
-The macOS `validate_ffmpeg_pair` goes one step further: the first output
-line must start with `ffmpeg version ` or `ffprobe version `, else
-`ffmpeg_identity_mismatch` or `ffprobe_identity_mismatch`, and `dyld`
-errors are named `*_dependency_failed`
-(`scripts/reaper/STEMwerk_Bootstrap_macOS.sh:107-160`, banners at
-`:139-142,153-156`). Core readiness runs `ffmpeg -version` over the
-discovered candidates and accepts exit 0 with stdout starting with
-`ffmpeg` (`CORE/readiness_collect.py:863-906`, prefix check `:886`). Both
-are identity checks of the banner, not of a version, build or hash.
-
-Licences of today's binaries (REPORTED, Astra research 2026-10-30): Gyan
-builds are GPLv3 (https://www.gyan.dev/ffmpeg/builds/); the binary that
-`imageio-ffmpeg` 0.6.0 selects is a John Van Sickle static build, GPLv3
-(https://raw.githubusercontent.com/imageio/imageio-ffmpeg/v0.6.0/imageio_ffmpeg/_definitions.py,
-https://johnvansickle.com/ffmpeg/); STEMwerk's own macOS build is
-LGPL-2.1-or-later (EXISTING, `tools/macos_ffmpeg.py:22`). Reports #119
-(custom-path pair not found) and #120 ("ignoring invalid ffmpeg pair"
-without the failed condition) are the user-visible cost (REPORTED, issues
-#119, #120).
+**Today.** The per-route inventory of FFmpeg in 2.3, its pair checks and
+the licences of today's binaries are in the
+[appendix](Core_Module_Installation_Appendix.md), section A.1.
 
 **Migration.** FFmpeg from a 2.3 installation is legacy: ownership
 `external`, never adopted and never repaired (D10, D11).
@@ -405,24 +382,8 @@ without the failed condition) are the user-visible cost (REPORTED, issues
 - Windows and Linux (F3): BtbN LGPL month-end builds. The final pins are
   chosen in slice S7 with native qualification.
 
-CANDIDATE pins for F3 (REPORTED, Astra research 2026-10-30; release
-`autobuild-2026-09-30-13-08`, checksums from
-https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/checksums.sha256):
-
-| Target | Asset | Bytes | SHA-256 (published) |
-| --- | --- | --- | --- |
-| Windows x86_64 | `ffmpeg-n9.0.2-17-g2a571b6068-win64-lgpl-9.0.zip` | 171,535,354 (API size; not downloaded) | `6b264b9e6019103f601d98c292bd332fd87acf1c5e941ddff4fb71760fe63432` |
-| Linux x86_64 | `ffmpeg-n9.0.2-17-g2a571b6068-linux64-lgpl-9.0.tar.xz` | 137,863,452 (measured) | `2d41cbea0ca1a15029b638330740f78d6f5aeb062355bf425433fc938705350a` (measured hash matches) |
-
-Linux probe of that candidate (REPORTED, Astra research 2026-10-30, on a
-Linux host): encoders and decoders `flac`, `pcm_s16le`, `pcm_s24le`,
-`pcm_f32le` present; `-buildconf` has `--enable-version3` and neither
-`--enable-gpl` nor `--enable-nonfree`; `-L` reports LGPL version 3 or later;
-`ffprobe -version` names the same build; extracted `ffmpeg` and `ffprobe`
-are 142,534,568 and 142,305,128 bytes. The Windows build's capabilities are
-untested. BtbN keeps month-end builds for about two years and only the
-last 14 daily builds (REPORTED,
-https://github.com/BtbN/FFmpeg-Builds/blob/master/README.md).
+CANDIDATE pins for F3 and the Linux probe of that candidate are in the
+[appendix](Core_Module_Installation_Appendix.md), section A.2.
 
 **Rules (PROPOSED).**
 
@@ -688,7 +649,8 @@ publishes with `RenameFile`, which fails if the target exists
 Inno version and the script refuses to compile below 6.6.0; S5 confirms
 the system-directory path as seen from Inno's process. The installer sets
 `MinVersion` to the G2 floor (section 10.3); without it Inno defaults to
-6.1sp1 (REPORTED, https://jrsoftware.org/files/is6-whatsnew.htm, 6.3.0).
+6.1sp1 (Windows 7 SP1), the default since 6.1.0-beta (REPORTED,
+https://jrsoftware.org/files/is6.1-whatsnew.htm).
 
 The external PySide6 Setup app is later work and not part of the first route
 (D12; section 12, O22).
@@ -726,16 +688,8 @@ distribution, because the stripped archives do not carry the dependency
 licences (REPORTED, Astra research 2026-10-30,
 https://docs.astral.sh/python-build-standalone/running/#licensing).
 `x86_64-apple-darwin` is parked (O50); the libuuid notice ambiguity is
-parked for release (O53). Sizes and hashes (REPORTED, Astra research
-2026-10-30, from
-https://github.com/astral-sh/python-build-standalone/releases/download/20261026/SHA256SUMS;
-the macOS archive was also downloaded and its hash measured):
-
-| Target | Bytes | SHA-256 |
-| --- | --- | --- |
-| `x86_64-pc-windows-msvc` | 22,014,416 | `1f2ab53880fc67ea323398c6388e05af28addc99a8e389209f08a51fdff4b149` |
-| `x86_64-unknown-linux-gnu` | 34,505,639 | `ce4f6d0a6cfdb3bed6e44c2f9affd85943c76a42e25ad3a259002f31d6fb8a20` |
-| `aarch64-apple-darwin` | 25,035,343 | `353d5f1b4fd2715e7053f12f068435d5bbad16b91e057006b5d01e0925709a7e` |
+parked for release (O53). Sizes and hashes of the candidate are in the
+[appendix](Core_Module_Installation_Appendix.md), section A.3.
 
 The research also reports a `libgcc_s.so.1` dependency introduced in a
 recent build (python-build-standalone issue #1358); the Linux pin is
@@ -853,22 +807,8 @@ re-signing as an installation mechanism. Developer ID signing and
 notarisation of runtime payloads are revisited before a public release
 (O52).
 
-Findings behind the decision (REPORTED, Astra research 2026-10-30):
-
-- Command-line `curl` and `tar` do not set or propagate quarantine
-  (https://developer.apple.com/forums/thread/706442). Python's `urllib`
-  sets none either; this is an inference from the CPython 3.12.16 source,
-  not a macOS observation
-  (https://github.com/python/cpython/blob/v3.12.16/Lib/urllib/request.py#L222).
-- Native arm64 code needs a valid signature, which may be ad-hoc
-  (https://support.apple.com/en-sa/guide/security/secebb113be1/web). The
-  candidate `aarch64-apple-darwin` Python carries ad-hoc, linker-signed
-  code signatures (static header read, not `codesign --verify`).
-- A notarised `.pkg` does not cover files Core downloads later
-  (https://developer.apple.com/documentation/security/customizing-the-notarization-workflow).
-- Reports of SIGKILL with ad-hoc python-build-standalone binaries exist
-  (https://github.com/astral-sh/uv/issues/16726), so only the native test
-  in A9 can prove the path.
+The findings behind the decision are in the
+[appendix](Core_Module_Installation_Appendix.md), section A.4.
 
 ## 7. Preflight, progress and cancellation
 
@@ -913,6 +853,11 @@ reports:
 Preflight output is the install **plan**: a list of actions with sizes. The
 user's consent applies to that plan; execution refuses to start with a plan
 whose fingerprint changed (criterion C15).
+
+The bootstrap's pinned-Python download (about 22-35 MB, section 6.2)
+happens before plan consent and the full preflight, an accepted risk
+(DECIDED 2026-10-30, review note R5-05): on a full disk or a failed
+download the outer layer fails honestly (criterion C22).
 
 ### 7.2 Progress: events file and result file
 
@@ -1386,7 +1331,6 @@ covered (section 12, O11).
 | W6 | Windows | Antivirus launch of helper not flagged | DESCRIBED | None; issue #133 is the reason |
 | W7 | Windows | Visual C++ runtime absent: named preflight error `vcpp_runtime_missing` | DESCRIBED | None; 2.3 only warns (section 7.1) |
 | W8 | Windows | REAPER shows read-only status and can open the installer; it offers no install action | DESCRIBED | None |
-| W9 | Windows | Repair while a separation runs is refused immediately with a retry option (F8; recorded now, built with repair) | DESCRIBED | None |
 | L1 | Linux | Fresh non-admin account without Python | DESCRIBED | None |
 | L2 | Linux | `XDG_DATA_HOME` honored; non-ASCII home path | DESCRIBED | None |
 | L3 | Linux | Cancel via the marker, and via the `SIGINT`/`SIGTERM` fast path, leaves previous state | DESCRIBED | None |
@@ -1405,6 +1349,10 @@ covered (section 12, O11).
 | A7 | macOS | REAPER force-quit during install: the install completes (F9) | DESCRIBED | None |
 | A8 | macOS | Setup reopened during or after install reattaches and shows the state from lock, events and result (F9) | DESCRIBED | None |
 | A9 | macOS | Clean Mac, real path: REAPER -> `STEMwerk-SETUP.lua` -> bootstrap -> Core -> download -> managed Python and FFmpeg execute, without quarantine removal or re-signing (F7) | DESCRIBED | None |
+
+W9 belongs to the later repair route and is listed in the
+[appendix](Core_Module_Installation_Appendix.md), section A.5;
+it is still counted below.
 
 Counts for section 11 (53 rows with an ID, C1 to A9):
 
@@ -1436,76 +1384,19 @@ revisions; resolved items move to section 12.3.
 | O9 | Windows `MAX_PATH` / long-path limits for deep `site-packages` under `<root>\runtimes\…` | Route risk on Windows; S6 must measure the deepest path and keep IDs short |
 | O47 | Scheduled manifest-URL CI check (F5) | Blocks first-route distribution; constructed in S5 (C21) |
 | O48 | Licence texts and source pointers shipped with every bundled or STEMwerk-hosted FFmpeg (F5) | Blocks publishing or sharing any STEMwerk-hosted or bundled FFmpeg (S7 release asset, bundled installers, external test builds). Does not block local construction |
-| O54 | How Core is started after the outer layer has published only the pinned Python (G1) | Open question: where Core's code comes from on a fresh account, and how the managed Python runs it under `-I` before any module venv exists. Constraints: 2.3 ships Core as plain files and makes it importable only by `pip install` into its venv (EXISTING: `scripts/reaper/STEMwerk_Bootstrap_Windows.ps1:3436-3444`, `scripts/reaper/STEMwerk_Bootstrap_Linux.sh:2576-2579`); `-I` ignores `PYTHON*` variables and the user site-packages, and `-m` then does not prepend the current directory (REPORTED, https://docs.python.org/3/using/cmdline.html); the ReaPack (`index.xml:125-131`), Inno (`installer/windows/STEMwerk_Windows_Payload.iss:69-75`, included at `installer/windows/STEMwerk.iss:146`) and `.pkg` (`installer/macos/payload-manifest.txt:132-138`) file lists name 7 of the 30 tracked files under `scripts/reaper/vendor/stemwerk-core`, while the Linux package copies the whole `scripts/reaper/` tree (`installer/linux/stage_payload.sh:10,29-32`). Mechanism not decided; class and owner DECIDED 2026-10-30; S5 resolves it |
-| O55 | Cleanup after a crashed outer-layer bootstrap | Its staging `<root>/tmp/<op>/` has no journal, so journal recovery (section 8, C13) never removes it. PROPOSED direction: on start, Core removes outer-layer staging directories that belong to no active operation (no live lock holder, not referenced by any registry or receipt); the outer layer holds no lock (G1), so S5 also defines how an active bootstrap is recognized. Class and owner DECIDED 2026-10-30; S5 specifies and tests it (C24) |
+| O54 | How Core is started after the outer layer has published only the pinned Python (G1) | Open question: where Core's code comes from on a fresh account, and how the managed Python runs it under `-I` before any module venv exists. Constraints: 2.3 ships Core as plain files and makes it importable only by `pip install` into its venv (EXISTING: `scripts/reaper/STEMwerk_Bootstrap_Windows.ps1:3436-3444`, `scripts/reaper/STEMwerk_Bootstrap_Linux.sh:2576-2579`); `-I` ignores `PYTHON*` variables and the user site-packages, and `-m` then does not prepend the current directory (REPORTED, https://docs.python.org/3/using/cmdline.html); the ReaPack (`index.xml:125-131`), Inno (`installer/windows/STEMwerk_Windows_Payload.iss:69-75`, included at `installer/windows/STEMwerk.iss:146`) and `.pkg` (`installer/macos/payload-manifest.txt:132-138`) file lists name 7 of the 30 tracked files under `scripts/reaper/vendor/stemwerk-core`, while the Linux package copies the whole `scripts/reaper/` tree (`installer/linux/stage_payload.sh:10,29-32`); ReaPack and the macOS payload also ship a built wheel `stemwerk_core-0.1.1-py3-none-any.whl` under `vendor/wheels/darwin-arm64-cp312/` and `vendor/wheels/darwin-x86_64-cp312/` (`index.xml:135,138`; `installer/macos/payload-manifest.txt:141,144`), which at HEAD holds the same five `stemwerk_core` modules as those file lists and exists only for macOS (EXISTING: member list of the tracked wheel). Shipping a wheel built from the Core at HEAD this way is a candidate for S5, not a decision. Mechanism not decided; class and owner DECIDED 2026-10-30; S5 resolves it |
+| O55 | Cleanup after a crashed outer-layer bootstrap | Its staging `<root>/tmp/<op>/` has no journal, so journal recovery (section 8, C13) never removes it. PROPOSED direction: on start, Core removes outer-layer staging directories that belong to no active operation and are not referenced by any registry or receipt. An active bootstrap holds no lock (G1), so S5 must define a real liveness signal (for example a recent events-file heartbeat plus a recorded PID); PROPOSED, S5 decides. Class and owner DECIDED 2026-10-30; S5 specifies and tests it (C24) |
 
 ### 12.2 Parked
 
-| ID | Item | Reason (one line) |
-| --- | --- | --- |
-| O11 | Materialization CLI has no `internal_error` net | Fast-follow fix in S0; the module CLI gets its own net in S2 |
-| O12 | `cleanup.complete` is `null` for `internal_error` | Result is correct; known limit of acquisition |
-| O13 | In-use marker for runtimes and assets (section 8) | Required by F8 for repair; the first route neither replaces nor removes |
-| O14 | Repair from REAPER on Windows (D7) | Installer-only repair is policy (F8); revisit only with a proven lock (O4) and in-use protection (O13) |
-| O16 | Reuse of a system FFmpeg (D11) | v1 uses only STEMwerk's own pair |
-| O17 | Detached signatures for the manifest (D9) | Deferred; hash pins in a versioned manifest suffice for v1 |
-| O18 | Byte-range resume of downloads | Retry is a new operation in v1 |
-| O19 | `--events-fd` (D5) | Not in v1; the events file is the only channel |
-| O20 | `waiting` event state | Cut from v1 |
-| O21 | Adopt path (section 4) | Designed, not built in v1 |
-| O22 | External PySide6 Setup app (D12) | Later; not part of the first route |
-| O23 | Repair, update and remove operations | Defined in 3.5 and section 4; first route builds plan, install, verify, cancel |
-| O24 | Integrate Monterey ONNX fix into 2.4 | Basis of the later Intel macOS route with its own pin set (G2); until then Intel users stay on 2.3.x with that hotfix; lessons already applied (3.4, 3.5) |
-| O25 | #133 separation launcher (hidden PowerShell or `cmd` via VBScript) | Route rule in 6.5; the 2.3 separation launcher is out of scope |
-| O26 | #130 RDNA4 (gfx1200) | First route is CPU only |
-| O27 | #129 Mega 53 model request | Not one of the seven flows |
-| O28 | #123 gfx1031 / ambiguous layout | GPU environment; layout lesson already in 3.2 |
-| O29 | PR #107 unmerged (since 2026-07-19) | Scope is used as REPORTED (D4); route needs only Direct Kit |
-| O30 | Reconcile PR #107's `stemwerk_dks` with `drumsep_mdx23c` (D3) | Decided for now; revisit when PR #107 merges |
-| O31 | Happy Eyeballs for acquisition | Affects dual-stack latency, not correctness |
-| O32 | System-managed symlinks (`/tmp`, `/var`, `/home`) | Refusal is safe; per-user `<root>` avoids them |
-| O33 | Private `socket.SocketIO._sock` dependency | Re-check before CPython 3.13; route pins 3.12 (D2) |
-| O34 | Code signing and notarisation of the outer executables and `.pkg` | Required for release; macOS test builds use a documented manual step (D12) |
-| O35 | Telemetry (ONNX Runtime) | "no-download" is not "offline"; release question |
-| O36 | DrumSep weight licence (M13) | Blocks release, not the build |
-| O37 | Demucs integrity pins | Only needed for Normal Stems / Kit Split |
-| O38 | F2: non-ASCII redirect `Location` -> `UnicodeEncodeError` | Escapes the deadline but fails closed; Unicode criterion covers it |
-| O39 | Test certificate `notBefore` backdating | Test hygiene |
-| O40 | Non-default DrumSep GPU indexes | GPU, not first route |
-| O41 | Handoff note items: redundant `shutdown` in `attach_response`, 9-11% deadline reports "TimeoutError", empty IPv6 conflict test without IPv6, `WSAEACCES` skips fixture retry | Test and diagnostics hygiene; no route criterion depends on them |
-| O42 | Delivery of the outer layer via ReaPack or installers | Mechanism per D12 and section 4; first route can start from a hand-placed script or installer |
-| O43 | Release qualification | Not in scope |
-| O44 | Cleanup of host evidence folders | Housekeeping |
-| O45 | Integration of other 2.3.x fixes into 2.4 | Separate from this plan |
-| O49 | MP3 output (F1) | v1 offers WAV and FLAC only |
-| O50 | macOS x86_64 FFmpeg and managed Python (F2, F6) | Part of the later Intel macOS route (G2); not in the first route's platform scope |
-| O51 | Self-mirroring of pinned artifacts (F5) | Kept as an option; vendor download plus the scheduled check is the v1 model |
-| O52 | Developer ID signing and notarisation of runtime payloads (F7) | Revisited before a public release |
-| O53 | libuuid notice ambiguity, python-build-standalone issue #1329 (F6) | Release-engineering licence item (REPORTED, Astra research 2026-10-30, https://github.com/astral-sh/python-build-standalone/issues/1329) |
+The parked register is in the
+[appendix](Core_Module_Installation_Appendix.md): section A.5 (later
+routes) and section A.6 (parked, first-route context).
 
 ### 12.3 Resolved
 
-Resolved in revision 3 by the research and the owner's decisions F1-F9:
-
-| ID | Was | Resolution | Remaining work |
-| --- | --- | --- | --- |
-| O6 | FFmpeg build source and licence per platform | F2, F3, F4 (section 3.6) | Final pins in S7; C20 |
-| O7 | macOS Gatekeeper and quarantine for downloaded runtimes | F7 (section 6.6) | A9 in S11 |
-| O8 | Detached launch mechanism from Lua on macOS and Linux | F9 (section 6.5) | L6-L8, A6-A8 in S9 |
-| O15 | Original reason for installer-only repair on Windows | F8: maintenance policy, not elevation (section 7.6) | W9 with the repair route |
-
-Resolved in revision 4 by the owner's decisions G2 and G3:
-
-| ID | Was | Resolution | Remaining work |
-| --- | --- | --- | --- |
-| O10 | How Inno Setup downloads and unpacks the pinned archives | G3: Inno's built-in download with required SHA-256 (since 6.1.0) and hidden in-box `tar.exe`; no `curl.exe` fallback needed (section 6.1) | Pin the Inno version in CI and refuse to compile below 6.6.0; prove download, hash refusal, extraction and cancel in S5 (C22, W3) |
-| O46 | Minimum supported OS, glibc and REAPER versions | G2 (section 10.3) | Inno `MinVersion`, Core preflight floor and REAPER warning (C23); baseline Linux run in S5 (L9) |
-
-Resolved in revision 2 by D1-D12: outer-layer technology (D12), target
-layout (D1), events channel and the stdout collision (D5), cancel mechanism
-(D6), front ends and launching from REAPER on Windows (D7), lock location
-(D8), managed-Python source (D9), FFmpeg in v1 (D11), engine naming for now
-(D3), Python versions (D2).
+The resolved register (revisions 2 to 4) is in the
+[appendix](Core_Module_Installation_Appendix.md), section A.7.
 
 Counts: 10 items block the first route (O1-O5, O9, O47, O48, O54, O55),
 39 are parked (O11-O14, O16-O45, O49-O53) and 6 are resolved (O6-O8, O15 in
@@ -1536,6 +1427,11 @@ branches and are not part of this plan.
 | S9 | Front ends and activation, launch contract, REAPER version warning | M10, M16 | D7, D12, F9, G2 | REAPER fresh-profile test; REAPER below 7.0 warns (C23); quit, force-quit and reattach (L6-L8, A6-A8); Inno progress page smoke |
 | S10 | Unicode end-to-end | M12 | O1 | Windows host with non-ASCII user name (needs the reporter or an equivalent account) |
 | S11 | First-route qualification | C1, W1, L1, A1, A9, C5 and the remaining DESCRIBED rows | All slices; O1 | Host runs from a clean non-admin account without Python on all three OS in the G2 acceptance environments (section 11); clean-Mac real path (A9) |
+
+Planning note (review note R5-04): S5 is expected to be split at
+implementation into S5a (Core side: manifest parsing, O54, O55 and their
+tests) and S5b (outer layers Inno and shell, CI jobs, host runs). The ID S5
+and its dependencies stay as listed.
 
 W9 belongs to the later repair route and is not closed by these slices.
 S5 to S11 need native hosts. S11 closes the DESCRIBED criteria in section 11
