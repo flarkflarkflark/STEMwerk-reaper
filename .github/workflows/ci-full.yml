@@ -12,14 +12,21 @@ concurrency:
 
 jobs:
   tests:
+    # The 3.11 entry keeps the exact name `tests`, the required check on main;
+    # the 3.12 entry (managed runtime version, D2) is named `tests (3.12)`.
+    name: ${{ matrix.python-version == '3.11' && 'tests' || format('tests ({0})', matrix.python-version) }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: 3.11
+          python-version: ${{ matrix.python-version }}
 
       - name: Show Python and OpenSSL versions
         # This job is pinned to ubuntu-24.04 for its OpenSSL 3.0.x; the step
@@ -105,6 +112,7 @@ jobs:
           tests/test_core_asset_materialization.py
           tests/test_core_asset_acquisition.py
           tests/test_core_asset_preparation.py
+          tests/test_core_module_verify.py
           tests/test_core_catalog_sync.py
           tests/test_dependency_constraints.py::test_audio_separator_process_consumes_shared_managed_ffmpeg_candidates
 
@@ -128,10 +136,10 @@ jobs:
     name: Asset publication (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     env:
-      # Number of tests selected by -m native_publication in the three files
+      # Number of tests selected by -m native_publication in the four files
       # below. Raise it when native publication tests are added; the guard
       # fails if fewer ran, so a deselected or removed test cannot pass.
-      MIN_NATIVE_PUBLICATION_TESTS: "62"
+      MIN_NATIVE_PUBLICATION_TESTS: "80"
     strategy:
       fail-fast: false
       matrix:
@@ -186,6 +194,7 @@ jobs:
           tests/test_core_asset_materialization.py
           tests/test_core_asset_preparation.py
           tests/test_core_asset_acquisition.py
+          tests/test_core_module_verify.py
 
       - name: Require that native publication tests really ran
         # A skip must not look like a pass: fail unless at least the minimum
