@@ -39,11 +39,17 @@ def child_env(
     return env
 
 
-def run_cli(arguments, *, closed: Optional[str] = None, isolated: bool = False):
+def run_cli(
+    arguments,
+    *,
+    closed: Optional[str] = None,
+    isolated: bool = False,
+    extra_env: Optional[Mapping[str, str]] = None,
+):
     """Run ``python -B [arguments]``; ``closed`` names a stream to close early.
 
     ``isolated`` adds ``-I``: PYTHONPATH is then ignored, so callers must make
-    Core importable themselves.
+    Core importable themselves. ``extra_env`` adds or overrides variables.
     """
 
     streams = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
@@ -56,7 +62,7 @@ def run_cli(arguments, *, closed: Optional[str] = None, isolated: bool = False):
     try:
         return subprocess.run(
             [sys.executable, *flags, *arguments],
-            env=child_env(),
+            env={**child_env(), **(extra_env or {})},
             stdin=subprocess.DEVNULL,
             timeout=CLI_TIMEOUT,
             **streams,

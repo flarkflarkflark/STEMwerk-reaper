@@ -668,8 +668,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             inventory = (collect_installation_inventory(request, catalog_dir=root) if args.collect else
                          contracts.load_json(args.inventory) if args.inventory else None)
             result = preview_installation(request, inventory=inventory, catalogs=catalogs)
-        print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False)
-              if args.pretty else canonical_json(result))
+        # Stream JSON is ASCII-only so it survives any console code page; the
+        # compact form equals canonical_json(result) apart from \u escapes.
+        print(json.dumps(result, indent=2 if args.pretty else None, sort_keys=True,
+                         separators=None if args.pretty else (',', ':'),
+                         ensure_ascii=True, allow_nan=False))
         return 0
     except Exception as exc:
         print(f'installation preview failed: {exc}', file=sys.stderr)

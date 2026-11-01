@@ -9,8 +9,9 @@ document on stderr and exits 2; any other ``Exception`` becomes an
 ``internal_error`` document on stderr with exit 3 and only the exception
 type in its message; ``BaseException``s propagate. Every computed
 installation state, including ``not_installed`` and ``repair_required``, is
-a successful verification (exit 0). A reader that closes a stream early does
-not change the exit code.
+a successful verification (exit 0). JSON on the streams is ASCII-only, so it
+reads the same on any console or pipe code page. A reader that closes a stream
+early does not change the exit code.
 """
 
 from __future__ import annotations
@@ -103,7 +104,7 @@ def _error_document(code: str, message: str, module: Optional[str]) -> Dict[str,
 
 def _dumps(document: Dict[str, Any]) -> str:
     return json.dumps(
-        document, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+        document, sort_keys=True, ensure_ascii=True, allow_nan=False, separators=(",", ":")
     )
 
 

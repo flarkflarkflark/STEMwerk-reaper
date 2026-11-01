@@ -11,7 +11,7 @@ Every events line is one JSON object terminated by ``\\n`` and written with a
 single write; readers ignore an incomplete last line. The result and started
 files are written once: to a temporary file in the same directory, then
 published with the native no-replace rename, so they are never partially
-visible and never replaced.
+visible and never replaced; on POSIX the directory is synced after the rename.
 """
 
 from __future__ import annotations
@@ -67,6 +67,15 @@ STATE_FIELDS: Mapping[str, tuple[str, ...]] = {
 }
 
 EXIT_STREAMS = {0: "stdout", 2: "stderr", 3: "stderr"}
+
+
+def _directory_sync_supported(os_name: str) -> bool:
+    """Directory fsync makes a rename durable on POSIX; Windows has no equivalent."""
+
+    return os_name != "nt"
+
+
+_SYNC_DIRECTORIES = _directory_sync_supported(os.name)
 
 _BASE_EVENT_KEYS = ("protocol", "operation_id", "seq", "ts", "source", "state", "phase")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z\Z")
@@ -356,7 +365,29 @@ def _write_once(operation_dir: Path, filename: str, data: bytes) -> Path:
     except BaseException:
         _remove_quietly(temporary)
         raise
+    _sync_directory(operation_dir, filename)
     return target
+
+
+def _sync_directory(directory: Path, filename: str) -> None:
+    """Make the rename durable on POSIX; Windows has no directory fsync.
+
+    The file is already published when this runs, so a failure is reported
+    as ``write_failed`` and a retry finds ``already_written``.
+    """
+
+    if not _SYNC_DIRECTORIES:
+        return
+    try:
+        handle = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(handle)
+        finally:
+            os.close(handle)
+    except OSError as exc:
+        raise InstallFileError(
+            "write_failed", f"{filename} was published but its directory could not be synced"
+        ) from exc
 
 
 def _remove_quietly(path: Path) -> None:

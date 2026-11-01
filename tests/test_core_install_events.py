@@ -479,3 +479,90 @@ def test_non_ascii_operation_directories_round_trip(tmp_path):
         assert events.read_events(logs / OP)[-1]["detail"] == str(logs)
         assert events.read_result(logs / OP)["document"] == {"root": str(logs)}
         assert writer.next_seq == 4
+
+
+# --- U1: files stay UTF-8; the rename is made durable on POSIX -------------------
+
+U1_TEXT = "Testger\u00e4t be\u00f1at e\u0301 \u041f\u0440\u0438\u0432\u0435\u0442 \u6587\u5b57 \U0001F39B"
+
+
+@pytest.mark.native_publication
+def test_operation_files_stay_unescaped_utf8(tmp_path):
+    operation = _prepared_operation(tmp_path)
+    core = events.EventWriter.accept_handover(operation, OP)
+    core.append("failed", "preflight", error_code="path", detail=U1_TEXT, action=U1_TEXT)
+    events.write_result(operation, OP, 2, {"path": U1_TEXT})
+    for name in (events.EVENTS_FILENAME, events.RESULT_FILENAME):
+        raw = (operation / name).read_bytes()
+        assert U1_TEXT.encode("utf-8") in raw
+        assert b"\\u" not in raw
+    assert events.read_events(operation)[-1]["detail"] == U1_TEXT
+    assert events.read_result(operation)["document"] == {"path": U1_TEXT}
+
+
+def _record_fsyncs(monkeypatch, target):
+    import stat
+
+    calls = []
+    real_fsync = os.fsync
+
+    def recording(fd):
+        calls.append((stat.S_ISDIR(os.fstat(fd).st_mode), os.fstat(fd).st_ino, target.exists()))
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", recording)
+    return calls
+
+
+@pytest.mark.skipif(os.name == "nt", reason="directory fsync exists only on POSIX")
+@pytest.mark.parametrize("write", ["result", "started"])
+def test_directory_is_synced_after_the_rename(tmp_path, monkeypatch, write):
+    operation = _prepared_operation(tmp_path)
+    name = events.RESULT_FILENAME if write == "result" else events.STARTED_FILENAME
+    calls = _record_fsyncs(monkeypatch, operation / name)
+    if write == "result":
+        events.write_result(operation, OP, 0, {})
+    else:
+        events.write_started(operation, OP)
+    assert events._SYNC_DIRECTORIES is True
+    assert calls == [
+        (False, calls[0][1], False),  # the temporary file, before publication
+        (True, os.stat(operation).st_ino, True),  # the directory, after the rename
+    ]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="directory fsync exists only on POSIX")
+def test_directory_sync_failure_is_reported(tmp_path, monkeypatch):
+    import stat
+
+    operation = _prepared_operation(tmp_path)
+    real_fsync = os.fsync
+
+    def failing_for_directories(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(5, "simulated I/O error")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", failing_for_directories)
+    with pytest.raises(events.InstallFileError) as raised:
+        events.write_result(operation, OP, 0, {"kind": "published"})
+    assert raised.value.code == "write_failed"
+    assert events.read_result(operation)["document"] == {"kind": "published"}
+    with pytest.raises(events.InstallFileError) as again:
+        events.write_result(operation, OP, 0, {"kind": "retry"})
+    assert again.value.code == "already_written"
+
+
+@pytest.mark.parametrize(("os_name", "supported"), [("nt", False), ("posix", True)])
+def test_directory_sync_is_posix_only(os_name, supported):
+    assert events._directory_sync_supported(os_name) is supported
+
+
+@pytest.mark.native_publication
+def test_directory_sync_is_not_attempted_where_unsupported(tmp_path, monkeypatch):
+    assert events._SYNC_DIRECTORIES is (os.name != "nt")
+    operation = _prepared_operation(tmp_path)
+    calls = _record_fsyncs(monkeypatch, operation / events.RESULT_FILENAME)
+    monkeypatch.setattr(events, "_SYNC_DIRECTORIES", False)
+    events.write_result(operation, OP, 0, {})
+    assert [is_directory for is_directory, _, _ in calls] == [False]

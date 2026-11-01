@@ -1101,7 +1101,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             json.dumps(
                 _error_document(exc),
                 sort_keys=True,
-                ensure_ascii=False,
+                ensure_ascii=True,
                 allow_nan=False,
             ),
             sys.stderr,
@@ -1112,7 +1112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             json.dumps(
                 _internal_error_document(exc, args.destination),
                 sort_keys=True,
-                ensure_ascii=False,
+                ensure_ascii=True,
                 allow_nan=False,
             ),
             sys.stderr,
@@ -1123,7 +1123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             result,
             indent=2 if args.pretty else None,
             sort_keys=True,
-            ensure_ascii=False,
+            ensure_ascii=True,
             allow_nan=False,
             separators=None if args.pretty else (",", ":"),
         ),

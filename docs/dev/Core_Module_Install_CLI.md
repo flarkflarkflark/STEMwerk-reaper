@@ -30,8 +30,18 @@ commands.
 `not_installed`, `partial`, `repair_required` and `unknown` are results of a
 successful verification, so they exit 0; callers read
 `installation_state`. Each document is one line of compact JSON with sorted
-keys, UTF-8 text unescaped. The `internal_error` message names only the
-exception type. `KeyboardInterrupt` and `SystemExit` are not converted.
+keys. The `internal_error` message names only the exception type.
+`KeyboardInterrupt` and `SystemExit` are not converted.
+
+**Encoding rule: CLI stream JSON is ASCII-only; files are UTF-8.** Every
+JSON document a Core CLI writes to stdout or stderr (this CLI, the asset
+acquisition, preparation and materialization CLIs, and the installation
+preview `stemwerk_core.installation_plan`) escapes non-ASCII
+characters as `\uXXXX`, with a surrogate pair above U+FFFF. The bytes are
+then the same on every console or pipe code page, for example a Windows
+pipe in cp1252, cp850 or cp437; any JSON parser restores the original
+strings. Readers that are not JSON libraries (Lua, Inno) must decode these
+escapes, including surrogate pairs.
 
 Error document:
 
@@ -72,9 +82,9 @@ preparation and materialization CLIs.
 
 ## Operation files (library)
 
-All files of one operation live in `<root>/logs/<operation-id>/`. They are
-UTF-8 without a byte order mark; non-ASCII text, such as paths with user
-names, is written unescaped and read back unchanged.
+All files of one operation live in `<root>/logs/<operation-id>/`. Unlike
+the CLI streams, they are UTF-8 without a byte order mark; non-ASCII text,
+such as paths with user names, is written unescaped and read back unchanged.
 
 **`events.ndjson`.** One JSON object per line, each line terminated by
 `\n` and written with a single append. Fields: `protocol`
@@ -115,7 +125,11 @@ ts}`, the startup acknowledgement of a detached Core.
 same directory, synced, then published with the native no-replace rename
 used for asset publication. They are never partially visible and never
 replaced; a second write fails with `already_written`. A crash before the
-rename leaves only a `.<name>.<hex>.tmp` file that readers ignore.
+rename leaves only a `.<name>.<hex>.tmp` file that readers ignore. On POSIX
+the directory is synced after the rename so the new name survives a crash;
+if that fails the write raises `write_failed` although the file is already
+published, and a retry finds `already_written`. Windows has no directory
+fsync; this step is skipped there.
 
 ## Not in this slice
 
