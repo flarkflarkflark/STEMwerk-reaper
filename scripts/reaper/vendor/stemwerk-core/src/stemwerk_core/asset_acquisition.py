@@ -25,11 +25,8 @@ from urllib.parse import SplitResult, urljoin, urlsplit
 import uuid
 
 from . import model_assets
-from .asset_materialization import (
-    _flush_cli_streams,
-    _is_link_or_reparse,
-    _write_cli_document,
-)
+from ._cli_io import _flush_cli_streams, _write_cli_document
+from .asset_materialization import _is_link_or_reparse
 
 
 SCHEMA_VERSION = "1.0.0"

@@ -113,6 +113,8 @@ jobs:
           tests/test_core_asset_acquisition.py
           tests/test_core_asset_preparation.py
           tests/test_core_module_verify.py
+          tests/test_core_module_install.py
+          tests/test_core_install_events.py
           tests/test_core_catalog_sync.py
           tests/test_dependency_constraints.py::test_audio_separator_process_consumes_shared_managed_ffmpeg_candidates
 
@@ -136,10 +138,10 @@ jobs:
     name: Asset publication (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     env:
-      # Number of tests selected by -m native_publication in the four files
+      # Number of tests selected by -m native_publication in the six files
       # below. Raise it when native publication tests are added; the guard
       # fails if fewer ran, so a deselected or removed test cannot pass.
-      MIN_NATIVE_PUBLICATION_TESTS: "80"
+      MIN_NATIVE_PUBLICATION_TESTS: "123"
     strategy:
       fail-fast: false
       matrix:
@@ -195,6 +197,8 @@ jobs:
           tests/test_core_asset_preparation.py
           tests/test_core_asset_acquisition.py
           tests/test_core_module_verify.py
+          tests/test_core_module_install.py
+          tests/test_core_install_events.py
 
       - name: Require that native publication tests really ran
         # A skip must not look like a pass: fail unless at least the minimum

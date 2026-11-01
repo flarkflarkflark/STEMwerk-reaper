@@ -19,6 +19,7 @@ from typing import Any, Callable, Mapping, Sequence
 from . import asset_acquisition as acquisition
 from . import asset_materialization as materialization
 from . import model_assets
+from ._cli_io import _flush_cli_streams, _write_cli_document
 
 
 SCHEMA_VERSION = "1.0.0"
@@ -805,11 +806,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
     finally:
-        materialization._flush_cli_streams()
+        _flush_cli_streams()
     try:
         result = prepare_drumsep_assets(_request_from_args(args))
     except PreparationError as exc:
-        materialization._write_cli_document(
+        _write_cli_document(
             json.dumps(
                 _error_document(exc),
                 indent=2 if args.pretty else None,
@@ -822,7 +823,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     except Exception as exc:
-        materialization._write_cli_document(
+        _write_cli_document(
             json.dumps(
                 _internal_error_document(exc, args.destination),
                 indent=2 if args.pretty else None,
@@ -834,7 +835,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sys.stderr,
         )
         return 3
-    materialization._write_cli_document(
+    _write_cli_document(
         json.dumps(
             result,
             indent=2 if args.pretty else None,

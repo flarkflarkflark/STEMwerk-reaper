@@ -2,8 +2,9 @@
 
 `stemwerk_core.module_verify` reports the installation state of a module
 (axis 1 of the [installation design](Core_Module_Installation_Design.md),
-section 2.1). It is a library API only; the module CLI, its exit codes and
-its output streams follow in slice S2.
+section 2.1). The command line `module_install verify` prints the same
+document as one line of JSON with sorted keys; see
+[Core module CLI](Core_Module_Install_CLI.md).
 
 ## Descriptor
 
