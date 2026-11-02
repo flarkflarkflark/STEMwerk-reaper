@@ -29,6 +29,15 @@ from tests.cli_harness import (  # noqa: E402
 
 pytestmark = pytest.mark.portable
 
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_root(tmp_path, monkeypatch):
+    """verify reads the install lock under <root>: never the real user's root."""
+
+    root = tmp_path / "isolated-runtime-root"
+    monkeypatch.setenv("STEMWERK_RUNTIME_ROOT", str(root))
+    return root
+
 CLI_MODULE = "stemwerk_core.module_install"
 VERIFY = ["verify", "--module", "drum_kit"]
 LEAKY_MESSAGE = "secret token https://example.invalid/boom"
@@ -109,6 +118,12 @@ def test_describe_document_matches_the_code():
     }
     assert document["modules"] == sorted(module_descriptors.MODULE_DESCRIPTORS)
     assert document["current_platform"] in document["platforms"] + [None]
+
+
+@pytest.mark.native_publication
+def test_describe_shows_the_verification_schema_the_code_writes():
+    assert module_install.describe()["schemas"]["verification"] == "1.1.0"
+    assert module_verify.verify_module("drum_kit")["schema_version"] == "1.1.0"
 
 
 def test_describe_lists_exactly_the_operations_the_cli_offers():

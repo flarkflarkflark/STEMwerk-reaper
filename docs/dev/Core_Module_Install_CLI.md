@@ -66,7 +66,7 @@ preparation and materialization CLIs.
  "platforms":["linux-x86_64","darwin-arm64","win-x86_64"],
  "schemas":{"describe":"1.0.0","error":"1.0.0","events":"stemwerk-install-events/1",
   "result":"stemwerk-install-result/1","started":"stemwerk-install-started/1",
-  "verification":"1.0.0"}}
+  "verification":"1.1.0"}}
 ```
 
 - `operations` lists only what this Core can do. Later slices add their
@@ -133,6 +133,8 @@ fsync; this step is skipped there.
 
 ## Not in this slice
 
-Detached runs and the startup handshake with a front end (S9), the install
-lock and `operation_in_progress` (S3), the outer layer (S5), install and the
-module receipt (S6), and cancellation at safe points (S8).
+Detached runs and the startup handshake with a front end (S9), the outer
+layer (S5), install and the module receipt (S6), and cancellation at safe
+points (S8). The install lock and the journal exist as libraries
+([Core install lock](Core_Install_Lock.md)); no command takes the lock yet,
+and `verify` only reads it.

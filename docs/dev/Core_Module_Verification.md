@@ -28,11 +28,13 @@ byte sizes from `asset_acquisition`.
 ```python
 from stemwerk_core.module_verify import verify_module
 
-document = verify_module("drum_kit", lookup=None, verifiers=None)
+document = verify_module("drum_kit", lookup=None, verifiers=None, root=None)
 ```
 
-`verify_descriptor(descriptor, lookup=..., verifiers=...)` does the same for
-an explicit `ModuleDescriptor`. An unknown module raises `ValueError`.
+`verify_descriptor(descriptor, lookup=..., verifiers=..., root=...)` does the
+same for an explicit `ModuleDescriptor`. An unknown module raises
+`ValueError`. `root` is where the install lock is read; the default is
+`managed_runtime_root()`.
 
 **Lookup.** A lookup has a `lookup_id` and
 `locate(module_id, component_id)`, which returns a `ComponentLocation` or
@@ -65,11 +67,12 @@ files in the directory are ignored.
 ## Document
 
 ```json
-{"kind": "stemwerk_module_verification", "schema_version": "1.0.0",
+{"kind": "stemwerk_module_verification", "schema_version": "1.1.0",
  "descriptor_version": "1.0.0", "module_id": "drum_kit",
  "workflow_id": "drum_kit_direct", "engine_id": "drumsep_mdx23c",
  "display_name": "STEMwerk DKS", "lookup": "no_registry",
  "installation_state": "not_installed", "decided_by_rule": 3,
+ "operation_in_progress": false, "operation_id": null, "lock_status": "free",
  "components": [{"component_id": "managed_python", "kind": "runtime",
    "class": "absent", "reason_code": "not_found", "location": null}, …]}
 ```
@@ -79,8 +82,27 @@ asset component adds `files`, one entry per pin with `name`, `result`
 (`verified` or the failing code), `expected_size`, `observed_size` and
 `expected_sha256`.
 
+**Running operation** (schema 1.1.0, design section 2.1). `verify` reads
+the install lock under `<root>/state/locks/` without taking it, creating
+anything or changing anything, and reports:
+
+| `lock_status` | `operation_in_progress` | `operation_id` |
+| --- | --- | --- |
+| `free` (no lock) | `false` | `null` |
+| `held` | `true` | from the lock |
+| `stale` (owner gone, see [the lock](Core_Install_Lock.md)) | `false` | `null` when the lock was abandoned during creation, else from the lock |
+| `foreign_host` (written on another computer) | `null` | from the lock |
+| `unsupported` (this platform cannot probe the owner) | `null` | from the lock |
+| `unreadable` (malformed lock, or a link inside `<root>`) | `null` | `null` |
+
+`null` means the lock cannot be judged. A lock never changes
+`installation_state`: published components appear only through a no-replace
+rename, so a running installation cannot expose a half-written component.
+Without the OS lock, `verify` judges staleness from the PID, its start time
+and the heartbeat; a lock whose owner died within the last 30 seconds is
+still `held`.
+
 ## Not in this slice
 
-No lock is read, so `operation_in_progress` is not reported (slice S3). No
-module receipt is read or written (S6). The runtime verifiers arrive with
+No module receipt is read or written (S6). The runtime verifiers arrive with
 S5 and S6, the FFmpeg verifier with S7 and the activation check with S9.

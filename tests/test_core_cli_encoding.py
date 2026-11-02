@@ -22,6 +22,15 @@ from tests.cli_harness import run_cli, single_json_line  # noqa: E402
 
 pytestmark = pytest.mark.portable
 
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_root(tmp_path, monkeypatch):
+    """verify reads the install lock under <root>: never the real user's root."""
+
+    root = tmp_path / "isolated-runtime-root"
+    monkeypatch.setenv("STEMWERK_RUNTIME_ROOT", str(root))
+    return root
+
 # Composed and decomposed Latin, Cyrillic, CJK and a non-BMP character.
 TEXT = "Testger\u00e4t be\u00f1at e\u0301 \u041f\u0440\u0438\u0432\u0435\u0442 \u6587\u5b57 \U0001F39B"
 SURROGATE_PAIR = b"\\ud83c\\udf9b"

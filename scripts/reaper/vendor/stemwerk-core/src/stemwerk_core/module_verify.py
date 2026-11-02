@@ -12,6 +12,11 @@ reader replaces it later. Legacy 2.3 layouts are never consulted here.
 Only asset components have a verifier today. A component of another kind
 that a lookup does find is ``unverifiable``, so the module is ``unknown``
 and never ``installed``.
+
+The document also reports whether an installation operation is running
+(design section 2.1): ``operation_in_progress``, ``operation_id`` and
+``lock_status`` from ``install_lock.inspect_lock``. Reading the lock never
+takes it, and a held lock never changes ``installation_state``.
 """
 
 from __future__ import annotations
@@ -23,11 +28,11 @@ import stat
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Tuple
 
 from . import asset_materialization as materialization
-from . import module_descriptors
+from . import install_lock, managed_runtime, module_descriptors
 from .module_descriptors import AssetPin, ComponentDescriptor, ModuleDescriptor
 
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 DOCUMENT_KIND = "stemwerk_module_verification"
 
 ABSENT = "absent"
@@ -289,10 +294,12 @@ def verify_descriptor(
     *,
     lookup: Optional[ComponentLookup] = None,
     verifiers: Optional[Mapping[str, Verifier]] = None,
+    root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Verify ``descriptor`` and return a ``stemwerk_module_verification`` document.
 
     ``verifiers`` adds to or replaces the default verifiers by component kind.
+    ``root`` is where the install lock is read; default ``managed_runtime_root()``.
     """
 
     if not isinstance(descriptor, ModuleDescriptor):
@@ -304,6 +311,9 @@ def verify_descriptor(
         for component in descriptor.components
     ]
     state, rule = installation_state(entry["class"] for entry in components)
+    lock = install_lock.inspect_lock(
+        managed_runtime.managed_runtime_root() if root is None else root
+    )
     return {
         "kind": DOCUMENT_KIND,
         "schema_version": SCHEMA_VERSION,
@@ -315,6 +325,9 @@ def verify_descriptor(
         "lookup": active_lookup.lookup_id,
         "installation_state": state,
         "decided_by_rule": rule,
+        "operation_in_progress": lock.operation_in_progress,
+        "operation_id": lock.operation_id,
+        "lock_status": lock.lock_status,
         "components": components,
     }
 
@@ -324,6 +337,7 @@ def verify_module(
     *,
     lookup: Optional[ComponentLookup] = None,
     verifiers: Optional[Mapping[str, Verifier]] = None,
+    root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Verify the module ``module_id``; ``ValueError`` for an unknown module."""
 
@@ -331,4 +345,5 @@ def verify_module(
         module_descriptors.get_module_descriptor(module_id),
         lookup=lookup,
         verifiers=verifiers,
+        root=root,
     )

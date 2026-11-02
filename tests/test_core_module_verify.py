@@ -10,6 +10,8 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
+import uuid
 
 import pytest
 
@@ -19,6 +21,7 @@ sys.path.insert(0, str(CORE_SRC))
 
 from stemwerk_core import asset_acquisition  # noqa: E402
 from stemwerk_core import asset_materialization as materialization  # noqa: E402
+from stemwerk_core import install_lock, process_identity  # noqa: E402
 from stemwerk_core import managed_runtime, model_assets  # noqa: E402
 from stemwerk_core import module_descriptors as descriptors  # noqa: E402
 from stemwerk_core import module_verify as verify  # noqa: E402
@@ -28,6 +31,15 @@ from tests.asset_link_helpers import (  # noqa: E402
 )
 
 pytestmark = pytest.mark.portable
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_root(tmp_path, monkeypatch):
+    """verify reads the install lock under <root>: never the real user's root."""
+
+    root = tmp_path / "isolated-runtime-root"
+    monkeypatch.setenv("STEMWERK_RUNTIME_ROOT", str(root))
+    return root
 
 CHECKPOINT = descriptors.DIRECT_KIT.components[3].assets[0].name
 CONFIG = descriptors.DIRECT_KIT.components[3].assets[1].name
@@ -256,8 +268,13 @@ def test_default_lookup_is_not_installed_and_reads_no_legacy_layout(tmp_path, mo
     monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
     monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
     monkeypatch.delenv("AUDIO_SEPARATOR_MODEL_DIR", raising=False)
+    monkeypatch.delenv("STEMWERK_RUNTIME_ROOT", raising=False)
     legacy_models = managed_runtime.managed_model_cache_dir()
     assert home in legacy_models.parents
+    # The only paths verify may read: the install lock (design section 2.1).
+    runtime_root = managed_runtime.managed_runtime_root()
+    lock_directory = runtime_root / "state" / "locks"
+    lock_paths = {runtime_root / "state", lock_directory}
     legacy_models.mkdir(parents=True)
     for name, content in CONTENTS.items():
         (legacy_models / name).write_bytes(content)
@@ -265,8 +282,13 @@ def test_default_lookup_is_not_installed_and_reads_no_legacy_layout(tmp_path, mo
 
     accessed = []
 
-    def forbidden(name):
+    def forbidden(module, name):
+        original = getattr(module, name)
+
         def guard(*args, **kwargs):
+            path = Path(args[0]) if args and isinstance(args[0], (str, os.PathLike)) else None
+            if path is not None and (path in lock_paths or path.parent == lock_directory):
+                return original(*args, **kwargs)
             accessed.append((name, args[:1]))
             raise AssertionError(f"verify touched the file system via {name}")
 
@@ -281,7 +303,7 @@ def test_default_lookup_is_not_installed_and_reads_no_legacy_layout(tmp_path, mo
         (builtins, "open"),
         (io, "open"),
     ]:
-        monkeypatch.setattr(module, name, forbidden(f"{module.__name__}.{name}"))
+        monkeypatch.setattr(module, name, forbidden(module, name))
     try:
         document = verify.verify_module("drum_kit")
         document_for_fixture_pins = verify.verify_descriptor(fixture_descriptor())
@@ -626,6 +648,9 @@ TOP_LEVEL_KEYS = [
     "lookup",
     "installation_state",
     "decided_by_rule",
+    "operation_in_progress",
+    "operation_id",
+    "lock_status",
     "components",
 ]
 COMPONENT_KEYS = ["component_id", "kind", "class", "reason_code", "location"]
@@ -636,7 +661,9 @@ def test_document_schema_and_identity():
     document = verify.verify_module("drum_kit")
     assert list(document) == TOP_LEVEL_KEYS
     assert document["kind"] == "stemwerk_module_verification"
-    assert document["schema_version"] == "1.0.0"
+    assert document["schema_version"] == verify.SCHEMA_VERSION == "1.1.0"
+    assert (document["operation_in_progress"], document["operation_id"],
+            document["lock_status"]) == (False, None, "free")
     assert document["descriptor_version"] == descriptors.DESCRIPTOR_VERSION == "1.0.0"
     assert (document["module_id"], document["workflow_id"], document["engine_id"]) == (
         "drum_kit",
@@ -663,3 +690,130 @@ def test_document_is_deterministic_json(tmp_path):
     assert list(assets) == COMPONENT_KEYS + ["files"]
     assert [list(f) for f in assets["files"]] == [FILE_KEYS, FILE_KEYS]
     assert [f["name"] for f in assets["files"]] == [CHECKPOINT, CONFIG]
+
+
+# --- running operation (install lock) -----------------------------------------
+
+
+def write_lock(root, *, pid, start_token, host=None, age=3600.0):
+    lock_paths = install_lock.LockPaths.for_root(root)
+    lock_paths.directory.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "protocol": install_lock.LOCK_PROTOCOL,
+        "operation_id": "6f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+        "pid": pid,
+        "start_token": start_token,
+        "host": process_identity.host_name() if host is None else host,
+        "created": install_lock._timestamp(time.time() - age),
+    }
+    lock_paths.lock.write_bytes(install_lock._encode(metadata))
+    return metadata["operation_id"]
+
+
+def own_lock(root, **kwargs):
+    return write_lock(root, pid=os.getpid(),
+                      start_token=process_identity.current_start_token(), **kwargs)
+
+
+def tree_snapshot(root):
+    return sorted((str(p), p.read_bytes() if p.is_file() else None) for p in root.rglob("*"))
+
+
+def torn_lock(root, monkeypatch):
+    lock = install_lock.LockPaths.for_root(root).lock
+    lock.parent.mkdir(parents=True)
+    lock.write_bytes(b"{torn")
+
+
+def unprobeable_owner(root, monkeypatch):
+    monkeypatch.setattr(process_identity, "probe_process",
+                        lambda pid: process_identity.ProcessProbe(None, None))
+    return write_lock(root, pid=os.getpid(), start_token="x")
+
+
+# status: (prepare(root, monkeypatch), operation_in_progress, operation_id reported)
+LOCK_CASES = {
+    "free": (lambda root, monkeypatch: None, False, False),
+    "held": (lambda root, monkeypatch: own_lock(root), True, True),
+    "stale": (lambda root, monkeypatch: write_lock(root, pid=os.getpid(), start_token="reused"),
+              False, True),
+    "unreadable": (torn_lock, None, False),
+    "unsupported": (unprobeable_owner, None, True),
+    "foreign_host": (lambda root, monkeypatch: own_lock(root, host="another-host.example"),
+                     None, True),
+}
+
+
+@pytest.mark.native_publication
+@pytest.mark.parametrize("status", sorted(LOCK_CASES))
+def test_verify_reports_the_lock_without_taking_it(isolated_runtime_root, monkeypatch, status):
+    prepare, in_progress, has_id = LOCK_CASES[status]
+    root = isolated_runtime_root
+    root.mkdir()
+    written = prepare(root, monkeypatch)
+    before = tree_snapshot(root)
+
+    def refuse(*args):
+        raise AssertionError("verify must never take the install lock")
+
+    monkeypatch.setattr(install_lock, "_os_lock", refuse)
+    monkeypatch.setattr(install_lock, "_os_unlock", refuse)
+    document = verify.verify_module("drum_kit")
+    assert tree_snapshot(root) == before
+    assert document["lock_status"] == status
+    assert document["operation_in_progress"] is in_progress
+    assert document["operation_id"] == (written if has_id else None)
+    assert document["installation_state"] == verify.NOT_INSTALLED
+
+
+@pytest.mark.native_publication
+@pytest.mark.parametrize("held", [False, True])
+def test_a_held_lock_never_changes_the_installation_state(tmp_path, held):
+    directory = make_asset_set(tmp_path)
+    locations = {component: tmp_path / "x" for component in NON_ASSET_COMPONENTS}
+    locations["drumsep_assets"] = directory
+    root = tmp_path / "root"
+    lock = install_lock.acquire(root, str(uuid.uuid4())) if held else None
+    try:
+        documents = [
+            verify.verify_descriptor(fixture_descriptor(), lookup=FixtureLookup(locations),
+                                     verifiers=STUB_VERIFIERS, root=root),
+            verify.verify_descriptor(fixture_descriptor(), lookup=FixtureLookup({}), root=root),
+            verify.verify_descriptor(fixture_descriptor(), lookup=FixtureLookup(
+                {"drumsep_assets": directory, "ffmpeg": tmp_path / "ffmpeg"}), root=root),
+        ]
+    finally:
+        if lock is not None:
+            lock.release()
+    assert [d["installation_state"] for d in documents] == [
+        verify.INSTALLED, verify.NOT_INSTALLED, verify.UNKNOWN]
+    for document in documents:
+        assert document["operation_in_progress"] is held
+        assert document["lock_status"] == ("held" if held else "free")
+        assert document["operation_id"] == (lock.operation_id if held else None)
+
+
+@pytest.mark.native_publication
+def test_cli_verify_in_another_process_sees_the_held_lock(isolated_runtime_root):
+    from tests.cli_harness import run_cli, single_json_line
+
+    with install_lock.acquire(isolated_runtime_root, str(uuid.uuid4())) as lock:
+        result = run_cli(["-m", "stemwerk_core.module_install", "verify", "--module", "drum_kit"])
+        assert install_lock.os_lock_is_free(lock.paths.lock) is False
+    assert result.returncode == 0, result.stderr
+    document = single_json_line(result.stdout)
+    assert (document["operation_in_progress"], document["operation_id"],
+            document["lock_status"]) == (True, lock.operation_id, "held")
+    assert document["installation_state"] == "not_installed"
+    assert document["schema_version"] == "1.1.0"
+
+
+@pytest.mark.native_publication
+@pytest.mark.parametrize("name", ["Testgerät", "beñat"])
+def test_verify_lock_report_in_non_ascii_roots(tmp_path, name):
+    root = tmp_path / name / "STEMwerk"
+    root.parent.mkdir()
+    with install_lock.acquire(root, str(uuid.uuid4())) as lock:
+        document = verify.verify_module("drum_kit", root=root)
+    assert (document["operation_in_progress"], document["operation_id"]) == (True, lock.operation_id)
+    assert verify.verify_module("drum_kit", root=root)["lock_status"] == "free"

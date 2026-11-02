@@ -88,7 +88,7 @@ def test_every_descriptor_open_requests_binary_mode(tmp_path, monkeypatch):
 @pytest.mark.native_publication
 @pytest.mark.skipif(not NATIVE_PUBLICATION, reason="requires a supported native publisher")
 def test_materializes_complete_verified_set_and_consistent_receipt(tmp_path):
-    policy, request, contents = controlled_request(tmp_path)
+    policy, request, contents = controlled_request(tmp_path / "Testgerät")
 
     result = materialization._materialize_asset_set(request, policy)
 
@@ -107,7 +107,9 @@ def test_materializes_complete_verified_set_and_consistent_receipt(tmp_path):
         assert target.read_bytes() == expected
         assert target.stat().st_ino != Path(request.sources[name]).stat().st_ino
 
-    receipt = json.loads((destination / materialization.RECEIPT_FILENAME).read_text())
+    receipt = json.loads(
+        (destination / materialization.RECEIPT_FILENAME).read_text(encoding="utf-8")
+    )
     assert receipt == result["receipt"]
     assert receipt["kind"] == "stemwerk_asset_materialization_receipt"
     assert receipt["schema_version"] == "1.0.0"
