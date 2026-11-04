@@ -209,14 +209,26 @@ def test_owner_record_of_another_operation_keeps_the_staging(tmp_path):
 @pytest.mark.native_publication
 def test_current_operation_and_foreign_entries_are_never_judged(tmp_path):
     current = new_op()
-    make_staging(tmp_path, current, pid=4242)
-    (tmp_path / "tmp" / "not-an-operation" / "bootstrap").mkdir(parents=True)
-    (tmp_path / "tmp" / current.upper()).mkdir()
-    (tmp_path / "tmp" / new_op()).mkdir()  # operation without bootstrap staging
+    current_staging = make_staging(tmp_path, current, pid=4242)
+    # Change a hex digit as well as case: this is a different directory on Windows too.
+    foreign_upper = ("B" if current[0] == "a" else "A") + current[1:].upper()
+    assert foreign_upper.casefold() != current
+    foreign_staging = [
+        tmp_path / "tmp" / "not-an-operation" / "bootstrap",
+        tmp_path / "tmp" / foreign_upper / "bootstrap",
+    ]
+    for staging in foreign_staging:
+        staging.mkdir(parents=True)
+        (staging / "keep").write_bytes(b"keep")
+    without_staging = tmp_path / "tmp" / new_op()  # canonical operation without bootstrap
+    without_staging.mkdir()
     probe = probe_answer(False)
     report = bootstrap.inspect_staging(tmp_path, current_operation_id=current, probe=probe)
     assert [(e.operation_id, e.status) for e in report.entries] == [(current, bootstrap.CURRENT_OPERATION)]
     assert probe.calls == []
+    assert (current_staging / "python.tar.gz.part").read_bytes() == b"x" * 1024
+    assert all((staging / "keep").read_bytes() == b"keep" for staging in foreign_staging)
+    assert without_staging.is_dir()
 
 
 @pytest.mark.native_publication
