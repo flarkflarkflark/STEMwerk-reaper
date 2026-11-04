@@ -594,8 +594,12 @@ does nothing else. It then starts Core with the published Python
 (`python -I -B -m stemwerk_core.module_install …`); Core runs preflight,
 takes the lock and performs everything else, including the module venv
 into which Core and the wheels are installed. How the shipped Core source
-is importable under `-I` before that venv exists is open (O54); S5
-resolves it. On macOS and Linux the existing scripts gain a narrow mode
+is importable under `-I` before that venv exists was open (O54); S5a
+resolves it: the outer layer runs Core's shipped source directory,
+`<python> -I -B <…>/vendor/stemwerk-core/src <arguments>`, whose
+`__main__.py` calls the module CLI
+([managed Python bootstrap](Core_Managed_Python_Bootstrap.md)). On macOS
+and Linux the existing scripts gain a narrow mode
 for this; their 2.3 logic is not reused by the route.
 
 **Carve-out (G1).** Wherever this document says "only Core mutates, always
@@ -695,6 +699,14 @@ The research also reports a `libgcc_s.so.1` dependency introduced in a
 recent build (python-build-standalone issue #1358); the Linux pin is
 qualified in S5 on a distribution at the G2 baseline (glibc 2.28, kernel
 4.18; criterion L9).
+
+**S5a pins (2026-11-04).** The F6 candidate is the content of the
+manifest `CORE/runtime-manifest.v1.tsv`, unchanged: all three sizes and
+hashes equal upstream `SHA256SUMS` of build `20261026`, the release API's
+per-asset size and digest, and the measured bytes of a download (REPORTED,
+S5a evidence). A static read of the Linux archive finds at most
+`GLIBC_2.17` and no ELF that lists `libgcc_s` as needed; this does not
+replace the L9 run, which stays with S5b.
 
 **Manifest format (DECIDED, G4).** A line-oriented text file with a
 version header and one tab-separated record per artifact
@@ -1131,7 +1143,11 @@ without it. Core takes the lock right after preflight.
   is removed under the existing identity checks; published results are
   verified, not deleted. Anything not recorded in a journal is never
   touched (criterion C13). The outer layer's bootstrap staging has no
-  journal; its cleanup is open (O55).
+  journal; S5a specifies its cleanup (O55): the outer layer writes only
+  `<root>/tmp/<op>/bootstrap/` with an owner record, and Core removes such
+  staging after journal recovery under the lock once it has been silent for
+  15 minutes and its recorded process is proven gone
+  ([managed Python bootstrap](Core_Managed_Python_Bootstrap.md)).
 - **Components in use.** Before replacing or removing a runtime or asset,
   an operation must check for a running separation that uses it, and the
   mutating process never runs from the runtime it replaces (DECIDED, F8).
@@ -1332,7 +1348,7 @@ route.
 | C21 | The scheduled manifest-URL check job fails on a deliberately broken pin (F5) | DESCRIBED | None |
 | C22 | Bootstrap with a wrong pinned hash or a truncated archive: the outer layer writes a `failed` event and a result file in the Core format under `<root>/logs/<op>/`, publishes nothing, writes nothing outside the G1 carve-out; a second bootstrap reuses a verified runtime | DESCRIBED | None |
 | C23 | Below the G2 OS floor the install is refused with observed and required versions; REAPER older than 7.0 shows "not tested, please update" and proceeds; a missing required API ends in a clean, named failure | DESCRIBED | None |
-| C24 | A stale bootstrap staging directory left under `<root>/tmp/` by a crashed outer layer is removed on the next start of Core; the staging directory of an active bootstrap is never touched (O55) | DESCRIBED | None |
+| C24 | A stale bootstrap staging directory left under `<root>/tmp/` by a crashed outer layer is removed on the next start of Core; the staging directory of an active bootstrap is never touched (O55) | DESCRIBED | Core side: S5a library tests of stale, active and linked staging and of cleanup at lock acquisition; outer layer and host runs in S5b |
 
 Note on C11: host evidence exists only for the Windows dev machine; the host
 runs on other machines predate 9c410f9. The materialization CLI is not
@@ -1397,14 +1413,14 @@ revisions; resolved items move to section 12.3.
 | --- | --- | --- |
 | O1 | #134 / #128 root cause (non-ASCII user names) | Gates qualification (W2, S10, S11), not construction |
 | O2 | `BrokenPipeError` on closed or redirected stdout/stderr | A detached Core must still write its result file; fix in S0 for existing CLIs, S2 for the module CLI |
-| O3 | Managed-Python manifest and hash pins (M4, D9, F6) | Bootstrap cannot be exercised without them; F6 gives the candidate |
+| O3 | Managed-Python manifest and hash pins (M4, D9, F6) | Bootstrap cannot be exercised without them; F6 gives the candidate; S5a pins it in `CORE/runtime-manifest.v1.tsv` after checking it against upstream; still blocks until the outer layers use it and L9 passes (S5b) |
 | O4 | Install lock and journal (M7, D8) | Needed for cancel and recovery criteria |
 | O5 | Measured space table (M8), including the static FFmpeg pair (F4) | C5 cannot be tested without it |
 | O9 | Windows `MAX_PATH` / long-path limits for deep `site-packages` under `<root>\runtimes\…` | Route risk on Windows; S6 must measure the deepest path and keep IDs short |
 | O47 | Scheduled manifest-URL CI check (F5) | Blocks first-route distribution; constructed in S5 (C21) |
 | O48 | Licence texts and source pointers shipped with every bundled or STEMwerk-hosted FFmpeg (F5) | Blocks publishing or sharing any STEMwerk-hosted or bundled FFmpeg (S7 release asset, bundled installers, external test builds). Does not block local construction |
-| O54 | How Core is started after the outer layer has published only the pinned Python (G1) | Open question: where Core's code comes from on a fresh account, and how the managed Python runs it under `-I` before any module venv exists. Constraints: 2.3 ships Core as plain files and makes it importable only by `pip install` into its venv (EXISTING: `scripts/reaper/STEMwerk_Bootstrap_Windows.ps1:3436-3444`, `scripts/reaper/STEMwerk_Bootstrap_Linux.sh:2576-2579`); `-I` ignores `PYTHON*` variables and the user site-packages, and `-m` then does not prepend the current directory (REPORTED, https://docs.python.org/3/using/cmdline.html); the ReaPack (`index.xml:125-131`), Inno (`installer/windows/STEMwerk_Windows_Payload.iss:69-75`, included at `installer/windows/STEMwerk.iss:146`) and `.pkg` (`installer/macos/payload-manifest.txt:132-138`) file lists name 7 of the 30 tracked files under `scripts/reaper/vendor/stemwerk-core`, while the Linux package copies the whole `scripts/reaper/` tree (`installer/linux/stage_payload.sh:10,29-32`); ReaPack and the macOS payload also ship a built wheel `stemwerk_core-0.1.1-py3-none-any.whl` under `vendor/wheels/darwin-arm64-cp312/` and `vendor/wheels/darwin-x86_64-cp312/` (`index.xml:135,138`; `installer/macos/payload-manifest.txt:141,144`), which at HEAD holds the same five `stemwerk_core` modules as those file lists and exists only for macOS (EXISTING: member list of the tracked wheel). Shipping a wheel built from the Core at HEAD this way is a candidate for S5, not a decision. Mechanism not decided; class and owner DECIDED 2026-10-30; S5 resolves it |
-| O55 | Cleanup after a crashed outer-layer bootstrap | Its staging `<root>/tmp/<op>/` has no journal, so journal recovery (section 8, C13) never removes it. PROPOSED direction: on start, Core removes outer-layer staging directories that belong to no active operation and are not referenced by any registry or receipt. An active bootstrap holds no lock (G1), so S5 must define a real liveness signal (for example a recent events-file heartbeat plus a recorded PID); PROPOSED, S5 decides. Class and owner DECIDED 2026-10-30; S5 specifies and tests it (C24) |
+| O54 | How Core is started after the outer layer has published only the pinned Python (G1) | Open question: where Core's code comes from on a fresh account, and how the managed Python runs it under `-I` before any module venv exists. Constraints: 2.3 ships Core as plain files and makes it importable only by `pip install` into its venv (EXISTING: `scripts/reaper/STEMwerk_Bootstrap_Windows.ps1:3436-3444`, `scripts/reaper/STEMwerk_Bootstrap_Linux.sh:2576-2579`); `-I` ignores `PYTHON*` variables and the user site-packages, and `-m` then does not prepend the current directory (REPORTED, https://docs.python.org/3/using/cmdline.html); the ReaPack (`index.xml:125-131`), Inno (`installer/windows/STEMwerk_Windows_Payload.iss:69-75`, included at `installer/windows/STEMwerk.iss:146`) and `.pkg` (`installer/macos/payload-manifest.txt:132-138`) file lists name 7 of the 30 tracked files under `scripts/reaper/vendor/stemwerk-core`, while the Linux package copies the whole `scripts/reaper/` tree (`installer/linux/stage_payload.sh:10,29-32`); ReaPack and the macOS payload also ship a built wheel `stemwerk_core-0.1.1-py3-none-any.whl` under `vendor/wheels/darwin-arm64-cp312/` and `vendor/wheels/darwin-x86_64-cp312/` (`index.xml:135,138`; `installer/macos/payload-manifest.txt:141,144`), which at HEAD holds the same five `stemwerk_core` modules as those file lists and exists only for macOS (EXISTING: member list of the tracked wheel). Shipping a wheel built from the Core at HEAD this way is a candidate for S5, not a decision. Mechanism not decided; class and owner DECIDED 2026-10-30; S5 resolves it. Mechanism resolved in S5a: run the shipped `vendor/stemwerk-core/src` directory with `-I -B` (its `__main__.py` calls the module CLI); every front end must then ship that whole tree (S5b, S9) |
+| O55 | Cleanup after a crashed outer-layer bootstrap | Its staging `<root>/tmp/<op>/` has no journal, so journal recovery (section 8, C13) never removes it. PROPOSED direction: on start, Core removes outer-layer staging directories that belong to no active operation and are not referenced by any registry or receipt. An active bootstrap holds no lock (G1), so S5 must define a real liveness signal (for example a recent events-file heartbeat plus a recorded PID); PROPOSED, S5 decides. Class and owner DECIDED 2026-10-30; S5 specifies and tests it (C24). Specified and tested on the Core side in S5a: staging only in `<root>/tmp/<op>/bootstrap/` with an owner record (operation id, PID); stale after 15 minutes of silence of the events file and the staging and only if the PID is proven gone; removed after journal recovery under the lock. The outer layers that write it are S5b |
 
 ### 12.2 Parked
 
@@ -1451,6 +1467,14 @@ Planning note (review note R5-04): S5 is expected to be split at
 implementation into S5a (Core side: manifest parsing, O54, O55 and their
 tests) and S5b (outer layers Inno and shell, CI jobs, host runs). The ID S5
 and its dependencies stay as listed.
+
+S5a status (2026-11-04): candidate for review. It adds the manifest with the
+F6 pins and its parser and archive check, the read-only verification of a
+published managed Python, the O54 entry and the O55 cleanup, and binds the
+platform's managed-Python pin into the plan fingerprint, with tests in the CI
+portable and native selections. It does not download, unpack or
+publish a runtime; bootstrap without an existing Python, C21, C22, L9 and
+the host runs are established by S5b, Linux first, then Windows, then macOS.
 
 W9 belongs to the later repair route and is not closed by these slices.
 S5 to S11 need native hosts. S11 closes the DESCRIBED criteria in section 11

@@ -48,7 +48,11 @@ stale_after=30.0, guard_timeout=10.0, verify_published=None)` returns an
 
 It then starts the heartbeat thread, leaves the guard, and runs journal
 recovery (below); the report is `lock.recovery`, the broken locks are
-`lock.broken`.
+`lock.broken`. Finally it removes stale bootstrap staging that crashed outer
+layers left in `<root>/tmp/<op>/bootstrap/`; the report is
+`lock.bootstrap_cleanup` (see
+[managed Python bootstrap](Core_Managed_Python_Bootstrap.md)). If recovery or
+that cleanup raises, the lock is released first.
 
 `release()` stops the heartbeat and, under the guard, removes the heartbeat
 and the lock file (after checking it is still the same file) and closes the
@@ -203,6 +207,7 @@ ancestors may be.
 
 No command takes the lock (S6). The phase `lock` in the events file, the
 `lock_held` result document and the front-end message while a stale lock is
-handled come with the operations that use the lock (S6, S9). Cleanup of
-bootstrap staging that has no journal is O55 (S5). In-use markers for
-runtimes and assets are parked (O13).
+handled come with the operations that use the lock (S6, S9). Bootstrap
+staging has no journal; its cleanup (O55) runs after recovery and is
+described with the [managed Python bootstrap](Core_Managed_Python_Bootstrap.md).
+In-use markers for runtimes and assets are parked (O13).

@@ -20,6 +20,7 @@ import sys
 from typing import Any, Mapping, Sequence
 
 from . import asset_acquisition, install_lock, managed_runtime, module_descriptors, module_verify
+from . import runtime_manifest
 from ._install_paths import InstallPathError, absolute_root, check_existing_directories, lstat_inside
 
 
@@ -381,6 +382,12 @@ def plan(module_id: str, root: Path | str | None = None,
     except InstallPathError as exc:
         raise PreflightError(exc.code) from exc
     actual_facts = observe_host(root) if facts is None else facts
+    try:
+        python_pin = runtime_manifest.python_record(actual_facts.platform_id).to_json()
+    except runtime_manifest.ManifestError as exc:
+        if exc.code != "platform_unsupported":
+            raise PreflightError(exc.code) from exc
+        python_pin = None  # the platform finding below blocks
     platform_blockers, platform_incomplete = _platform_findings(actual_facts)
     path_blockers, path_incomplete = _path_findings(root, actual_facts)
     space, space_blockers, space_warnings, space_incomplete = _space_assessment(actual_facts)
@@ -424,6 +431,7 @@ def plan(module_id: str, root: Path | str | None = None,
         "module": descriptor.module_id, "platform": actual_facts.platform_id,
         "workflow": descriptor.workflow_id, "engine": descriptor.engine_id,
         "root": str(root), "components": [asdict(c) for c in descriptor.components],
+        "managed_python": python_pin,
         "existing_installation": {"status": installation["status"], "lookup": installation["lookup"]},
         "legacy_candidate_roots": [entry["root"] for entry in legacy["candidates"]],
         "estimate_items": items,

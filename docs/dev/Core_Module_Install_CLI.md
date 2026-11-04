@@ -15,6 +15,15 @@ python -I -B -m stemwerk_core.module_install plan --module drum_kit
 python -I -B -m stemwerk_core.module_install verify --module drum_kit
 ```
 
+Before any venv exists, the outer layer starts the same CLI with the
+published managed Python by running Core's shipped source directory, with
+the same arguments and output contract (design O54; see
+[managed Python bootstrap](Core_Managed_Python_Bootstrap.md)):
+
+```text
+<runtime>/bin/python3.12 -I -B <...>/vendor/stemwerk-core/src --describe
+```
+
 Exactly one of `--describe`, `plan` and `verify` is given. `plan` and
 `verify` require `--module`; `plan` uses the managed runtime root (including
 its `STEMWERK_RUNTIME_ROOT` override). There is no CLI `--root` argument or
@@ -29,6 +38,7 @@ mutating command.
 | `verify`, any installation state | 0 | verification document ([verify API](Core_Module_Verification.md)) | empty |
 | Unknown module | 2 | empty | error document, code `unknown_module` |
 | Invalid/unavailable root or unsupported path encoding | 2 | empty | error document, code `path_ineligible`, `path_unavailable` or `path_encoding_unsupported` |
+| `plan` with an invalid or unreadable shipped runtime manifest | 2 | empty | error document, code `manifest_invalid` or `manifest_unavailable` |
 | Usage error | 2 | empty | argparse usage text |
 | Any other `Exception` | 3 | empty | error document, code `internal_error` |
 
@@ -147,7 +157,9 @@ path within it is no assertion about the full tree.
 
 Stable plan inputs are encoded as sorted-key compact UTF-8 JSON and hashed
 with SHA-256 in `fingerprint`; the root, platform, workflow/engine,
-descriptor version, component pins, estimates and phases are included.
+descriptor version, component pins, the platform's managed-Python pin
+(`actions.managed_python`, the manifest record, `null` outside the route),
+estimates and phases are included.
 Volatile free space, OS/VC++ evidence, paths, lock and installation state
 are inspected again by `require_current_plan` before a later execution
 slice can use consent. A changed fingerprint raises `plan_changed`; a

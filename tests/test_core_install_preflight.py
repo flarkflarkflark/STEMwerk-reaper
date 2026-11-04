@@ -1,6 +1,7 @@
 """S4 read-only plan and consent checks with controlled host observations."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ import pytest
 CORE_SRC = Path(__file__).resolve().parents[1] / "scripts/reaper/vendor/stemwerk-core/src"
 sys.path.insert(0, str(CORE_SRC))
 
-from stemwerk_core import install_preflight  # noqa: E402
+from stemwerk_core import install_preflight, runtime_manifest  # noqa: E402
 
 pytestmark = pytest.mark.portable
 
@@ -281,3 +282,41 @@ def test_fingerprint_includes_pinned_asset_details(tmp_path):
     changed["components"][-2]["assets"] = [dict(p) for p in changed["components"][-2]["assets"]]
     changed["components"][-2]["assets"][0]["sha256"] = "0" * 64
     assert install_preflight.fingerprint(changed) != result["fingerprint"]
+
+
+# --- S5a: the selected managed-Python pin joins the plan -------------------------
+
+@pytest.mark.parametrize(
+    "facts",
+    [host(), host("darwin-arm64", os_version="14.0"), host("win-x86_64", os_version="10.0.19045")],
+    ids=["linux", "macos", "windows"],
+)
+def test_plan_binds_the_managed_python_pin_of_its_platform(tmp_path, facts):
+    result = install_preflight.plan("drum_kit", tmp_path / "root", facts)
+    pin = runtime_manifest.python_record(facts.platform_id)
+    assert result["actions"]["managed_python"] == pin.to_json()
+
+
+def test_changed_managed_python_pin_changes_the_plan(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    original = install_preflight.plan("drum_kit", root, host())
+    moved = replace(runtime_manifest.python_record("linux-x86_64"), sha256="0" * 64)
+    monkeypatch.setattr(install_preflight.runtime_manifest, "python_record",
+                        lambda platform_id, records=None: moved)
+    changed = install_preflight.plan("drum_kit", root, host())
+    assert changed["actions"]["managed_python"]["sha256"] == "0" * 64
+    assert changed["fingerprint"] != original["fingerprint"]
+    with pytest.raises(install_preflight.PreflightError, match="plan_changed"):
+        install_preflight.require_current_plan(original["fingerprint"], "drum_kit", root, host())
+
+
+def test_platform_outside_the_route_has_no_managed_python_pin(tmp_path):
+    result = install_preflight.plan("drum_kit", tmp_path / "root", host("linux-arm64"))
+    assert result["actions"]["managed_python"] is None
+    assert "unsupported_platform" in result["blockers"]
+
+
+def test_unreadable_shipped_manifest_is_a_named_refusal(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime_manifest, "manifest_bytes", lambda: b"not a manifest\n")
+    with pytest.raises(install_preflight.PreflightError, match="manifest_invalid"):
+        install_preflight.plan("drum_kit", tmp_path / "root", host())

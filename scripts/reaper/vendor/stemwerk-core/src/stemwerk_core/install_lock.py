@@ -35,7 +35,9 @@ never creates anything and never takes an OS lock. Its judgement cannot check
 the OS lock, so it rests on the PID, the start token and the heartbeat.
 
 After every acquisition :func:`acquire` runs journal recovery
-(``install_journal.recover``) for interrupted operations.
+(``install_journal.recover``) for interrupted operations, then removes the
+stale bootstrap staging of crashed outer layers
+(``install_bootstrap.remove_stale_staging``).
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 import uuid
 
 from . import asset_materialization as materialization
-from . import install_events, install_journal, process_identity
+from . import install_bootstrap, install_events, install_journal, process_identity
 from ._install_paths import (
     Identity,
     InstallPathError,
@@ -587,6 +589,7 @@ class InstallLock:
         self.metadata = metadata
         self.operation_id: str = metadata["operation_id"]
         self.recovery: Optional[install_journal.RecoveryReport] = None
+        self.bootstrap_cleanup: Optional[install_bootstrap.StagingReport] = None
         self.broken: List[Path] = []
         self.last_heartbeat_error: Optional[str] = None
         self.released = False
@@ -819,7 +822,8 @@ def acquire(
     clock: Callable[[], float] = time.time,
     on_stale: Optional[Callable[[Judgement], None]] = None,
 ) -> InstallLock:
-    """Take the install lock for ``operation_id`` and run journal recovery.
+    """Take the install lock for ``operation_id``, run journal recovery, then
+    remove stale bootstrap staging of crashed outer layers (design O55).
 
     Fails with ``LockError("lock_held")`` (``details`` has ``lock_status``,
     ``owner`` and ``conditions``) while another operation holds it. A stale
@@ -906,6 +910,9 @@ def acquire(
     try:
         lock.recovery = install_journal.recover(
             root, current_operation_id=operation_id, verify_published=verify_published
+        )
+        lock.bootstrap_cleanup = install_bootstrap.remove_stale_staging(
+            root, current_operation_id=operation_id, probe=probe, clock=clock
         )
     except BaseException:
         lock.release()
