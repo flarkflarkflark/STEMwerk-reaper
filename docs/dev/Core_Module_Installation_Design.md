@@ -854,6 +854,25 @@ Preflight output is the install **plan**: a list of actions with sizes. The
 user's consent applies to that plan; execution refuses to start with a plan
 whose fingerprint changed (criterion C15).
 
+**S4 correction decisions OD1 and OD2 (owner approved 2026-11-04).** Before
+the pinned CPU install exists, disk totals are provisional estimates with
+their provenance. Below an estimate is a warning. Only a defensible known
+minimum can block, with required and available bytes; unknown peak overlap,
+wheel footprint and FFmpeg release sizes stay unknown. Download, temporary
+and final storage are reported separately with their intended filesystem;
+passing the known minimum does not establish enough space for the complete
+installation. S6 measures an observed pinned CPU install, its peak
+coexistence and actual filesystem placement, then calibrates the table and
+closes O5. This moves the observed-install evidence from S4 to S6.
+
+The Windows full-tree path check likewise waits for S6's selected CPU
+package set and actual installation layout. S4 checks fixed paths already
+known, reports the remaining assessment as incomplete, and never treats the
+ONNX DLL path alone as the deepest installed path. S6 measures that path
+before execution can use the plan (O9). A plan's `blocked`, `incomplete` or
+`no_blocker_found` result is a preflight assessment only; it does not merge
+with the module installation state or runtime readiness.
+
 The bootstrap's pinned-Python download (about 22-35 MB, section 6.2)
 happens before plan consent and the full preflight, an accepted risk
 (DECIDED 2026-10-30, review note R5-05): on a full disk or a failed
@@ -1293,7 +1312,7 @@ route.
 | C3 | Cancel during download and during pip leaves the previous state intact and no staging | DESCRIBED | None |
 | C4 | Second install is a verified no-op | DESCRIBED | None; sub-criterion C4a below |
 | C4a | Second asset preparation is refused with `destination_exists`, sources unchanged | PROVEN (REPORTED) | Host runs on Linux, macOS, Windows (handoff 2026-10-28, run 3); Windows on 9c410f9 (handoff 2026-10-30, run 3) |
-| C5 | Low free disk space: preflight refuses with required and available figures | DESCRIBED | None |
+| C5 | Proven space below the known minimum: preflight refuses with required and available figures; a provisional estimate is advisory until S6 calibrates it | DESCRIBED | S4 controlled values; observed install and peak measurement in S6 |
 | C6 | Installation never elevates and writes only under `<root>` | DESCRIBED | None |
 | C7 | Success is reported only when post-install verification passes | DESCRIBED | None |
 | C8 | Lock: two concurrent installs, second fails with `lock_held`; stale lock recovered | DESCRIBED | None; asset-level exclusivity is C8a |
@@ -1419,9 +1438,9 @@ branches and are not part of this plan.
 | S1 | Module descriptor, `verify`, state precedence; CI on 3.11 and 3.12 | M1, M14 | D2 | Unit tests; CI portable job on both versions |
 | S2 | Events file, result file, startup acknowledgement, terminal result, module CLI safety net, `--describe` | M6 (files), M15, O2 | D5, F9 | Contract tests; real-subprocess test with closed streams; CI native jobs |
 | S3 | Install lock, journal, stale detection | M7 | D8 | Concurrency and kill tests on Linux, macOS, Windows native CI |
-| S4 | Preflight and plan fingerprint, path-length budget, static FFmpeg size, minimum-OS check | M8 | S1; F4, G2 | Tests with injected free-space values and OS versions (C23); one observed install to calibrate |
+| S4 | Read-only preflight and plan fingerprint; provisional space and known-path checks, static FFmpeg accounting, minimum-OS check | M8 | S1; F4, G2 | Tests with injected free-space values and OS versions (C23); explicit incomplete assessments where pins or measurements are unavailable |
 | S5 | Manifest (G4), per-release pin check, scheduled manifest-URL check; outer-layer bootstrap (G1): managed-Python acquisition, verification and no-replace publish; Inno download and `tar.exe` unpack (G3); how Core starts under `-I` before any venv (O54); cleanup of stale bootstrap staging (O55) | M4, O3, O47, O54, O55 | S2; D9, D12, F5, F6, G1, G3, G4 | Hash-mismatch and truncation tests with honest bootstrap results (C22); stale and active bootstrap staging (C24); scheduled job red on a broken pin (C21); Linux baseline run (L9); host run on a clean account |
-| S6 | Runtime build in staging, pinned binary-only wheels, publish, asset-set registry, module receipt, honest status | M2, M3, M5, M9 | S1, S3; D1, O9 | Dry-run resolve test; tests that failed components yield `repair_required` or `partial`; host runs per OS |
+| S6 | Runtime build in staging, pinned binary-only wheels, publish, asset-set registry, module receipt, honest status; calibrate disk and Windows full-path gates (OD1/OD2) | M2, M3, M5, M9; O5, O9 | S1, S3; D1 | Dry-run resolve test; observed pinned CPU install measures peak storage and deepest Windows path; tests that failed components yield `repair_required` or `partial`; host runs per OS |
 | S7 | FFmpeg: final pins from the F3 candidates, macOS arm64 release asset with licence text and source pointers, release-workflow licence duty, acquisition, verify, WAV/FLAC probes | M11, O48 | S5; D11, F1-F5 | Native probe on Windows, Linux, macOS (C20); system FFmpeg on `PATH` test (C19); release asset carries licence and source pointers |
 | S8 | Cancellation | M6 (cancel), W3, L3, A5 | D6; S2, S3 | Cancel tests at each phase; host runs |
 | S9 | Front ends and activation, launch contract, REAPER version warning | M10, M16 | D7, D12, F9, G2 | REAPER fresh-profile test; REAPER below 7.0 warns (C23); quit, force-quit and reattach (L6-L8, A6-A8); Inno progress page smoke |

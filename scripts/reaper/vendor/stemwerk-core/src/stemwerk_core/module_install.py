@@ -1,9 +1,11 @@
-"""Core module CLI: describe the installation contract, verify a module.
+"""Core module CLI: describe the contract, plan or verify a module.
 
     python -I -B -m stemwerk_core.module_install --describe
+    python -I -B -m stemwerk_core.module_install plan --module drum_kit
     python -I -B -m stemwerk_core.module_install verify --module drum_kit
 
-Both are read-only. Output follows the Core CLI contract: one JSON document
+All operations shown above are read-only. Output follows the Core CLI contract:
+one JSON document
 on stdout and exit 0 on success; a handled failure prints a versioned error
 document on stderr and exits 2; any other ``Exception`` becomes an
 ``internal_error`` document on stderr with exit 3 and only the exception
@@ -23,7 +25,7 @@ import platform
 import sys
 from typing import Any, Dict, Optional, Sequence
 
-from . import install_events, module_descriptors, module_verify
+from . import install_events, install_preflight, module_descriptors, module_verify
 from ._cli_io import _flush_cli_streams, _write_cli_document
 
 
@@ -35,9 +37,8 @@ ERROR_SCHEMA_VERSION = "1.0.0"
 DISTRIBUTION_NAME = "stemwerk-core"
 
 # Operations this Core can perform. A front end hides any it does not know
-# (design section 9); install, plan and cancel are added by the slices that
-# build them.
-OPERATIONS = ("verify",)
+# (design section 9); install and cancel are added by the slices that build them.
+OPERATIONS = ("plan", "verify")
 # Platforms of the first route (design section 10.3).
 PLATFORMS = ("linux-x86_64", "darwin-arm64", "win-x86_64")
 
@@ -86,6 +87,7 @@ def describe() -> Dict[str, Any]:
         "schemas": {
             "describe": DESCRIBE_SCHEMA_VERSION,
             "verification": module_verify.SCHEMA_VERSION,
+            "plan": install_preflight.SCHEMA_VERSION,
             "error": ERROR_SCHEMA_VERSION,
             "events": install_events.EVENT_PROTOCOL,
             "result": install_events.RESULT_PROTOCOL,
@@ -111,12 +113,14 @@ def _dumps(document: Dict[str, Any]) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m stemwerk_core.module_install",
-        description="Describe the Core installation contract or verify a module (read-only).",
+        description="Describe the Core installation contract, plan or verify a module (read-only).",
     )
     parser.add_argument(
         "--describe", action="store_true", help="print the capabilities document"
     )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+    plan = commands.add_parser("plan", help="compute a read-only installation plan")
+    plan.add_argument("--module", required=True, help="module id, for example drum_kit")
     verify = commands.add_parser("verify", help="verify a module's installation state")
     verify.add_argument("--module", required=True, help="module id, for example drum_kit")
     return parser
@@ -127,7 +131,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = parser.parse_args(argv)
         if args.describe == (args.command is not None):
-            parser.error("use either --describe or the verify command")
+            parser.error("use either --describe or a command")
     finally:
         _flush_cli_streams()
     module = getattr(args, "module", None)
@@ -138,7 +142,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     try:
-        document = describe() if args.describe else module_verify.verify_module(module)
+        if args.describe:
+            document = describe()
+        elif args.command == "plan":
+            document = install_preflight.plan(module)
+        else:
+            document = module_verify.verify_module(module)
+    except install_preflight.PreflightError as exc:
+        _write_cli_document(
+            _dumps(_error_document(exc.code, exc.code, module)), sys.stderr
+        )
+        return 2
     except Exception as exc:
         _write_cli_document(
             _dumps(

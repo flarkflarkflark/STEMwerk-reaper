@@ -114,6 +114,7 @@ jobs:
           tests/test_core_asset_preparation.py
           tests/test_core_module_verify.py
           tests/test_core_module_install.py
+          tests/test_core_install_preflight.py
           tests/test_core_install_events.py
           tests/test_core_cli_encoding.py
           tests/test_core_process_identity.py
@@ -145,7 +146,7 @@ jobs:
       # Number of tests selected by -m native_publication in the ten files
       # below. Raise it when native publication tests are added; the guard
       # fails if fewer ran, so a deselected or removed test cannot pass.
-      MIN_NATIVE_PUBLICATION_TESTS: "315"
+      MIN_NATIVE_PUBLICATION_TESTS: "316"
     strategy:
       fail-fast: false
       matrix:

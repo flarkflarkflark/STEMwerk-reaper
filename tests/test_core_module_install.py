@@ -104,12 +104,13 @@ def test_describe_document_matches_the_code():
         "event_protocol": "stemwerk-install-events/1",
         "core_version": module_install.core_version(),
         "modules": ["drum_kit"],
-        "operations": ["verify"],
+        "operations": ["plan", "verify"],
         "platforms": ["linux-x86_64", "darwin-arm64", "win-x86_64"],
         "current_platform": module_install.current_platform(),
         "schemas": {
             "describe": "1.0.0",
             "verification": module_verify.SCHEMA_VERSION,
+            "plan": "1.0.0",
             "error": "1.0.0",
             "events": install_events.EVENT_PROTOCOL,
             "result": install_events.RESULT_PROTOCOL,
@@ -180,7 +181,23 @@ def test_cli_child_documented_isolated_entry_point_runs():
     )
     result = run_cli(["-c", script, str(CORE_SRC)], isolated=True)
     assert result.returncode == 0
-    assert single_json_line(result.stdout)["operations"] == ["verify"]
+    assert single_json_line(result.stdout)["operations"] == ["plan", "verify"]
+
+
+@pytest.mark.native_publication
+def test_cli_plan_is_read_only_and_reports_the_consent_fingerprint(isolated_runtime_root):
+    result = run_module(["plan", "--module", "drum_kit"])
+    assert result.returncode == 0
+    assert result.stderr == b""
+    document = single_json_line(result.stdout)
+    assert document["kind"] == "stemwerk_module_install_plan"
+    assert document["schema_version"] == "1.0.0"
+    assert document["preflight_result"] == "incomplete"
+    assert "ready" not in document
+    assert "actual_pinned_install_space" in document["incomplete"]
+    assert len(document["fingerprint"]) == 64
+    assert document["actions"]["root"] == str(isolated_runtime_root)
+    assert not isolated_runtime_root.exists()
 
 
 # --- verify --------------------------------------------------------------------
