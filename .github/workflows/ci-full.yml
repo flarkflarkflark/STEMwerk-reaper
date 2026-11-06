@@ -11,6 +11,59 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  linux-managed-python-bootstrap:
+    name: Linux managed Python bootstrap
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install focused test dependency
+        run: python -m pip install pytest
+      - name: Obtain and verify the pinned Linux archive for deterministic fixtures
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/stemwerk-python-linux.tar.gz"
+          curl --fail --location --proto '=https' --proto-redir '=https' --max-redirs 5 --output "$archive" \
+            'https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz'
+          printf '%s  %s\n' 'ce4f6d0a6cfdb3bed6e44c2f9affd85943c76a42e25ad3a259002f31d6fb8a20' "$archive" | sha256sum -c -
+          test "$(wc -c < "$archive")" -eq 34505639
+          echo "STEMWERK_TEST_PINNED_PYTHON_ARCHIVE=$archive" >> "$GITHUB_ENV"
+      - name: Run Linux outer-bootstrap contract tests
+        run: python -m pytest -q --junitxml=linux-managed-python-bootstrap-junit.xml tests/test_linux_managed_bootstrap.py
+      - name: Require that the real GNU Wget hangup regression ran and passed
+        # pytest exits 0 when this test skips for a missing GNU Wget or openssl,
+        # so a skip must not look like a pass.
+        shell: python
+        run: |
+          import sys
+          import xml.etree.ElementTree as ET
+
+          report = "linux-managed-python-bootstrap-junit.xml"
+          name = "test_hangup_during_real_wget_download_is_a_contained_cancellation"
+          try:
+              root = ET.parse(report).getroot()
+          except (OSError, ET.ParseError) as exc:
+              sys.exit(f"{name}: cannot read JUnit report {report}: {exc}")
+          cases = [case for case in root.iter("testcase") if case.get("name") == name]
+          if len(cases) != 1:
+              sys.exit(f"{name}: expected exactly one testcase in {report}, found {len(cases)}")
+          outcomes = [
+              f"{child.tag}: {child.get('message', '')}"
+              for child in cases[0]
+              if child.tag in ("skipped", "error", "failure")
+          ]
+          if outcomes:
+              sys.exit(f"{name}: did not pass: {'; '.join(outcomes)}")
+          print(f"{name}: ran once and passed")
+      - name: Real entry-point smoke into a fresh runner-owned root
+        shell: bash
+        run: |
+          /bin/sh scripts/reaper/STEMwerk_Bootstrap_Linux.sh --managed-python-bootstrap \
+            --root "$RUNNER_TEMP/stemwerk-bootstrap-smoke" -- plan --module drum_kit > "$RUNNER_TEMP/stemwerk-bootstrap-plan.json"
+          python -c 'import json,os; p=os.environ["RUNNER_TEMP"]+"/stemwerk-bootstrap-plan.json"; assert json.load(open(p))["kind"] == "stemwerk_module_install_plan"'
+
   tests:
     # The 3.11 entry keeps the exact name `tests`, the required check on main;
     # the 3.12 entry (managed runtime version, D2) is named `tests (3.12)`.

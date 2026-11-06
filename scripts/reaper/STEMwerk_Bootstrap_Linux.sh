@@ -2,6 +2,10 @@
 set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+if [ "${1:-}" = "--managed-python-bootstrap" ]; then
+  shift
+  exec /bin/sh "${SCRIPT_DIR}/_internal/STEMwerk_Managed_Python_Linux.sh" "${SCRIPT_DIR}" "$@"
+fi
 BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
 BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled"
 PINNED_TORCH_VERSION="2.5.1"

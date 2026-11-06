@@ -1,4 +1,4 @@
-# Managed Python bootstrap: the Core side (slice S5a)
+# Managed Python bootstrap: Core and the Linux outer layer
 
 The managed Python is obtained by a small outer layer before Core can run
 ([design](Core_Module_Installation_Design.md), sections 6.1 and 6.2,
@@ -232,8 +232,123 @@ Known limits:
   portable no-replace rename for directories (`mv` moves a directory into an
   existing one on macOS); S5b chooses and tests the mechanism.
 - Named failures, at least: platform outside the manifest, no `curl` or
-  `wget`, network unavailable (C14), size mismatch, SHA-256 mismatch, unpack
+  GNU Wget 1.x, network unavailable (C14), size mismatch, SHA-256 mismatch, unpack
   failure, publish conflict, verification of the reused or published
   interpreter failed, cancelled (marker, design 7.4).
 - The per-release pin check and the scheduled manifest-URL job (C21), the
   Linux baseline run (L9) and clean-account host runs.
+
+## Linux S5b candidate: outer bootstrap
+
+The existing `scripts/reaper/STEMwerk_Bootstrap_Linux.sh` accepts a narrow
+`--managed-python-bootstrap` mode. Its command is:
+
+```sh
+/bin/sh scripts/reaper/STEMwerk_Bootstrap_Linux.sh \
+  --managed-python-bootstrap --root /absolute/task-owned/root -- \
+  plan --module drum_kit
+```
+
+The argument after `--` is handed to shipped Core. At this checkpoint Core
+supports read-only `plan` and `verify`; S6 will add the mutating install
+operation, lock acquisition, result continuation and registration. This
+bootstrap does not install Direct Kit. It does not enter the 2.3 shell path.
+
+The shell requires Linux x86_64, `/bin/sh`, `curl` or GNU Wget 1.x, `tar`, `gzip`,
+`sha256sum`, `realpath`, `find`, `stat`, `id` and ordinary POSIX utilities. It never calls a host
+Python, pip, uv or compiler. It reads the canonical TSV manifest, creates an
+exclusive operation directory and writes the S5a owner record as the first
+file in `<root>/tmp/<op>/bootstrap/`. It downloads the pinned URL using direct
+HTTPS only: curl and GNU Wget ignore user rc files, bypass proxies, and receive no
+proxy environment variables or credentials. GNU Wget also ignores `~/.netrc` and
+does not read or write `~/.wget-hsts`. A proxy-only network is not
+supported by this shell entry. A `direct_https_failed` result means the direct
+request failed; it does not prove that the host is offline. The shell follows
+at most five HTTPS redirects to complete
+allowlisted GitHub release hosts, counts bytes, then hashes the complete
+archive. No acquired code runs before both checks pass.
+
+This shell entry is online even when `<root>/runtimes/python/<name>` already
+exists: each call downloads 34,505,639 bytes and extracts the archive before
+comparing or reusing the destination. It has no cache or offline trust path.
+Core's `verify` operation is a separate read-only check of an installed
+module; invoking that CLI through this bootstrap shell still incurs the
+download. S6 will define how a front end reaches Core directly after a
+trusted runtime is available.
+
+Archive members must remain below `python/`; traversal paths, special
+entries and escaping links are rejected. Extraction is confined to that
+operation's staging directory. The shell invokes
+`src/linux_bootstrap_publish.py` with the hash-verified staged interpreter.
+The supported root is a private per-user directory: the root, operation logs,
+staging and runtime directories must be owned by the current user and not be
+group- or world-writable. Ancestors must belong to that user or root; a
+root-owned sticky `/tmp` may contain a private user-owned root. The shell
+checks this before download and the helper checks it before publication.
+This prevents another user from replacing a runtime between comparison and
+execution. The same user can still change their own files; that same-user
+trust assumption is explicit.
+
+The helper checks the staging tree and interpreter, then calls Core's native
+`renameat2(RENAME_NOREPLACE)` publication helper. For ordinary reuse or an
+overlapping EEXIST result, the verified staged interpreter compares every
+published directory, file byte hash, mode, extra entry and symlink target
+against the verified payload before executing the published interpreter.
+An unequal or unsafe destination is left untouched and returns
+`runtime_conflict`. A matching destination is verified again with S5a's
+`verify_managed_python` and reused. A receipt or self-reported interpreter
+version alone is not sufficient. The shell records `new` or `reused` under
+`<root>/logs/<op>/bootstrap.outcome` and removes only its own bootstrap staging,
+records a completed bootstrap event, and starts shipped Core as
+`<published-python> -I -B <shipped-src> <Core arguments>` with the runtime
+root in `STEMWERK_RUNTIME_ROOT`. The Core lock does not yet exist at this
+handoff; S6 owns its acquisition after preflight.
+
+Before Core is available, failures write a named `failed` event and a
+`stemwerk-install-result/1` result file under `<root>/logs/<op>/`. The result
+uses the module CLI's error-document format. Root creation failures where no
+operation log can be created are reported on stderr. Cancellation markers
+are checked between bootstrap steps and download progress; the shell emits
+heartbeat events while a download is active. A blocking `tar` extraction is
+the specified heartbeat exception. A failed or canceled attempt removes its
+own bootstrap staging, never a pre-existing destination.
+
+Once the shell has written `<root>/logs/<op>/result.json`, that file is the
+authoritative outcome and is what a front end reads. The shell writes it before
+printing the same error document to stderr. A signal delivered to the whole
+process group can also make the shell write its own diagnostics, such as
+`Hangup` or `Terminated`, to stderr, so stderr is not a single-document stream
+on this path. No rule is defined for extracting the document from that stderr,
+by line position or otherwise. A failure before a result file can exist keeps
+the stderr report described above. Core's output contract in
+[Core_Module_Install_CLI.md](Core_Module_Install_CLI.md) is unchanged and
+applies once this shell has started Core.
+
+HUP handling depends on how the shell was started:
+
+- **HUP not ignored at launch, delivered to the shell directly or through its
+  process group (for example a terminal hang-up).** The shell treats it like
+  INT and TERM: it terminates and reaps an active downloader, writes the
+  `cancelled` event and result, removes its own staging and exits 2. The GNU
+  Wget child ignores HUP, because its own handler would otherwise keep
+  downloading and move its log, including the signed URL, to `wget-log` in the
+  working directory. If SIGHUP arrives before the cancellation trap is
+  installed and was not ignored at launch, the shell exits without writing a
+  result document. When started under nohup, the shell inherits an ignored
+  SIGHUP and continues.
+- **Launched under `nohup`, the route in
+  [design section 6.5](Core_Module_Installation_Design.md).** HUP is already
+  ignored on entry, and a shell cannot trap a signal ignored on entry. HUP then
+  stops neither the shell nor the downloader and produces no result. The
+  download continues, and a cancellation marker is the way to cancel it.
+
+The scheduled `managed-python-pin-check.yml` checks all three shipped URLs,
+lengths and upstream SHA256SUMS once a week, and rejects a deliberately
+broken hash through the same comparison (C21). The installer release
+workflow runs the same check for source revisions that ship both the manifest
+and the check tool; S5a-only refs have the manifest but no checker.
+These jobs are candidates until merged and executed. C22's Linux branch is
+covered by the local failure and reuse tests. Full L9 remains open: a Linux
+host or VM at glibc 2.28 and kernel 4.18 must run both pinned Python and
+the S7 FFmpeg pair. Windows Inno and macOS shell outer layers also remain
+S5b work.
