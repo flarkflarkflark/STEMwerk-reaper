@@ -69,6 +69,7 @@ class PreparationRequest:
     destination: Path
     local_sources: Mapping[str, os.PathLike[str] | str] | None = None
     acquire: bool = False
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -499,7 +500,7 @@ def _prepare_asset_set(
         sources = acquisition_result["sources"]
 
     materialization_request = materialization.MaterializationRequest(
-        sources=dict(sources), destination=validated.destination
+        sources=dict(sources), destination=validated.destination, operation_id=request.operation_id
     )
     try:
         publication_result = materialize(materialization_request)
@@ -693,10 +694,14 @@ def _prepare_asset_set(
     }
 
 
-def prepare_drumsep_assets(request: PreparationRequest) -> dict[str, Any]:
+def prepare_drumsep_assets(
+    request: PreparationRequest,
+    *,
+    workspace_factory: Callable[[], Path] | None = None,
+) -> dict[str, Any]:
     """Prepare Core-pinned DrumSep assets from one explicit source mode."""
 
-    return _prepare_asset_set(request)
+    return _prepare_asset_set(request, workspace_factory=workspace_factory)
 
 
 def _error_document(exc: PreparationError) -> dict[str, Any]:

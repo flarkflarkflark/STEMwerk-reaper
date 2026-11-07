@@ -63,6 +63,9 @@ jobs:
           /bin/sh scripts/reaper/STEMwerk_Bootstrap_Linux.sh --managed-python-bootstrap \
             --root "$RUNNER_TEMP/stemwerk-bootstrap-smoke" -- plan --module drum_kit > "$RUNNER_TEMP/stemwerk-bootstrap-plan.json"
           python -c 'import json,os; p=os.environ["RUNNER_TEMP"]+"/stemwerk-bootstrap-plan.json"; assert json.load(open(p))["kind"] == "stemwerk_module_install_plan"'
+          /bin/sh scripts/reaper/STEMwerk_Bootstrap_Linux.sh --managed-python-bootstrap \
+            --root "$RUNNER_TEMP/stemwerk-bootstrap-smoke" -- plan --module drum_kit --scope s6_cpu > "$RUNNER_TEMP/stemwerk-bootstrap-s6-plan.json"
+          python -c 'import json,os; p=os.environ["RUNNER_TEMP"]+"/stemwerk-bootstrap-s6-plan.json"; d=json.load(open(p)); assert d["kind"] == "stemwerk_module_install_plan" and d["scope"] == "s6_cpu"'
 
   tests:
     # The 3.11 entry keeps the exact name `tests`, the required check on main;
@@ -176,6 +179,7 @@ jobs:
           tests/test_core_runtime_manifest.py
           tests/test_core_managed_python.py
           tests/test_core_install_bootstrap.py
+          tests/test_core_s6_linux_install.py
           tests/test_core_catalog_sync.py
           tests/test_dependency_constraints.py::test_audio_separator_process_consumes_shared_managed_ffmpeg_candidates
 
@@ -199,10 +203,15 @@ jobs:
     name: Asset publication (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     env:
-      # Number of tests selected by -m native_publication in the thirteen files
-      # below. Raise it when native publication tests are added; the guard
-      # fails if fewer ran, so a deselected or removed test cannot pass.
-      MIN_NATIVE_PUBLICATION_TESTS: "355"
+      # Number of tests selected by -m native_publication in the fourteen files
+      # below: run pytest --collect-only with that marker and those files. Every
+      # matrix entry selects the same set. Raise it when native publication
+      # tests are added; the guard fails if fewer ran, so a deselected or removed
+      # test cannot pass.
+      # The S6 installer tests run here with injected Linux host facts and fake
+      # venv, pip and asset steps. Lock, journal, no-replace publication and tree
+      # hashing are native on each OS; the S6 route itself is Linux-only so far.
+      MIN_NATIVE_PUBLICATION_TESTS: "365"
     strategy:
       fail-fast: false
       matrix:
@@ -267,6 +276,7 @@ jobs:
           tests/test_core_runtime_manifest.py
           tests/test_core_managed_python.py
           tests/test_core_install_bootstrap.py
+          tests/test_core_s6_linux_install.py
 
       - name: Require that native publication tests really ran
         # A skip must not look like a pass: fail unless at least the minimum

@@ -75,7 +75,7 @@ from importlib import resources as importlib_resources
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Sequence
 
-from . import device_policy, managed_runtime, model_assets, readiness_collect, workflow_contracts
+from . import device_policy, managed_runtime, model_assets, module_registry, readiness_collect, workflow_contracts
 from .models import DEMUCS_AUDIO_SEPARATOR_MODEL_IDS
 from .runtime_resolution import (
     REASON_CONTRACT_LOAD_ERROR,
@@ -112,6 +112,7 @@ REASON_CATALOG_UNAVAILABLE = "catalog_unavailable"
 REASON_MODEL_ASSETS_MISSING = "model_assets_missing"
 REASON_ASSET_INTEGRITY_MISMATCH = "asset_integrity_mismatch"
 REASON_FFMPEG_UNAVAILABLE = "ffmpeg_unavailable"
+REASON_MANAGED_FFMPEG_PENDING = "managed_ffmpeg_pending"
 REASON_RUNTIME_EVIDENCE_MISSING = "runtime_evidence_missing"
 REASON_RUNTIME_EVIDENCE_BROKEN = "runtime_evidence_broken"
 REASON_DEVICE_IDENTITY_MISMATCH = "device_identity_mismatch"
@@ -1084,9 +1085,28 @@ def assess_readiness(
                 )
                 for info in infos
             ]
-            ffmpeg = _finalize_collected(
-                readiness_collect.collect_ffmpeg(), reason_code=REASON_FFMPEG_UNAVAILABLE
-            )
+            ffmpeg_evidence: Optional[Mapping[str, Any]] = None
+            if coerced.workflow_id == "drum_kit_direct":
+                registration, receipt, _ = module_registry.read_and_validate_module_record(
+                    managed_runtime.managed_runtime_root(), "drum_kit"
+                )
+                if registration != "absent" and (
+                    registration != "valid"
+                    or not isinstance((receipt or {}).get("components", {}).get("ffmpeg"), Mapping)
+                ):
+                    ffmpeg_evidence = {
+                        "verdict": UNAVAILABLE,
+                        "reason_code": REASON_MANAGED_FFMPEG_PENDING,
+                        "reason": "the S6 module has no verified managed FFmpeg pair",
+                        "evidence": {
+                            "source": "collected",
+                            "evidence_kind": "module_registration",
+                            "registration_status": registration,
+                        },
+                    }
+            if ffmpeg_evidence is None:
+                ffmpeg_evidence = readiness_collect.collect_ffmpeg()
+            ffmpeg = _finalize_collected(ffmpeg_evidence, reason_code=REASON_FFMPEG_UNAVAILABLE)
 
         feasibility = _evaluate_feasibility(
             coerced,

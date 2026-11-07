@@ -70,6 +70,7 @@ class MaterializationRequest:
 
     sources: Mapping[str, os.PathLike[str] | str]
     destination: Path
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -471,14 +472,16 @@ def _open_lock(validated: _ValidatedRequest, operation_id: str) -> tuple[int, _O
     return handle, owned
 
 
-def _create_staging(validated: _ValidatedRequest) -> _OwnedPath:
+def _create_staging(validated: _ValidatedRequest, operation_id: str | None = None) -> _OwnedPath:
     try:
-        path = Path(
-            tempfile.mkdtemp(
+        if operation_id is None:
+            path = Path(tempfile.mkdtemp(
                 prefix=f".{validated.destination.name}.stemwerk-stage-",
                 dir=validated.destination.parent,
-            )
-        )
+            ))
+        else:
+            path = validated.destination.parent / f".{validated.destination.name}.stemwerk-stage-{operation_id}"
+            os.mkdir(path, 0o700)
     except OSError as exc:
         raise MaterializationError(
             "staging_failed",
@@ -924,7 +927,12 @@ def _materialize_asset_set(
     validated = _validate_asset_set(request, policy)
     copy_file = copy_file or _copy_validated_source
     publish = publish or _publish_noreplace
-    operation_id = str(uuid.uuid4())
+    operation_id = request.operation_id or str(uuid.uuid4())
+    try:
+        if str(uuid.UUID(operation_id)) != operation_id:
+            raise ValueError("noncanonical operation id")
+    except (TypeError, ValueError) as exc:
+        raise MaterializationError("invalid_request", "operation_id must be a canonical UUID") from exc
     lock_handle: int | None = None
     lock: _OwnedPath | None = None
     staging: _OwnedPath | None = None
@@ -935,7 +943,7 @@ def _materialize_asset_set(
         lock_handle, lock = _open_lock(validated, operation_id)
         os.close(lock_handle)
         lock_handle = None
-        staging = _create_staging(validated)
+        staging = _create_staging(validated, request.operation_id)
         for source in validated.sources:
             copy_file(source, staging.path / source.name)
         receipt = _receipt(validated, operation_id)

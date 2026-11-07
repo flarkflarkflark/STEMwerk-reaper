@@ -104,7 +104,7 @@ def test_describe_document_matches_the_code():
         "event_protocol": "stemwerk-install-events/1",
         "core_version": module_install.core_version(),
         "modules": ["drum_kit"],
-        "operations": ["plan", "verify"],
+        "operations": ["plan", "verify", "install"],
         "platforms": ["linux-x86_64", "darwin-arm64", "win-x86_64"],
         "current_platform": module_install.current_platform(),
         "schemas": {
@@ -181,7 +181,7 @@ def test_cli_child_documented_isolated_entry_point_runs():
     )
     result = run_cli(["-c", script, str(CORE_SRC)], isolated=True)
     assert result.returncode == 0
-    assert single_json_line(result.stdout)["operations"] == ["plan", "verify"]
+    assert single_json_line(result.stdout)["operations"] == ["plan", "verify", "install"]
 
 
 @pytest.mark.native_publication
@@ -282,6 +282,7 @@ def test_cli_child_unknown_module_is_a_handled_error(closed):
         ["verify"],
         ["--describe", "verify", "--module", "drum_kit"],
         ["install", "--module", "drum_kit"],
+        ["cancel", "--module", "drum_kit"],
         ["--frobnicate"],
     ],
 )

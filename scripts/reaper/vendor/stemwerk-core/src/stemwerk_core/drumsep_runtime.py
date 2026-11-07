@@ -90,6 +90,7 @@ def _clean_env() -> Dict[str, str]:
         "HIP_VISIBLE_DEVICES", "HSA_OVERRIDE_GFX_VERSION",
         "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES",
         "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONINSPECT",
+        "PYTHONPYCACHEPREFIX",
     ):
         env.pop(key, None)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -300,6 +301,14 @@ def _verify_drumsep_runtime(
         return False, "missing", {}
     if not os.access(str(python_path), os.X_OK):
         return False, "not_executable", {}
+    try:
+        from . import module_verify
+
+        s6_ok, s6_reason = module_verify.verify_s6_runtime_interpreter(python_path)
+    except Exception as exc:
+        s6_ok, s6_reason = False, f"s6_receipt_check_failed:{type(exc).__name__}"
+    if not s6_ok:
+        return False, s6_reason, {}
 
     verify_code = r"""
 import importlib

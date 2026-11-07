@@ -1476,6 +1476,26 @@ portable and native selections. It does not download, unpack or
 publish a runtime; bootstrap without an existing Python, C21, C22, L9 and
 the host runs are established by S5b, Linux first, then Windows, then macOS.
 
+S6 Linux status (2026-11-06): candidate for review. It adds the Linux x86_64
+CPU binary-only wheel lock (`wheel-lock-linux-x86_64-cpu.v1.json`, 61 wheels,
+396,290,399 bytes), deterministic in-tree `stemwerk-core` wheel synthesis,
+bytecode suppression policy (`-I -B` and `PYTHONDONTWRITEBYTECODE=1`),
+module receipt (`<root>/state/modules/drum_kit.receipt.json`) and atomic
+registry (`<root>/state/module-registry.v1.json`), runtime component verifiers in
+`module_verify`, S6 preflight scope (`s6_cpu`) calibrated to the measured
+Linux CPU install footprint (`1,294,288,407` B venv, `98,482,767` B managed
+Python, `437,656,690` B DrumSep assets, `1,830,456,846` B retained root), and
+the `install` operation on
+`module_install`, reporting truthful `partial` installation state and
+`not_ready` readiness while S7 managed FFmpeg and S9 REAPER activation remain
+pending. Windows and macOS S6 wheel locks remain next in S6.
+
+The sampled root peak with verified caches was 2,268,102,042 B logical and
+2,385,100,800 B allocated on ext4, and 2,361,139,200 B physical on a dedicated
+tmpfs. The S6 preflight enforces 2,653,536,256 B: that allocated peak plus
+256 MiB headroom (Appendix A.8). The vendored `diffq` wheel has no upstream
+binary; it is hash-pinned but still has a distribution and licensing gate.
+
 W9 belongs to the later repair route and is not closed by these slices.
 S5 to S11 need native hosts. S11 closes the DESCRIBED criteria in section 11
 only when the hosts actually run them. An unsigned outer executable (the

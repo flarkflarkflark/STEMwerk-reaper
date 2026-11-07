@@ -28,11 +28,15 @@ def drumsep_asset_evidence(model_cache_dir: Optional[Path] = None) -> Dict[str, 
 
     from . import managed_runtime
 
-    base_dir = (
-        Path(model_cache_dir).expanduser()
-        if model_cache_dir is not None
-        else managed_runtime.managed_model_cache_dir()
-    )
+    if model_cache_dir is not None:
+        base_dir = Path(model_cache_dir).expanduser()
+    else:
+        registered_dir = managed_runtime.registered_drumsep_assets_dir()
+        base_dir = (
+            registered_dir
+            if registered_dir is not None
+            else managed_runtime.managed_model_cache_dir()
+        )
     return {
         "base_dir": str(base_dir),
         "assets": [

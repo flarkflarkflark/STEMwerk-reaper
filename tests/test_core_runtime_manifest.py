@@ -90,7 +90,10 @@ def test_gitattributes_keeps_the_manifest_lf():
 
 def test_manifest_is_package_data():
     pyproject = (CORE_SRC.parent / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"stemwerk_core" = ["runtime-manifest.v1.tsv"]' in pyproject
+    assert (
+        '"stemwerk_core" = ["runtime-manifest.v1.tsv", "wheel-lock-linux-x86_64-cpu.v1.json"]'
+        in pyproject
+    )
 
 
 @pytest.mark.skipif(shutil.which("sh") is None, reason="needs a POSIX sh")

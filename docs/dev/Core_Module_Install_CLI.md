@@ -2,16 +2,18 @@
 
 `stemwerk_core.module_install` is the command line of the Core
 installation contract
-([design](Core_Module_Installation_Design.md), sections 7.2 and 9). In this
-slice it is read-only: it describes the contract, assesses a plan and verifies a module. The
-operation files (`events.ndjson`, `result.json`, `started`) exist as the
-library `stemwerk_core.install_events`; no command writes them yet.
+([design](Core_Module_Installation_Design.md), sections 7.2 and 9). It
+describes the contract, assesses a plan (`s4_assessment` or `s6_cpu`),
+executes the S6 Linux CPU module installation (`install`), and verifies a
+module (`verify`). Operation files (`events.ndjson`, `result.json`,
+`started`) are written via `stemwerk_core.install_events`.
 
 ## Commands
 
 ```text
 python -I -B -m stemwerk_core.module_install --describe
-python -I -B -m stemwerk_core.module_install plan --module drum_kit
+python -I -B -m stemwerk_core.module_install plan --module drum_kit [--scope s4_assessment|s6_cpu]
+python -I -B -m stemwerk_core.module_install install --module drum_kit --plan-fingerprint <sha256> [--operation-id <uuid>]
 python -I -B -m stemwerk_core.module_install verify --module drum_kit
 ```
 
@@ -24,10 +26,12 @@ the same arguments and output contract (design O54; see
 <runtime>/bin/python3.12 -I -B <...>/vendor/stemwerk-core/src --describe
 ```
 
-Exactly one of `--describe`, `plan` and `verify` is given. `plan` and
-`verify` require `--module`; `plan` uses the managed runtime root (including
-its `STEMWERK_RUNTIME_ROOT` override). There is no CLI `--root` argument or
-mutating command.
+Exactly one of `--describe`, `plan`, `install` and `verify` is given. `plan`,
+`install` and `verify` require `--module`; `install` additionally requires
+`--plan-fingerprint` (and accepts `--operation-id` or
+`STEMWERK_OPERATION_ID` when handed over from the outer layer).
+All commands use the managed runtime root (including its
+`STEMWERK_RUNTIME_ROOT` override). There is no CLI `--root` argument.
 
 ## Output contract
 
@@ -35,6 +39,8 @@ mutating command.
 | --- | --- | --- | --- |
 | `--describe` | 0 | capabilities document | empty |
 | `plan`, including `blocked` or `incomplete` | 0 | plan document | empty |
+| `install` (`installed_s6_partial`, `reused`, `reused_after_recovery`) | 0 | install result document | empty |
+| `install` refused or failed (`plan_changed`, `lock_held`, `runtime_conflict`, etc.) | 2 | empty | error document |
 | `verify`, any installation state | 0 | verification document ([verify API](Core_Module_Verification.md)) | empty |
 | Unknown module | 2 | empty | error document, code `unknown_module` |
 | Invalid/unavailable root or unsupported path encoding | 2 | empty | error document, code `path_ineligible`, `path_unavailable` or `path_encoding_unsupported` |
@@ -79,7 +85,7 @@ preparation and materialization CLIs.
 ```json
 {"contract_version":"1.0.0","core_version":null,"current_platform":"linux-x86_64",
  "event_protocol":"stemwerk-install-events/1","kind":"stemwerk_install_capabilities",
- "modules":["drum_kit"],"operations":["plan","verify"],
+ "modules":["drum_kit"],"operations":["plan","install","verify"],
  "platforms":["linux-x86_64","darwin-arm64","win-x86_64"],
  "schemas":{"describe":"1.0.0","error":"1.0.0","events":"stemwerk-install-events/1",
   "plan":"1.0.0",
@@ -135,19 +141,26 @@ separates download, temporary and final bytes, all *planned* under that
 volume. Unknown quantities are JSON `null` or listed in
 `unknown_quantities`; they are never treated as zero or as proof of
 sufficient space. The hard `known_minimum_bytes` currently counts only
-the pinned final DrumSep assets. The larger `estimate_bytes` is **provisional**:
-its 13 GiB environment row comes from an observed 2.3 ROCm environment,
-not the Direct Kit CPU install; the cache, build and margin rows are
-unmeasured allowances. The wheel cache allowance excludes asset and FFmpeg
+the pinned final DrumSep assets in the read-only S4 assessment. Its larger
+`estimate_bytes` combines the sampled Linux S6 CPU bytes with provisional S7
+FFmpeg and margin allowances; it is not the S6 execution gate. The wheel
+cache allowance excludes asset and FFmpeg
 downloads; the asset row separately assumes download, staged and final
 copies coexist. Static FFmpeg is counted in the estimate, and the
 Linux candidate archive/pair and Windows candidate archive are shown
 separately. Falling below the estimate gives `below_provisional_estimate`
 as a warning. Falling below the known minimum gives
 `insufficient_known_space` as a blocker with available and required bytes.
-Neither check reserves space. S6 must measure an observed pinned CPU
-install, establish peak coexistence and keep its download/cache/temp paths
-on the assessed filesystem before this becomes an execution gate.
+Neither check reserves space. The S6 CPU plan separately enforces a
+2,653,536,256-byte budget on the volume holding `<root>`: the sampled ext4
+allocated peak of a fresh install plus 256 MiB (Appendix A.8). All S6 staging
+and downloads write under `<root>`; supplied caches are read-only, and
+`TMPDIR` holds about 2 MB of pip and verification scratch. A complete
+installation, or an interrupted one past its large publications, needs only
+64 MiB. When another operation's journal awaits recovery the plan reports
+`space_recheck_after_recovery` instead of the blocker, because stale staging
+can be reclaimed only under the lock; the replan under the lock enforces the
+budget against what recovery freed.
 
 On Windows, `path_budget` checks only the fixed paths already known. Its
 `status` remains `incomplete` and `full_tree_max_length` is `null` until
@@ -233,10 +246,90 @@ if that fails the write raises `write_failed` although the file is already
 published, and a retry finds `already_written`. Windows has no directory
 fsync; this step is skipped there.
 
+## Install (`install --module drum_kit --plan-fingerprint <sha256>`)
+
+On Linux (`linux-x86_64`), `plan --module drum_kit --scope s6_cpu` produces an
+execution-scoped plan (`scope: "s6_cpu"`) calibrated to the measured 61-wheel
+Linux CPU wheel lock (`wheel-lock-linux-x86_64-cpu.v1.json`) and pinned
+DrumSep assets, and `install --module drum_kit --plan-fingerprint <sha256>`
+executes the S6 Linux CPU installation transaction:
+
+1. Accepts outer-layer event handover (`EventWriter.accept_handover`) when
+   `--operation-id` or `STEMWERK_OPERATION_ID` is present, or starts
+   a new operation log under `<root>/logs/<op>/`.
+2. Revalidates consent and preflight (`require_current_plan(..., scope="s6_cpu")`),
+   acquires the install lock (`<root>/state/locks/install.lock`), recovers any
+   interrupted operation (below), and revalidates under the lock before any
+   mutation. Only the fingerprint of an `s6_cpu` plan is consent: it covers the
+   install operation, root, destinations, Python pin, wheel lock and assets. A
+   read-only `s4_assessment` fingerprint returns `plan_changed`.
+3. Verifies the published managed Python runtime (`verify_managed_python` and
+   full tree identity `s5b_tree_sha256`), creates the isolated CPU virtual
+   environment in `<root>/tmp/<op>/core/venv-stage` using `-I -B -m venv`,
+   stages and SHA-256-verifies all 61 locked wheels plus the synthesized in-tree
+   `stemwerk-core` wheel, validates the closure with a pinned offline dry run,
+   and installs them with
+   `--isolated --no-cache-dir --no-index --find-links <wheelhouse> --only-binary=:all: --require-hashes --no-compile --no-deps`.
+   Pip runs without any `PIP_*`, `VIRTUAL_ENV` or `PYTHONUSERBASE` from the caller
+   and with `PIP_CONFIG_FILE` set to the null device, because `--isolated` alone
+   still loads the global and site configuration files. Install then strips any
+   residual `__pycache__`/`*.pyc`, rewrites the staging path in `pyvenv.cfg` and
+   the generated scripts (updating their `RECORD` rows), adds `-B` to each console
+   script's interpreter, normalizes modes, and probes the staged runtime under
+   `-I -B`. A failed probe (`staged_venv_probe_failed`) stops before publication.
+4. Acquires and verifies the two pinned DrumSep model artifacts and publishes
+   them via `prepare_drumsep_assets` to
+   `<root>/assets/drumsep-mdx23c-aufr33-jarredou/`. A verified asset set
+   already present without an S6 module receipt is reused read-only with
+   `ownership: "unknown"`; installation never promotes its provenance.
+5. Durably records the staged tree identity in
+   `<root>/state/modules/drum_kit.venv-publication.json`, publishes the venv via
+   native no-replace rename to `<root>/runtimes/drum_kit/<venv_pin_id>/`, starts
+   the published `pip` and `audio-separator` console scripts, confirms the tree
+   still matches the record, writes the integrity-checked receipt
+   `<root>/state/modules/drum_kit.receipt.json`, atomically updates
+   `<root>/state/module-registry.v1.json`, removes the publication record,
+   verifies that `verify_module("drum_kit")`
+   reports `installation_state: "partial"` (`decided_by_rule: 4`) while S7
+   managed FFmpeg and S9 REAPER activation remain `absent`, and confirms that
+   the managed Python runtime's `s5b_tree_sha256` is byte-identical before and
+   after installation.
+6. Writes `<root>/logs/<op>/result.json` and emits the `stemwerk_module_install_result`
+   document (`outcome`: `"installed_s6_partial"`, `"reused"`, or
+   `"reused_after_recovery"`, `readiness: "not_ready"`). Pre-existing
+   `runtime_conflict` destinations are never overwritten or deleted; they are
+   reported as `runtime_conflict` and preserved intact.
+
+### Interrupted operations
+
+A retry needs a fresh plan and consent, and the install lock may report
+`lock_held` for up to 30 seconds until a killed owner's lock is stale. Under the
+lock, in this order:
+
+| Interrupted | What the retry does |
+| --- | --- |
+| Before the venv rename | Journal recovery removes the operation's staging; the venv is rebuilt. |
+| During asset materialization | A destination lock naming the dead operation, and its `.<asset-set>.stemwerk-stage-<op>` directory, are removed before journal recovery. A stage holding anything the materializer never writes is refused (`recovery_incomplete`) and kept. A lock naming anyone else, or empty, stays, and publication reports `publication_conflict`. |
+| After asset publication | The verified assets are reused with `ownership: "unknown"`. |
+| After the venv rename, before the registry commit | The directory is adopted, not rebuilt, only if it matches the publication record. Another interruption keeps that right, because the record outlives journal recovery. |
+| Between receipt and registry | The registry is written from the receipt only if every component verifies against it. Otherwise the receipt stays as it is and the changed component is refused. |
+
+A changed or unrelated venv directory without a matching record is
+`runtime_conflict`, before the lock and again under it, and is kept. No retry
+writes a receipt from a directory's current bytes. An operation whose journal
+cannot be recovered returns `recovery_incomplete`. Deliberate repair of an
+already-conflicted root is a later slice.
+
+### What the tests prove
+
+| Behavior | Evidence |
+| --- | --- |
+| Lock, journal, no-replace publication, tree hashing | Native on each CI runner (`-m native_publication`). |
+| S6 transaction order, faults and refusals | The same native selection, with injected Linux host facts and fake venv, pip and asset steps. Not an S6 qualification on Windows or macOS, where the route is `s6_platform_port_pending`. |
+| Real pip, real kills, real separation | Local Linux runs through the shell entry only. Hosted CI runs `plan --scope s6_cpu` at the shell. |
+
 ## Not in this slice
 
-Detached runs and the startup handshake with a front end (S9), the outer
-layer (S5), install and the module receipt (S6), and cancellation at safe
-points (S8). The install lock and the journal exist as libraries
-([Core install lock](Core_Install_Lock.md)); no command takes the lock yet,
-and `verify` only reads it.
+Detached runs and the startup handshake with a front end (S9), Windows and
+macOS S6 wheel locks, managed FFmpeg acquisition and verification (S7), and
+cancellation at safe points (S8).

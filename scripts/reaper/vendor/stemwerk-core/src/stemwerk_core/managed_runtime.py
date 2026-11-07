@@ -191,3 +191,55 @@ def managed_model_cache_dir() -> Path:
     if override:
         return Path(override).expanduser()
     return managed_runtime_root() / "models"
+
+
+def registered_module_venv_python(
+    module_id: str = "drum_kit", root: Optional[Path] = None
+) -> Optional[Path]:
+    """Return the registry-recorded S6 module_venv interpreter if present on disk.
+
+    Read-only discovery helper; S9 activation and ``module_verify`` still
+    control whether execution uses the registered runtime.
+    """
+    from . import module_registry
+
+    active_root = managed_runtime_root() if root is None else Path(root)
+    status, receipt, _ = module_registry.read_and_validate_module_record(
+        active_root, module_id
+    )
+    if status != "valid" or receipt is None:
+        return None
+    venv_comp = (receipt.get("components") or {}).get("module_venv") or {}
+    venv_path_str = venv_comp.get("path")
+    if not venv_path_str:
+        return None
+    venv_dir = Path(str(venv_path_str))
+    rel = "Scripts/python.exe" if _is_windows_runtime() else "bin/python"
+    candidate = venv_dir / rel
+    return candidate if candidate.exists() else None
+
+
+def registered_drumsep_assets_dir(
+    module_id: str = "drum_kit", root: Optional[Path] = None
+) -> Optional[Path]:
+    """Return the S6 asset location when registration exists, even if damaged.
+
+    Only a root without S6 registration may use the legacy models fallback.
+    """
+    from . import module_registry
+
+    active_root = managed_runtime_root() if root is None else Path(root)
+    status, receipt, _ = module_registry.read_and_validate_module_record(
+        active_root, module_id
+    )
+    if status == "absent":
+        return None
+    if status != "valid" or receipt is None:
+        return module_registry.expected_drumsep_assets_dir(active_root)
+    assets_comp = (receipt.get("components") or {}).get("drumsep_assets") or {}
+    assets_path_str = assets_comp.get("path")
+    return (
+        Path(str(assets_path_str))
+        if assets_path_str
+        else module_registry.expected_drumsep_assets_dir(active_root)
+    )

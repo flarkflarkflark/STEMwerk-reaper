@@ -186,3 +186,50 @@ layout (D1), events channel and the stdout collision (D5), cancel mechanism
 (D6), front ends and launching from REAPER on Windows (D7), lock location
 (D8), managed-Python source (D9), FFmpeg in v1 (D11), engine naming for now
 (D3), Python versions (D2).
+
+## A.8 Linux x86_64 CPU S6 wheel lock and storage sample (2026-11-06)
+
+`CORE/wheel-lock-linux-x86_64-cpu.v1.json` locks the complete 61-package
+binary-only (`cp312` / `abi3` / `py3-none-any`, `manylinux`) CPU dependency
+closure for `drum_kit` (`audio-separator==0.34.1`, `torch==2.12.0+cpu`,
+`torchvision==0.27.0+cpu`, `onnxruntime==1.26.0`, `onnx==1.21.0`,
+`onnx-weekly==1.24.0.dev20261102`, `onnx2torch==1.5.15`,
+`onnx2torch-py313==1.6.0`, `numpy==2.4.6`, `numba==0.65.1`, `llvmlite==0.47.0`,
+`scipy==1.17.1`, `scikit-learn==1.9.1`, `librosa==0.11.0`, `soundfile==0.14.0`,
+and transitive dependencies), plus the deterministically built in-tree
+`stemwerk-core==0.1.1` wheel. Of the 61, 60 digests match their upstream
+indexes. `diffq==0.2.4` has no upstream cp312 wheel: the lock pins the wheel
+vendored at `scripts/reaper/vendor/wheels/linux-x86_64-cp312/` (wheel SHA-256
+`b829202cba2df9883815f95323f1d40294d657dd9c7a7d1c9706b57932d0a203`). The
+repository has no build record for it, and its metadata and licence file say
+CC BY-NC 4.0, so its distribution stays an open release gate.
+
+| Quantity | Bytes | Kind |
+| --- | --- | --- |
+| Pinned CPython 3.12.16 archive (`linux-x86_64`) | 34,505,639 | pinned |
+| Published `managed_python` tree (`4,732` entries, `3` stdlib `.pyc`) | 98,482,767 | logical |
+| Locked 61 Linux CPU wheels (`wheel-lock-linux-x86_64-cpu.v1.json`) | 396,290,399 | pinned |
+| Synthesized in-tree `stemwerk-core` wheel | 210,216 | logical; changes with Core |
+| Published `module_venv` tree (`36,283` entries, `0` `.pyc`) | 1,294,288,407 | logical; varies with root path length |
+| Published `drumsep_assets` (`2` pinned files + materialization receipt) | 437,656,690 | logical |
+| Wheelhouse plus staged venv, before the wheelhouse is removed | 1,690,789,022 | calculated |
+| Root peak on ext4 (`du -s -b`) | 2,268,102,042 | sampled logical |
+| Root peak on ext4 (`du -s --block-size=1`) | 2,385,100,800 | sampled allocated |
+| Root peak on tmpfs (`statvfs`) | 2,361,139,200 | measured physical, tmpfs only |
+| `TMPDIR` peak on tmpfs (`statvfs`) | 2,064,384 | measured physical, tmpfs only |
+| Retained root on ext4, including state and logs | 1,830,456,846 | sampled logical |
+| Retained root on ext4, including state and logs | 1,947,435,008 | sampled allocated |
+| Enforced S6 budget (ext4 allocated peak + 256 MiB) | 2,653,536,256 | policy |
+
+One fresh install per file system, from verified local wheel and asset caches,
+so no network or `.part` bytes. The ext4 run took 664 samples over 42 seconds
+with a median gap of 25 ms. The tmpfs run gave the root and `TMPDIR` their own
+otherwise empty mounts and polled `statvfs` 19,257 times with a median gap of
+2 ms, so it is a real high-water mark at page granularity, for tmpfs. No physical
+peak was measured on ext4, and other file systems will differ.
+
+The peak occurs in asset materialization, when the staged venv, managed Python
+and the source and staged asset copies coexist. The wheelhouse was removed
+before that, and the Python archive before the plan. The 256 MiB headroom covers
+file system and path-length differences, metadata, Core wheel growth, and a
+`TMPDIR` on the same volume. S7 FFmpeg is not in this budget.

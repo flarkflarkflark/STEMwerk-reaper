@@ -896,6 +896,52 @@ def test_standalone_drumsep_live_collection_uses_core_collector(
 
 
 @pytest.mark.portable
+def test_s6_registration_does_not_accept_system_ffmpeg_for_readiness(canned_live, tmp_path, monkeypatch):
+    from stemwerk_core import managed_runtime, module_registry
+
+    root = tmp_path / "s6-root"
+    monkeypatch.setattr(managed_runtime, "managed_runtime_root", lambda: root)
+    monkeypatch.setattr(
+        module_registry,
+        "read_and_validate_module_record",
+        lambda _root, _module: ("valid", {"components": {"ffmpeg": None}}, None),
+    )
+    monkeypatch.setattr(
+        readiness_collect,
+        "collect_ffmpeg",
+        lambda: pytest.fail("S6 readiness must not probe or adopt system FFmpeg"),
+    )
+    asset = tmp_path / "model.ckpt"
+    asset.write_bytes(b"model")
+    report = readiness.assess_readiness(
+        ReadinessRequest(workflow_id="drum_kit_direct", requested_device="cpu"),
+        catalog_dir=CATALOG_DIR,
+        collectors={"drum_kit": lambda _requested: {
+            "runtime": {"verdict": PASS, "evidence": {"source": "collected"}},
+            "capability": {
+                "verdict": PASS,
+                "resolution": {
+                    "requested": "cpu",
+                    "resolved_device_id": "cpu",
+                    "resolved_device_name": "cpu",
+                    "resolved_backend": "cpu",
+                    "selection_info": {"selection_policy": "explicit_cpu"},
+                },
+                "evidence": {"source": "collected"},
+            },
+        }},
+        model_asset_providers={"drumsep_mdx23c": lambda: {
+            "base_dir": str(tmp_path),
+            "assets": [{"name": asset.name, "sha256": hashlib.sha256(b"model").hexdigest()}],
+        }},
+    )
+    assert report["stages"][0]["components"]["model"]["verdict"] == PASS
+    assert report["components"]["ffmpeg"]["verdict"] == UNAVAILABLE
+    assert report["components"]["ffmpeg"]["reason_code"] == "managed_ffmpeg_pending"
+    assert report["readiness"]["verdict"] != PASS
+
+
+@pytest.mark.portable
 def test_drumsep_model_integrity_via_provider(canned_live, tmp_path):
     good = tmp_path / "good.ckpt"
     good.write_bytes(b"ckpt-bytes")

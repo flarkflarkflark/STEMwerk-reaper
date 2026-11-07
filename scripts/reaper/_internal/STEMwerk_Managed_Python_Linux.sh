@@ -8,12 +8,27 @@ export LC_ALL
 reaper=$1
 shift
 root=
-if [ "${1:-}" = --root ] && [ "$#" -ge 3 ]; then
-  root=$2
-  shift 2
-fi
-if [ "${1:-}" != -- ] || [ "$#" -lt 2 ]; then
-  printf '%s\n' 'usage: --managed-python-bootstrap --root ABSOLUTE_ROOT -- CORE_ARGUMENTS' >&2
+custom_archive=
+while [ "$#" -ge 2 ]; do
+  case "${1:-}" in
+    --root)
+      root=$2
+      shift 2
+      ;;
+    --archive)
+      custom_archive=$2
+      shift 2
+      ;;
+    --)
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+if [ -z "$root" ] || [ "${1:-}" != -- ] || [ "$#" -lt 2 ]; then
+  printf '%s\n' 'usage: --managed-python-bootstrap --root ABSOLUTE_ROOT [--archive ARCHIVE_PATH] -- CORE_ARGUMENTS' >&2
   exit 2
 fi
 shift
@@ -185,14 +200,16 @@ parse_manifest
 if ! command -v tar >/dev/null 2>&1 || ! command -v gzip >/dev/null 2>&1 || ! command -v sha256sum >/dev/null 2>&1 || ! command -v realpath >/dev/null 2>&1 || ! command -v find >/dev/null 2>&1; then
   fail bootstrap_prerequisite_unavailable 'tar, gzip, sha256sum, realpath or find is unavailable' 'Install standard Linux archive and checksum tools'
 fi
-if command -v curl >/dev/null 2>&1; then downloader=curl
-elif command -v wget >/dev/null 2>&1; then
-  wget_version=$(wget --no-config --version 2>/dev/null) || fail download_prerequisite_unavailable 'curl or GNU Wget 1.x is required' 'Install curl or GNU Wget 1.x'
-  case $wget_version in
-    'GNU Wget 1.'[0-9]*) downloader=wget ;;
-    *) fail download_prerequisite_unavailable 'curl or GNU Wget 1.x is required' 'Install curl or GNU Wget 1.x' ;;
-  esac
-else fail download_prerequisite_unavailable 'curl or GNU Wget 1.x is required' 'Install curl or GNU Wget 1.x'
+if [ -z "$custom_archive" ]; then
+  if command -v curl >/dev/null 2>&1; then downloader=curl
+  elif command -v wget >/dev/null 2>&1; then
+    wget_version=$(wget --no-config --version 2>/dev/null) || fail download_prerequisite_unavailable 'curl or GNU Wget 1.x is required' 'Install curl or GNU Wget 1.x'
+    case $wget_version in
+      'GNU Wget 1.'[0-9]*) downloader=wget ;;
+      *) fail download_prerequisite_unavailable 'curl or GNU Wget 1.x is required' 'Install curl or GNU Wget 1.x' ;;
+    esac
+  else fail download_prerequisite_unavailable 'curl or GNU Wget 1.x is required' 'Install curl or GNU Wget 1.x'
+  fi
 fi
 if ! safe_dir "$root/tmp" || ! safe_dir "$root/tmp/$op" || ! safe_dir "$root/runtimes" || ! safe_dir "$root/runtimes/python"; then
   fail root_unavailable 'Runtime directories are unavailable' 'Check root permissions and links'
@@ -228,6 +245,10 @@ cancel_check
 archive=$stage/python.tar.gz
 headers=$stage/headers
 redirects=0
+if [ -n "$custom_archive" ]; then
+  [ -f "$custom_archive" ] && [ ! -L "$custom_archive" ] || fail archive_unavailable 'Archive file is unavailable' 'Provide a readable regular archive file'
+  cp -- "$custom_archive" "$archive" || fail archive_unavailable 'Archive file could not be staged' 'Check archive file permissions and free space'
+else
 while :; do
   case $url in
     https://github.com/*|https://release-assets.githubusercontent.com/*|https://objects.githubusercontent.com/*) ;;
@@ -273,6 +294,7 @@ while :; do
   esac
   cancel_check
 done
+fi
 cancel_check
 actual_size=$(wc -c < "$archive" | tr -d '[:space:]')
 [ "$actual_size" = "$size" ] || fail archive_size_mismatch 'Archive byte count differs from pin' 'Retry the download'
@@ -330,5 +352,7 @@ rm -rf -- "$stage" || fail staging_cleanup_failed 'Published runtime but staging
 stage=
 event 'done' '"verified":true'
 STEMWERK_RUNTIME_ROOT=$root
-export STEMWERK_RUNTIME_ROOT
+STEMWERK_OPERATION_ID=$op
+PYTHONDONTWRITEBYTECODE=1
+export STEMWERK_RUNTIME_ROOT STEMWERK_OPERATION_ID PYTHONDONTWRITEBYTECODE
 exec "$root/runtimes/python/$name/bin/python3.12" -I -B "$src" "$@"

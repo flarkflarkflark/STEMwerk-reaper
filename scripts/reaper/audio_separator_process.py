@@ -8,6 +8,7 @@ Progress output (stdout):
 """
 
 import argparse
+import atexit
 from contextlib import contextmanager
 import importlib
 import importlib.util
@@ -19,6 +20,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 import threading
 import sys
 import time
@@ -2553,6 +2555,23 @@ def _resolve_benchmark_drumsep_helper_device(
     return raw, ""
 
 
+def _operation_numba_cache_dir(runtime_venv: Path) -> Path:
+    """Return a Numba cache for this worker process, outside the verified runtime.
+
+    Numba writes .nbi/.nbc beside librosa regardless of Python's bytecode
+    policy, and any change to a verified runtime makes its next run refuse. An
+    inherited NUMBA_CACHE_DIR is not trusted. The cache is scratch, so it is
+    removed at exit: compiled code is never reused unverified between runs.
+    """
+    scratch = Path(tempfile.gettempdir()).resolve()
+    runtime = Path(runtime_venv).resolve()
+    if scratch == runtime or runtime in scratch.parents:
+        raise OSError(f"temporary directory {scratch} is inside the verified runtime")
+    cache_dir = Path(tempfile.mkdtemp(prefix="stemwerk-numba-", dir=scratch))
+    atexit.register(shutil.rmtree, cache_dir, ignore_errors=True)
+    return cache_dir
+
+
 def _run_direct_dks_drumsep_helper(
     input_path: Path,
     output_root: Path,
@@ -2594,9 +2613,24 @@ def _run_direct_dks_drumsep_helper(
 
     if not helper_path.exists():
         return False, {}, "drumsep_helper_failed", f"helper script missing: {helper_path}"
+    try:
+        _prefer_vendored_stemwerk_core()
+        from stemwerk_core import module_verify as _mv
+
+        _s6_ok, _s6_reason = _mv.verify_s6_runtime_interpreter(Path(drumsep_python))
+    except Exception as exc:
+        _s6_ok, _s6_reason = False, f"verification_unavailable:{type(exc).__name__}"
+    if not _s6_ok:
+        return False, {}, "drumsep_helper_failed", f"S6 runtime verification failed: {_s6_reason}"
+    if _s6_reason == "verified":
+        try:
+            helper_env["NUMBA_CACHE_DIR"] = str(_operation_numba_cache_dir(_runtime_venv_root(drumsep_python)))
+        except OSError as exc:
+            return False, {}, "drumsep_helper_failed", f"S6 Numba cache unavailable: {exc}"
 
     cmd = [
         str(drumsep_python),
+        "-B",
         str(helper_path),
         "--input",
         str(input_path),
@@ -3052,8 +3086,12 @@ def _clean_env() -> Dict[str, str]:
         "CUDA_VISIBLE_DEVICES",
         "PYTHONPATH",
         "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "PYTHONINSPECT",
+        "PYTHONPYCACHEPREFIX",
     ):
         env.pop(key, None)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
 
 
@@ -3167,6 +3205,10 @@ def build_drumsep_subprocess_env(
 
     env.pop("PYTHONPATH", None)
     env.pop("PYTHONHOME", None)
+    env.pop("PYTHONSTARTUP", None)
+    env.pop("PYTHONINSPECT", None)
+    env.pop("PYTHONPYCACHEPREFIX", None)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["VIRTUAL_ENV"] = str(runtime_venv)
 
     if backend == "cpu":
@@ -3255,7 +3297,7 @@ print(json.dumps({
 """
     try:
         completed = subprocess.run(
-            [str(runtime_python), "-c", probe_code],
+            [str(runtime_python), "-B", "-c", probe_code],
             text=True,
             capture_output=True,
             timeout=90,

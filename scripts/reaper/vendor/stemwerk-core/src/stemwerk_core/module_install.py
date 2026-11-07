@@ -1,10 +1,11 @@
-"""Core module CLI: describe the contract, plan or verify a module.
+"""Core module CLI: describe the contract, plan, verify or install a module.
 
     python -I -B -m stemwerk_core.module_install --describe
     python -I -B -m stemwerk_core.module_install plan --module drum_kit
     python -I -B -m stemwerk_core.module_install verify --module drum_kit
+    python -I -B -m stemwerk_core.module_install install --module drum_kit --plan-fingerprint <hex>
 
-All operations shown above are read-only. Output follows the Core CLI contract:
+Output follows the Core CLI contract:
 one JSON document
 on stdout and exit 0 on success; a handled failure prints a versioned error
 document on stderr and exits 2; any other ``Exception`` becomes an
@@ -37,8 +38,8 @@ ERROR_SCHEMA_VERSION = "1.0.0"
 DISTRIBUTION_NAME = "stemwerk-core"
 
 # Operations this Core can perform. A front end hides any it does not know
-# (design section 9); install and cancel are added by the slices that build them.
-OPERATIONS = ("plan", "verify")
+# (design section 9); cancel is added by S8.
+OPERATIONS = ("plan", "verify", "install")
 # Platforms of the first route (design section 10.3).
 PLATFORMS = ("linux-x86_64", "darwin-arm64", "win-x86_64")
 
@@ -113,7 +114,7 @@ def _dumps(document: Dict[str, Any]) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m stemwerk_core.module_install",
-        description="Describe the Core installation contract, plan or verify a module (read-only).",
+        description="Describe the Core installation contract, plan, verify or install a module.",
     )
     parser.add_argument(
         "--describe", action="store_true", help="print the capabilities document"
@@ -121,8 +122,28 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
     plan = commands.add_parser("plan", help="compute a read-only installation plan")
     plan.add_argument("--module", required=True, help="module id, for example drum_kit")
+    plan.add_argument(
+        "--scope",
+        choices=(install_preflight.SCOPE_S4_ASSESSMENT, install_preflight.SCOPE_S6_CPU),
+        default=install_preflight.SCOPE_S4_ASSESSMENT,
+        help="plan scope (default: s4_assessment; use s6_cpu for executable S6 CPU plan)",
+    )
     verify = commands.add_parser("verify", help="verify a module's installation state")
     verify.add_argument("--module", required=True, help="module id, for example drum_kit")
+    install = commands.add_parser("install", help="execute a consented module installation")
+    install.add_argument("--module", required=True, help="module id, for example drum_kit")
+    install.add_argument(
+        "--plan-fingerprint",
+        required=True,
+        dest="plan_fingerprint",
+        help="64-character hex consent fingerprint from plan",
+    )
+    install.add_argument(
+        "--operation-id",
+        default=None,
+        dest="operation_id",
+        help="optional canonical UUID v4 operation id from the outer bootstrap",
+    )
     return parser
 
 
@@ -145,7 +166,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.describe:
             document = describe()
         elif args.command == "plan":
-            document = install_preflight.plan(module)
+            document = install_preflight.plan(module, scope=args.scope)
+        elif args.command == "install":
+            from . import module_installer
+
+            exit_code, document = module_installer.install_module(
+                module,
+                args.plan_fingerprint,
+                operation_id=args.operation_id,
+            )
+            if exit_code != 0:
+                _write_cli_document(_dumps(document), sys.stderr)
+                return exit_code
         else:
             document = module_verify.verify_module(module)
     except install_preflight.PreflightError as exc:

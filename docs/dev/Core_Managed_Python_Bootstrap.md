@@ -216,8 +216,8 @@ Known limits:
 - The bound assumes the outer layer's contract above. An outer layer that
   stays silent for 15 minutes and whose process id is gone is treated as
   crashed.
-- The registry and receipts (S6) must never reference `<root>/tmp/`; there is
-  no registry yet, so nothing can reference it now.
+- The registry, module receipts and publication record (S6) never reference
+  `<root>/tmp/`.
 
 ## What S5b must add
 
@@ -249,10 +249,17 @@ The existing `scripts/reaper/STEMwerk_Bootstrap_Linux.sh` accepts a narrow
   plan --module drum_kit
 ```
 
-The argument after `--` is handed to shipped Core. At this checkpoint Core
-supports read-only `plan` and `verify`; S6 will add the mutating install
-operation, lock acquisition, result continuation and registration. This
-bootstrap does not install Direct Kit. It does not enter the 2.3 shell path.
+The argument after `--` is handed to shipped Core (`plan`, `install`,
+`verify`, or `--describe`). When Core runs `install`, the shell passes the
+bootstrap operation id via `STEMWERK_OPERATION_ID` and
+`PYTHONDONTWRITEBYTECODE=1`, so Core continues the same `<root>/logs/<op>/`
+event stream (`EventWriter.accept_handover`), acquires the install lock,
+and writes the final `<root>/logs/<op>/result.json`. It does not enter the
+2.3 shell path.
+
+For a pinned archive already on disk, the outer bootstrap also accepts
+`--archive /absolute/path/to/pinned.tar.gz` before `--`; it verifies the
+archive against the manifest before extraction.
 
 The shell requires Linux x86_64, `/bin/sh`, `curl` or GNU Wget 1.x, `tar`, `gzip`,
 `sha256sum`, `realpath`, `find`, `stat`, `id` and ordinary POSIX utilities. It never calls a host

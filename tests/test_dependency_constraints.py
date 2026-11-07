@@ -4148,9 +4148,10 @@ def test_run_direct_dks_drumsep_helper_uses_cpu_device_and_isolated_env(monkeypa
     assert detail == ""
     assert stems["kick"].endswith("kick.wav")
     assert captured["cmd"][0] == str(drumsep_python)
-    assert captured["cmd"][2] == "--input"
-    assert captured["cmd"][16] == "--device"
-    assert captured["cmd"][17] == "cpu"
+    assert captured["cmd"][1] == "-B"
+    assert captured["cmd"][3] == "--input"
+    assert captured["cmd"][17] == "--device"
+    assert captured["cmd"][18] == "cpu"
     assert captured["env"]["VIRTUAL_ENV"] == expected_runtime_venv
     assert captured["env"]["CUDA_VISIBLE_DEVICES"] == ""
     assert captured["env"]["NVIDIA_VISIBLE_DEVICES"] == ""
@@ -4241,7 +4242,8 @@ def test_run_direct_dks_drumsep_helper_uses_rocm_device_and_isolated_env(monkeyp
     assert reason == ""
     assert detail == ""
     assert stems["kick"].endswith("kick.wav")
-    assert captured["cmd"][17] == "rocm"
+    assert captured["cmd"][1] == "-B"
+    assert captured["cmd"][18] == "rocm"
     assert captured["env"]["VIRTUAL_ENV"] == expected_runtime_venv
     assert "CUDA_VISIBLE_DEVICES" not in captured["env"] or captured["env"]["CUDA_VISIBLE_DEVICES"] != ""
     assert "NVIDIA_VISIBLE_DEVICES" not in captured["env"] or captured["env"]["NVIDIA_VISIBLE_DEVICES"] != ""
@@ -4329,7 +4331,8 @@ def test_run_direct_dks_drumsep_helper_uses_cuda_device_and_isolated_env(monkeyp
     assert reason == ""
     assert detail == ""
     assert stems["kick"].endswith("kick.wav")
-    assert captured["cmd"][17] == "cuda"
+    assert captured["cmd"][1] == "-B"
+    assert captured["cmd"][18] == "cuda"
     assert captured["env"]["VIRTUAL_ENV"] == expected_runtime_venv
     assert captured["env"].get("CUDA_VISIBLE_DEVICES", None) != ""
     assert captured["env"].get("NVIDIA_VISIBLE_DEVICES", None) != ""

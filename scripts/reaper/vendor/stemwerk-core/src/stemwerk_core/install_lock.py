@@ -821,6 +821,7 @@ def acquire(
     probe: Optional[Callable[[int], process_identity.ProcessProbe]] = None,
     clock: Callable[[], float] = time.time,
     on_stale: Optional[Callable[[Judgement], None]] = None,
+    before_recovery: Optional[Callable[[], None]] = None,
 ) -> InstallLock:
     """Take the install lock for ``operation_id``, run journal recovery, then
     remove stale bootstrap staging of crashed outer layers (design O55).
@@ -828,7 +829,9 @@ def acquire(
     Fails with ``LockError("lock_held")`` (``details`` has ``lock_status``,
     ``owner`` and ``conditions``) while another operation holds it. A stale
     lock is broken first. ``on_stale`` is a test seam, called under the guard
-    after a lock was judged stale and before it is broken.
+    after a lock was judged stale and before it is broken. before_recovery
+    runs under the lock while the journals of dead operations still exist; if
+    it raises, the lock is released and nothing else is recovered.
     """
 
     try:
@@ -908,6 +911,8 @@ def acquire(
         )
         lock.broken = broken
     try:
+        if before_recovery is not None:
+            before_recovery()
         lock.recovery = install_journal.recover(
             root, current_operation_id=operation_id, verify_published=verify_published
         )

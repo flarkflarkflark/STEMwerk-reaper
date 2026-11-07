@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, Optional
 
 from . import managed_runtime
 from . import device_policy
+from . import subprocess_policy
 from .verdicts import FAIL, PASS, UNAVAILABLE
 
 
@@ -78,14 +79,11 @@ def _run_probe(python_exe: Path, src: str, timeout: int = 60) -> Dict[str, Any]:
     owned and removed by this call.
     """
 
-    env = os.environ.copy()
-    for key in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONINSPECT"):
-        env.pop(key, None)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env = subprocess_policy.clean_python_env()
     try:
         with tempfile.TemporaryDirectory(prefix="stemwerk-readiness-") as scratch:
             proc = subprocess.run(
-                [str(python_exe), "-I", "-B", "-c", src],
+                subprocess_policy.isolated_python_cmd(python_exe, "-c", src),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
