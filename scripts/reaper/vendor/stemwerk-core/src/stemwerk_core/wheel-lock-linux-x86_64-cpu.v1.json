@@ -1,0 +1,2031 @@
+{
+  "schema_version": 1,
+  "kind": "stemwerk_wheel_lock",
+  "lock_id": "drum_kit-linux-x86_64-cpu-py312-v1",
+  "module_id": "drum_kit",
+  "platform_key": "linux-x86_64",
+  "backend": "cpu",
+  "python_pin_name": "python-3.12.16-20261026",
+  "python_version": "3.12.16",
+  "abi_tag": "cp312",
+  "platform_tags": [
+    "manylinux_2_28_x86_64",
+    "manylinux_2_27_x86_64",
+    "manylinux_2_24_x86_64",
+    "manylinux_2_17_x86_64",
+    "manylinux2014_x86_64",
+    "linux_x86_64",
+    "any"
+  ],
+  "glibc_baseline": "2.28",
+  "allowed_hosts": [
+    "download.pytorch.org",
+    "files.pythonhosted.org"
+  ],
+  "local_vendor_wheel_dir": "scripts/reaper/vendor/wheels/linux-x86_64-cp312",
+  "local_core_package": {
+    "name": "stemwerk-core",
+    "version": "0.1.1",
+    "source_dir": "scripts/reaper/vendor/stemwerk-core/src/stemwerk_core",
+    "license": "Proprietary / flarkAUDIO ecosystem (vendored in-tree)"
+  },
+  "wheel_count": 61,
+  "total_wheel_bytes": 396290399,
+  "wheels": [
+    {
+      "name": "absl-py",
+      "version": "2.5.1",
+      "filename": "absl_py-2.5.1-py3-none-any.whl",
+      "sha256": "721200f2f0e9960f2ca9dc3a2a706b201f5f75d812c158f059cbbe29eeafbdb8",
+      "size": 137673,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/b3/7d/01e62f59e4166af1be6238d9f2b7f3453630c51b8044b412d05b5606532a/absl_py-2.5.1-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [],
+      "license": "Apache-2.0",
+      "license_classifiers": [
+        "Apache Software License"
+      ],
+      "license_files": [
+        "absl_py-2.5.1.dist-info/licenses/AUTHORS",
+        "absl_py-2.5.1.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "audio-separator",
+      "version": "0.34.1",
+      "filename": "audio_separator-0.34.1-py3-none-any.whl",
+      "sha256": "20a748d16046313f999545bc340b18e9673f8cff775dac10c65ddd3df3c4ee15",
+      "size": 331298,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/ab/e8/1c6692863ae97fc4b3227ff8ddb15ff9be7a42a720a11a3a5e0893bd9020/audio_separator-0.34.1-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "audioop-lts (>=0.2.1) ; python_version >= \"3.13\" and python_version < \"4.0\"",
+        "beartype (>=0.18.5,<0.19.0)",
+        "diffq (>=0.2) ; sys_platform != \"win32\"",
+        "diffq-fixed (>=0.2) ; sys_platform == \"win32\"",
+        "einops (>=0.7)",
+        "julius (>=0.2)",
+        "librosa (>=0.10)",
+        "ml_collections",
+        "numpy (>=2)",
+        "onnx-weekly",
+        "onnx2torch-py313 (>=1.6)",
+        "onnxruntime (>=1.17) ; extra == \"cpu\"",
+        "onnxruntime-directml (>=1.17) ; extra == \"dml\"",
+        "onnxruntime-gpu (>=1.17) ; extra == \"gpu\"",
+        "pydub (>=0.25)",
+        "pyyaml",
+        "requests (>=2)",
+        "resampy (>=0.4)",
+        "rotary-embedding-torch (>=0.6.1,<0.7.0)",
+        "samplerate (==0.1.0)",
+        "scipy (>=1.13.0,<2.0.0)",
+        "six (>=1.16)",
+        "torch (>=2.3)",
+        "torch_directml ; extra == \"dml\"",
+        "tqdm"
+      ],
+      "license": "MIT",
+      "license_classifiers": [
+        "MIT License"
+      ],
+      "license_files": [
+        "audio_separator-0.34.1.dist-info/LICENSE"
+      ]
+    },
+    {
+      "name": "audioread",
+      "version": "3.1.0",
+      "filename": "audioread-3.1.0-py3-none-any.whl",
+      "sha256": "b30d1df6c5d3de5dcef0fb0e256f6ea17bdcf5f979408df0297d8a408e2971b4",
+      "size": 23143,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/7e/16/fbe8e1e185a45042f7cd3a282def5bb8d95bb69ab9e9ef6a5368aa17e426/audioread-3.1.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [
+        "pygobject (>=3.54.2,<4.0.0) ; extra == \"gi\"",
+        "pymad[mad] (>=0.11.3,<0.12.0) ; extra == \"mad\"",
+        "pytest (>=8.4.2) ; extra == \"test\"",
+        "pytest-cov (>=7.0.0) ; extra == \"test\"",
+        "standard-aifc ; python_version >= \"3.13\"",
+        "standard-sunau ; python_version >= \"3.13\""
+      ],
+      "license": "MIT",
+      "license_classifiers": [
+        "MIT License"
+      ],
+      "license_files": [
+        "audioread-3.1.0.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "beartype",
+      "version": "0.18.5",
+      "filename": "beartype-0.18.5-py3-none-any.whl",
+      "sha256": "5301a14f2a9a5540fe47ec6d34d758e9cd8331d36c4760fc7a5499ab86310089",
+      "size": 917762,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/64/43/7a1259741bd989723272ac7d381a43be932422abcff09a1d9f7ba212cb74/beartype-0.18.5-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.8.0",
+      "requires_dist": [
+        "typing-extensions >=3.10.0.0 ; extra == 'all'",
+        "coverage >=5.5 ; extra == 'dev'",
+        "equinox ; extra == 'dev'",
+        "pandera ; extra == 'dev'",
+        "typing-extensions >=3.10.0.0 ; extra == 'dev'",
+        "pytest >=4.0.0 ; extra == 'dev'",
+        "tox >=3.20.1 ; extra == 'dev'",
+        "sphinx <6.0.0,>=4.2.0 ; extra == 'dev'",
+        "pydata-sphinx-theme <=0.7.2 ; extra == 'dev'",
+        "autoapi >=0.9.0 ; extra == 'dev'",
+        "sphinxext-opengraph >=0.7.5 ; extra == 'dev'",
+        "mypy >=0.800 ; (platform_python_implementation != \"PyPy\") and extra == 'dev'",
+        "sphinx ; (python_version >= \"3.8.0\") and extra == 'dev'",
+        "numpy ; (sys_platform != \"darwin\" and platform_python_implementation != \"PyPy\") and extra == 'dev'",
+        "sphinx <6.0.0,>=4.2.0 ; extra == 'doc-rtd'",
+        "pydata-sphinx-theme <=0.7.2 ; extra == 'doc-rtd'",
+        "autoapi >=0.9.0 ; extra == 'doc-rtd'",
+        "sphinxext-opengraph >=0.7.5 ; extra == 'doc-rtd'",
+        "equinox ; extra == 'test-tox'",
+        "pandera ; extra == 'test-tox'",
+        "typing-extensions >=3.10.0.0 ; extra == 'test-tox'",
+        "pytest >=4.0.0 ; extra == 'test-tox'",
+        "coverage >=5.5 ; extra == 'test-tox-coverage'",
+        "mypy >=0.800 ; (platform_python_implementation != \"PyPy\") and extra == 'test-tox'",
+        "sphinx ; (python_version >= \"3.8.0\") and extra == 'test-tox'",
+        "numpy ; (sys_platform != \"darwin\" and platform_python_implementation != \"PyPy\") and extra == 'test-tox'"
+      ],
+      "license": "MIT",
+      "license_classifiers": [
+        "MIT License"
+      ],
+      "license_files": [
+        "beartype-0.18.5.dist-info/LICENSE"
+      ]
+    },
+    {
+      "name": "certifi",
+      "version": "2026.10.23",
+      "filename": "certifi-2026.10.23-py3-none-any.whl",
+      "sha256": "e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1",
+      "size": 135082,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.7",
+      "requires_dist": [],
+      "license": "MPL-2.0",
+      "license_classifiers": [
+        "Mozilla Public License 2.0 (MPL 2.0)"
+      ],
+      "license_files": [
+        "certifi-2026.10.23.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "filename": "cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "sha256": "c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf",
+      "size": 221822,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/b1/db/dceb9dd5b231e1da801793f8acc9f3c52a7e1afe40bb1aae37e02b0faad5/cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_17_x86_64",
+        "cp312-cp312-manylinux2014_x86_64"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "pycparser; implementation_name != \"PyPy\""
+      ],
+      "license": "MIT-0",
+      "license_classifiers": [],
+      "license_files": [
+        "cffi-2.1.1.dist-info/licenses/",
+        "cffi-2.1.1.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.5.2",
+      "filename": "charset_normalizer-3.5.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "3d31298449090ab8d47b7b1b2a555ff73cac7ed438a08b7ac160980c7ebed649",
+      "size": 257601,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/7f/c5/38806a25ab5e65fc178f39affeda20858efafede2fce1ffc2556cfc9fe73/charset_normalizer-3.5.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_17_x86_64",
+        "cp312-cp312-manylinux2014_x86_64",
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.7",
+      "requires_dist": [],
+      "license": "MIT",
+      "license_classifiers": [],
+      "license_files": [
+        "charset_normalizer-3.5.2.dist-info/licenses/",
+        "charset_normalizer-3.5.2.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "cloudpickle",
+      "version": "3.1.2",
+      "filename": "cloudpickle-3.1.2-py3-none-any.whl",
+      "sha256": "9acb47f6afd73f60dc1df93bb801b472f05ff42fa6c84167d25cb206be1fbf4a",
+      "size": 22228,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/88/39/799be3f2f0f38cc727ee3b4f1445fe6d5e4133064ec2e4115069418a5bb6/cloudpickle-3.1.2-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.8",
+      "requires_dist": [],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [
+        "BSD License"
+      ],
+      "license_files": [
+        "cloudpickle-3.1.2.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "Cython",
+      "version": "3.3.1",
+      "filename": "cython-3.3.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "215669fd0ce792080cd4d0748db7e1e31f424b6706a6220d08339895e6a3a03a",
+      "size": 3418124,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/4a/c6/51ffdd996a1e6836792061ebe7ecf40480f1bd5693a721cea0ad4a689a81/cython-3.3.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_17_x86_64",
+        "cp312-cp312-manylinux2014_x86_64",
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [],
+      "license": "Apache-2.0",
+      "license_classifiers": [],
+      "license_files": []
+    },
+    {
+      "name": "decorator",
+      "version": "5.3.1",
+      "filename": "decorator-5.3.1-py3-none-any.whl",
+      "sha256": "f47fe6fdbd2edd623ecfe36875d37aba411624e2670dd395dddae1358689bb3c",
+      "size": 10365,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/05/7f/798705f5296a58ca505d600456748d1be48078eac8a7050d8a98bc9edb89/decorator-5.3.1-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.8",
+      "requires_dist": [],
+      "license": "BSD-2-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "decorator-5.3.1.dist-info/licenses/LICENSE.txt"
+      ]
+    },
+    {
+      "name": "diffq",
+      "version": "0.2.4",
+      "filename": "diffq-0.2.4-cp312-cp312-linux_x86_64.whl",
+      "sha256": "b829202cba2df9883815f95323f1d40294d657dd9c7a7d1c9706b57932d0a203",
+      "size": 340373,
+      "source_kind": "vendor_wheel",
+      "url": "vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl",
+      "host": "local_vendor",
+      "tags": [
+        "cp312-cp312-linux_x86_64"
+      ],
+      "requires_python": ">=3.7.0",
+      "requires_dist": [
+        "Cython",
+        "numpy",
+        "torch",
+        "coverage; extra == \"dev\"",
+        "flake8; extra == \"dev\"",
+        "pdoc3; extra == \"dev\"",
+        "torchvision; extra == \"dev\""
+      ],
+      "license": "Creative Commons Attribution-NonCommercial 4.0 International",
+      "license_classifiers": [],
+      "license_files": [
+        "diffq-0.2.4.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "einops",
+      "version": "0.8.2",
+      "filename": "einops-0.8.2-py3-none-any.whl",
+      "sha256": "54058201ac7087911181bfec4af6091bb59380360f069276601256a76af08193",
+      "size": 65638,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/2a/09/f8d8f8f31e4483c10a906437b4ce31bdf3d6d417b73fe33f1a8b59e34228/einops-0.8.2-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [],
+      "license": "MIT",
+      "license_classifiers": [
+        "MIT License"
+      ],
+      "license_files": [
+        "einops-0.8.2.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "filelock",
+      "version": "4.2.9",
+      "filename": "filelock-4.2.9-py3-none-any.whl",
+      "sha256": "a379c50a729e5b68c8519a4d26489f755d9769960a236ecd838190e2a78db2e9",
+      "size": 164734,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/00/05/76184fe08339723d643ab47887a8e4de8f2921ca4e008617ab7490af7857/filelock-4.2.9-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.11",
+      "requires_dist": [],
+      "license": "MIT",
+      "license_classifiers": [],
+      "license_files": [
+        "filelock-4.2.9.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19",
+      "filename": "flatbuffers-25.12.19-py2.py3-none-any.whl",
+      "sha256": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
+      "size": 26661,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py2-none-any",
+        "py3-none-any"
+      ],
+      "requires_python": "",
+      "requires_dist": [],
+      "license": "Apache 2.0",
+      "license_classifiers": [
+        "Apache Software License"
+      ],
+      "license_files": []
+    },
+    {
+      "name": "fsspec",
+      "version": "2026.9.0",
+      "filename": "fsspec-2026.9.0-py3-none-any.whl",
+      "sha256": "8dd6e646e99ea382bd85f97a45e6b526a442d79423a7dc673f1e2756d05fcb5f",
+      "size": 221738,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/6c/c0/a98505f18594f1bce828bb159cec0fcf9860562f1a2c85913409fc8f3d9e/fsspec-2026.9.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "adlfs; extra == 'abfs'",
+        "adlfs; extra == 'adl'",
+        "pyarrow>=1; extra == 'arrow'",
+        "dask; extra == 'dask'",
+        "distributed; extra == 'dask'",
+        "pre-commit; extra == 'dev'",
+        "ruff>=0.5; extra == 'dev'",
+        "numpydoc; extra == 'doc'",
+        "sphinx; extra == 'doc'",
+        "sphinx-design; extra == 'doc'",
+        "sphinx-rtd-theme; extra == 'doc'",
+        "yarl; extra == 'doc'",
+        "dropbox; extra == 'dropbox'",
+        "dropboxdrivefs; extra == 'dropbox'",
+        "requests; extra == 'dropbox'",
+        "adlfs; extra == 'full'",
+        "aiohttp!=4.0.0a0,!=4.0.0a1; extra == 'full'",
+        "dask; extra == 'full'",
+        "distributed; extra == 'full'",
+        "dropbox; extra == 'full'",
+        "dropboxdrivefs; extra == 'full'",
+        "fusepy; extra == 'full'",
+        "gcsfs>=2026.4.0; extra == 'full'",
+        "libarchive-c; extra == 'full'",
+        "ocifs; extra == 'full'",
+        "panel; extra == 'full'",
+        "paramiko; extra == 'full'",
+        "pyarrow>=1; extra == 'full'",
+        "pygit2; extra == 'full'",
+        "requests; extra == 'full'",
+        "s3fs>=2026.6.0; extra == 'full'",
+        "smbprotocol; extra == 'full'",
+        "tqdm; extra == 'full'",
+        "fusepy; extra == 'fuse'",
+        "gcsfs>=2026.4.0; extra == 'gcs'",
+        "pygit2; extra == 'git'",
+        "requests; extra == 'github'",
+        "gcsfs>=2026.4.0; extra == 'gs'",
+        "panel; extra == 'gui'",
+        "pyarrow>=1; extra == 'hdfs'",
+        "aiohttp!=4.0.0a0,!=4.0.0a1; extra == 'http'",
+        "libarchive-c; extra == 'libarchive'",
+        "ocifs; extra == 'oci'",
+        "s3fs>=2026.6.0; extra == 's3'",
+        "paramiko; extra == 'sftp'",
+        "smbprotocol; extra == 'smb'",
+        "paramiko; extra == 'ssh'",
+        "aiohttp!=4.0.0a0,!=4.0.0a1; extra == 'test'",
+        "numpy; extra == 'test'",
+        "pytest; extra == 'test'",
+        "pytest-asyncio!=0.22.0; extra == 'test'",
+        "pytest-benchmark; extra == 'test'",
+        "pytest-cov; extra == 'test'",
+        "pytest-mock; extra == 'test'",
+        "pytest-recording; extra == 'test'",
+        "pytest-rerunfailures; extra == 'test'",
+        "requests; extra == 'test'",
+        "aiobotocore<3.0.0,>=2.5.4; extra == 'test-downstream'",
+        "dask[dataframe,test]; extra == 'test-downstream'",
+        "moto[server]<5,>4; extra == 'test-downstream'",
+        "pytest-timeout; extra == 'test-downstream'",
+        "xarray; extra == 'test-downstream'",
+        "zarr; extra == 'test-downstream'",
+        "adlfs; extra == 'test-full'",
+        "aiohttp!=4.0.0a0,!=4.0.0a1; extra == 'test-full'",
+        "backports-zstd; (python_version < '3.14') and extra == 'test-full'",
+        "cloudpickle; extra == 'test-full'",
+        "dask; extra == 'test-full'",
+        "distributed; extra == 'test-full'",
+        "dropbox; extra == 'test-full'",
+        "dropboxdrivefs; extra == 'test-full'",
+        "fastparquet; extra == 'test-full'",
+        "fusepy; extra == 'test-full'",
+        "gcsfs>=2026.4.0; extra == 'test-full'",
+        "jinja2; extra == 'test-full'",
+        "kerchunk; extra == 'test-full'",
+        "libarchive-c; extra == 'test-full'",
+        "lz4; extra == 'test-full'",
+        "notebook; extra == 'test-full'",
+        "numpy; extra == 'test-full'",
+        "ocifs; extra == 'test-full'",
+        "pandas<3.0.0; extra == 'test-full'",
+        "panel; extra == 'test-full'",
+        "paramiko; extra == 'test-full'",
+        "pyarrow>=1; extra == 'test-full'",
+        "pyftpdlib; extra == 'test-full'",
+        "pygit2; extra == 'test-full'",
+        "pytest; extra == 'test-full'",
+        "pytest-asyncio!=0.22.0; extra == 'test-full'",
+        "pytest-benchmark; extra == 'test-full'",
+        "pytest-cov; extra == 'test-full'",
+        "pytest-mock; extra == 'test-full'",
+        "pytest-recording; extra == 'test-full'",
+        "pytest-rerunfailures; extra == 'test-full'",
+        "python-snappy; extra == 'test-full'",
+        "requests; extra == 'test-full'",
+        "s3fs>=2026.6.0; extra == 'test-full'",
+        "smbprotocol; extra == 'test-full'",
+        "tqdm; extra == 'test-full'",
+        "urllib3; extra == 'test-full'",
+        "zarr<3.2.0; extra == 'test-full'",
+        "zstandard; (python_version < '3.14') and extra == 'test-full'",
+        "tqdm; extra == 'tqdm'"
+      ],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "fsspec-2026.9.0.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "filename": "idna-3.20-py3-none-any.whl",
+      "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+      "size": 69583,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [
+        "ruff >= 0.16.0 ; extra == \"all\"",
+        "mypy >= 1.11.2 ; extra == \"all\"",
+        "ty >= 0.0.37 ; extra == \"all\"",
+        "pytest >= 8.3.2 ; extra == \"all\"",
+        "hypothesis >= 6.141.1 ; extra == \"all\"",
+        "coverage >= 7.10.0 ; extra == \"all\""
+      ],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "idna-3.20.dist-info/licenses/LICENSE.md"
+      ]
+    },
+    {
+      "name": "Jinja2",
+      "version": "3.1.6",
+      "filename": "jinja2-3.1.6-py3-none-any.whl",
+      "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67",
+      "size": 134899,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.7",
+      "requires_dist": [
+        "MarkupSafe>=2.0",
+        "Babel>=2.7 ; extra == \"i18n\""
+      ],
+      "license": "BSD License",
+      "license_classifiers": [
+        "BSD License"
+      ],
+      "license_files": [
+        "jinja2-3.1.6.dist-info/licenses/LICENSE.txt"
+      ]
+    },
+    {
+      "name": "joblib",
+      "version": "1.6.0",
+      "filename": "joblib-1.6.0-py3-none-any.whl",
+      "sha256": "3dbbf9f6e4b592a2357b854608e980fe6390d131d7a82f011a377ef2ebef7aba",
+      "size": 306115,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/18/53/84099323c2ec4be98d935f63c033ac4151ee83836ca1050ede3b3aadf155/joblib-1.6.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "cloudpickle>=3.0",
+        "distributed; extra == \"test\"",
+        "lz4; extra == \"test\"",
+        "numpy; extra == \"test\"",
+        "memory_profiler; extra == \"test\"",
+        "pytest; extra == \"test\"",
+        "pytest-asyncio; extra == \"test\"",
+        "pytest-cov; extra == \"test\"",
+        "pytest-run-parallel; extra == \"test\"",
+        "pytest-timeout; extra == \"test\"",
+        "threadpoolctl; extra == \"test\"",
+        "distributed; extra == \"docs\"",
+        "lz4; extra == \"docs\"",
+        "numpy; extra == \"docs\"",
+        "numpydoc; extra == \"docs\"",
+        "matplotlib; extra == \"docs\"",
+        "pandas; extra == \"docs\"",
+        "psutil; extra == \"docs\"",
+        "sphinx; extra == \"docs\"",
+        "pydata-sphinx-theme; extra == \"docs\"",
+        "sphinx-gallery; extra == \"docs\"",
+        "sphinx-copybutton; extra == \"docs\"",
+        "sphinx-design; extra == \"docs\"",
+        "tqdm; extra == \"docs\""
+      ],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "joblib-1.6.0.dist-info/licenses/LICENSE.txt"
+      ]
+    },
+    {
+      "name": "julius",
+      "version": "0.2.8",
+      "filename": "julius-0.2.8-py3-none-any.whl",
+      "sha256": "6891235cbc355e629d839f87489bff8ca46e57a0e7cc35abb909c7a2aa538c25",
+      "size": 21819,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/86/43/efdb0bcb07c47826fa55857cec0deb743f74cd83b6ba5ec9e413505a72e6/julius-0.2.8-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.9.0",
+      "requires_dist": [
+        "torch>=1.13.0",
+        "coverage>=7.0; extra == 'dev'",
+        "flake8>=5.0; extra == 'dev'",
+        "mypy>=1.0; extra == 'dev'",
+        "numpy>=1.21; extra == 'dev'",
+        "onnx>=1.13; extra == 'dev'",
+        "onnxruntime<1.20,>=1.16; (python_version < '3.10') and extra == 'dev'",
+        "onnxruntime>=1.16; (python_version >= '3.10') and extra == 'dev'",
+        "pdoc3>=0.10; extra == 'dev'",
+        "resampy==0.4.3; extra == 'dev'"
+      ],
+      "license": "MIT License",
+      "license_classifiers": [
+        "MIT License"
+      ],
+      "license_files": [
+        "julius-0.2.8.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "lazy-loader",
+      "version": "0.6",
+      "filename": "lazy_loader-0.6-py3-none-any.whl",
+      "sha256": "77253be3391b06124a0e16105bd663b6c54470af1a9ca8e1cf026f38d58ed056",
+      "size": 8791,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/23/93/4e45e37f26c820216704b36b8e67cc55c490a7abd287a78a26a2c0e21386/lazy_loader-0.6-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [
+        "packaging",
+        "pytest>=8.0; extra == \"test\"",
+        "pytest-cov>=5.0; extra == \"test\"",
+        "coverage[toml]>=7.2; extra == \"test\"",
+        "pre-commit==4.3.0; extra == \"lint\"",
+        "changelist==0.5; extra == \"dev\"",
+        "spin==0.15; extra == \"dev\""
+      ],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "lazy_loader-0.6.dist-info/licenses/LICENSE.md"
+      ]
+    },
+    {
+      "name": "librosa",
+      "version": "0.11.0",
+      "filename": "librosa-0.11.0-py3-none-any.whl",
+      "sha256": "0b6415c4fd68bff4c29288abe67c6d80b587e0e1e2cfb0aad23e4559504a7fa1",
+      "size": 260749,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/b5/ba/c63c5786dfee4c3417094c4b00966e61e4a63efecee22cb7b4c0387dda83/librosa-0.11.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.8",
+      "requires_dist": [
+        "audioread>=2.1.9",
+        "numba>=0.51.0",
+        "numpy>=1.22.3",
+        "scipy>=1.6.0",
+        "scikit-learn>=1.1.0",
+        "joblib>=1.0",
+        "decorator>=4.3.0",
+        "soundfile>=0.12.1",
+        "pooch>=1.1",
+        "soxr>=0.3.2",
+        "typing_extensions>=4.1.1",
+        "lazy_loader>=0.1",
+        "msgpack>=1.0",
+        "standard-aifc; python_version >= \"3.13\"",
+        "standard-sunau; python_version >= \"3.13\"",
+        "numpydoc; extra == \"docs\"",
+        "sphinx!=1.3.1; extra == \"docs\"",
+        "sphinx_rtd_theme>=1.2.0; extra == \"docs\"",
+        "numba>=0.51; extra == \"docs\"",
+        "matplotlib>=3.5.0; extra == \"docs\"",
+        "sphinx-multiversion>=0.2.3; extra == \"docs\"",
+        "sphinx-gallery>=0.7; extra == \"docs\"",
+        "mir_eval>=0.5; extra == \"docs\"",
+        "ipython>=7.0; extra == \"docs\"",
+        "sphinxcontrib-svg2pdfconverter; extra == \"docs\"",
+        "sphinxcontrib-googleanalytics>=0.4; extra == \"docs\"",
+        "presets; extra == \"docs\"",
+        "sphinx-copybutton>=0.5.2; extra == \"docs\"",
+        "matplotlib>=3.5.0; extra == \"tests\"",
+        "packaging>=20.0; extra == \"tests\"",
+        "pytest-mpl; extra == \"tests\"",
+        "pytest-cov; extra == \"tests\"",
+        "pytest; extra == \"tests\"",
+        "samplerate; extra == \"tests\"",
+        "resampy>=0.2.2; extra == \"tests\"",
+        "types-decorator; extra == \"tests\"",
+        "matplotlib>=3.5.0; extra == \"display\""
+      ],
+      "license": "ISC",
+      "license_classifiers": [
+        "ISC License (ISCL)"
+      ],
+      "license_files": [
+        "librosa-0.11.0.dist-info/LICENSE.md"
+      ]
+    },
+    {
+      "name": "llvmlite",
+      "version": "0.47.0",
+      "filename": "llvmlite-0.47.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "sha256": "5853bf26160857c0c2573415ff4efe01c4c651e59e2c55c2a088740acfee51cd",
+      "size": 56275178,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/e6/4b/e3f2cd17822cf772a4a51a0a8080b0032e6d37b2dbe8cfb724eac4e31c52/llvmlite-0.47.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_17_x86_64",
+        "cp312-cp312-manylinux2014_x86_64"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [],
+      "license": "BSD-2-Clause AND Apache-2.0 WITH LLVM-exception",
+      "license_classifiers": [],
+      "license_files": [
+        "llvmlite-0.47.0.dist-info/licenses/",
+        "llvmlite-0.47.0.dist-info/licenses/LICENSE",
+        "llvmlite-0.47.0.dist-info/licenses/LICENSE.thirdparty"
+      ]
+    },
+    {
+      "name": "MarkupSafe",
+      "version": "3.0.4",
+      "filename": "markupsafe-3.0.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "8e124f974786f831d6043728e38296969d3579db8896fe004682f5758e613581",
+      "size": 22985,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/4f/a7/aeedb5140afa41fc74c225e9184ab96723a6e873b6ee1c9fede7283456d8/markupsafe-3.0.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_17_x86_64",
+        "cp312-cp312-manylinux2014_x86_64",
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "markupsafe-3.0.4.dist-info/licenses/",
+        "markupsafe-3.0.4.dist-info/licenses/LICENSE.txt"
+      ]
+    },
+    {
+      "name": "ml_collections",
+      "version": "1.1.0",
+      "filename": "ml_collections-1.1.0-py3-none-any.whl",
+      "sha256": "23b6fa4772aac1ae745a96044b925a5746145a70734f087eaca6626e92c05cbc",
+      "size": 76707,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/ab/8a/18d4ff2c7bd83f30d6924bd4ad97abf418488c3f908dea228d6f0961ad68/ml_collections-1.1.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "absl-py",
+        "PyYAML",
+        "pytest ; extra == \"dev\"",
+        "pytest-xdist ; extra == \"dev\"",
+        "pylint>=2.6.0 ; extra == \"dev\"",
+        "pyink ; extra == \"dev\""
+      ],
+      "license": "Apache Software License",
+      "license_classifiers": [
+        "Apache Software License"
+      ],
+      "license_files": [
+        "ml_collections-1.1.0.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "ml_dtypes",
+      "version": "0.6.0",
+      "filename": "ml_dtypes-0.6.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "3b4a480aa8fd54a1805b8ac10f3f91763926a74f73c0c364c10f9231854f4170",
+      "size": 409890,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/c7/f9/7d76c1eae866f5d4636401b31b6d6dd90e4b4ced1fa7cfdfcca9c60e4bd3/ml_dtypes-0.6.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_27_x86_64",
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "numpy>=2.0.0",
+        "numpy>=2.1.0; python_version >= \"3.13\"",
+        "numpy>=2.3.0; python_version >= \"3.14\"",
+        "absl-py; extra == \"dev\"",
+        "pytest; extra == \"dev\"",
+        "pytest-xdist; extra == \"dev\"",
+        "pylint>=2.6.0; extra == \"dev\"",
+        "pyink; extra == \"dev\""
+      ],
+      "license": "Apache-2.0",
+      "license_classifiers": [],
+      "license_files": [
+        "ml_dtypes-0.6.0.dist-info/licenses/",
+        "ml_dtypes-0.6.0.dist-info/licenses/LICENSE",
+        "ml_dtypes-0.6.0.dist-info/licenses/LICENSE.eigen"
+      ]
+    },
+    {
+      "name": "mpmath",
+      "version": "1.3.0",
+      "filename": "mpmath-1.3.0-py3-none-any.whl",
+      "sha256": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c",
+      "size": 536198,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/43/e3/7d92a15f894aa0c9c4b49b8ee9ac9850d6e63b03c9c32c0367a13ae62209/mpmath-1.3.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": "",
+      "requires_dist": [
+        "pytest (>=4.6) ; extra == 'develop'",
+        "pycodestyle ; extra == 'develop'",
+        "pytest-cov ; extra == 'develop'",
+        "codecov ; extra == 'develop'",
+        "wheel ; extra == 'develop'",
+        "sphinx ; extra == 'docs'",
+        "gmpy2 (>=2.1.0a4) ; (platform_python_implementation != \"PyPy\") and extra == 'gmpy'",
+        "pytest (>=4.6) ; extra == 'tests'"
+      ],
+      "license": "BSD",
+      "license_classifiers": [
+        "BSD License"
+      ],
+      "license_files": [
+        "mpmath-1.3.0.dist-info/LICENSE"
+      ]
+    },
+    {
+      "name": "msgpack",
+      "version": "1.2.4",
+      "filename": "msgpack-1.2.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "c4d5bbdbea8f5669b3a734d6c226772804fb120848f99cbe63a0ddee63b049c9",
+      "size": 475652,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/1e/d9/f59bd841fc2fd2b74dc50ce85860a6a25f58e588dd48946aeaf2862cf990/msgpack-1.2.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_17_x86_64",
+        "cp312-cp312-manylinux2014_x86_64",
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [],
+      "license": "Apache-2.0",
+      "license_classifiers": [],
+      "license_files": [
+        "msgpack-1.2.4.dist-info/licenses/",
+        "msgpack-1.2.4.dist-info/licenses/COPYING"
+      ]
+    },
+    {
+      "name": "narwhals",
+      "version": "2.28.0",
+      "filename": "narwhals-2.28.0-py3-none-any.whl",
+      "sha256": "1f69d6385ec30e2fa6e1fdeb37c562ecabd0f713f6f3e3b58a668c5c9df9567f",
+      "size": 490591,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/cf/82/8ef9c7e0f50493307a49c09cfa7f00c5a778b6d1921f7b2dabe1d3a5809e/narwhals-2.28.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "cudf-cu12>=24.10.0 ; sys_platform == 'linux' and extra == 'cudf'",
+        "dask[dataframe]>=2024.8 ; extra == 'dask'",
+        "duckdb>=1.1 ; extra == 'duckdb'",
+        "ibis-framework>=6.0.0 ; extra == 'ibis'",
+        "packaging>=21.3 ; extra == 'ibis'",
+        "pyarrow-hotfix>=0.7 ; extra == 'ibis'",
+        "modin>=0.22.0 ; extra == 'modin'",
+        "pandas>=1.3.4 ; extra == 'pandas'",
+        "polars>=0.20.4 ; extra == 'polars'",
+        "pyarrow>=13.0.0 ; extra == 'pyarrow'",
+        "pyspark>=3.5.0 ; extra == 'pyspark'",
+        "pyspark[connect]>=3.5.0 ; extra == 'pyspark-connect'",
+        "narwhals[duckdb] ; extra == 'sql'",
+        "sqlparse>=0.5.5 ; extra == 'sql'",
+        "sqlframe>=3.22.0,!=3.39.3 ; extra == 'sqlframe'"
+      ],
+      "license": "MIT",
+      "license_classifiers": [],
+      "license_files": [
+        "narwhals-2.28.0.dist-info/licenses/",
+        "narwhals-2.28.0.dist-info/licenses/LICENSE.md"
+      ]
+    },
+    {
+      "name": "networkx",
+      "version": "3.7",
+      "filename": "networkx-3.7-py3-none-any.whl",
+      "sha256": "e3fd2c13a7814cee3746340d8d7f8598a67f16a58bf47fb7f8793fab6efca1b0",
+      "size": 2142205,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/7e/cd/fe58041e9011f307c490e3e17dd48cc516448f7c698a3f2d9d9d65d7e6a8/networkx-3.7-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": "!=3.14.1,>=3.12",
+      "requires_dist": [
+        "asv>=0.6.5; extra == \"benchmarking\"",
+        "py-rattler<0.22,>=0.21; extra == \"benchmarking\"",
+        "virtualenv; extra == \"benchmarking\"",
+        "numpy>=2.2; extra == \"default\"",
+        "scipy>=1.15; extra == \"default\"",
+        "matplotlib>=3.10; extra == \"default\"",
+        "pandas>=2.3; extra == \"default\"",
+        "pre-commit>=4.1; extra == \"developer\"",
+        "mypy>=1.15; extra == \"developer\"",
+        "sphinx>=8.0; extra == \"doc\"",
+        "pydata-sphinx-theme>=0.16; extra == \"doc\"",
+        "sphinx-gallery>=0.18; extra == \"doc\"",
+        "numpydoc>=1.8.0; extra == \"doc\"",
+        "pillow>=10; extra == \"doc\"",
+        "texext>=0.6.7; extra == \"doc\"",
+        "myst-nb>=1.1; extra == \"doc\"",
+        "intersphinx-registry; extra == \"doc\"",
+        "osmnx>=2.0.0; extra == \"example\"",
+        "momepy>=0.7.2; extra == \"example\"",
+        "contextily>=1.6; extra == \"example\"",
+        "seaborn>=0.13; extra == \"example\"",
+        "cairocffi>=1.7; extra == \"example\"",
+        "igraph>=0.11; extra == \"example\"",
+        "scikit-learn>=1.6; extra == \"example\"",
+        "iplotx>=0.9.0; extra == \"example\"",
+        "hiveplotlib>=0.28; extra == \"example\"",
+        "lxml>=4.6; extra == \"extra\"",
+        "pygraphviz>=2.0; extra == \"extra\"",
+        "pydot>=3.0.1; extra == \"extra\"",
+        "sympy>=1.10; extra == \"extra\"",
+        "build>=0.10; extra == \"release\"",
+        "twine>=4.0; extra == \"release\"",
+        "wheel>=0.40; extra == \"release\"",
+        "changelist==0.5; extra == \"release\"",
+        "pytest>=7.2; extra == \"test\"",
+        "pytest-cov>=4.0; extra == \"test\"",
+        "pytest-xdist>=3.0; extra == \"test\"",
+        "pytest-mpl; extra == \"test-extras\"",
+        "pytest-randomly; extra == \"test-extras\""
+      ],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "networkx-3.7.dist-info/licenses/LICENSE.txt"
+      ]
+    },
+    {
+      "name": "numba",
+      "version": "0.65.1",
+      "filename": "numba-0.65.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "sha256": "52bc6f3ceb8fcaff9b2ae26b4c6b1e9fee39db8d355534c0fe4f39a901246b84",
+      "size": 3802467,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/69/47/a415af0283e4db0398104c6d1c11c9861a98dc67a7aa442a7769ed5d6196/numba-0.65.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_17_x86_64",
+        "cp312-cp312-manylinux2014_x86_64"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "llvmlite<0.48,>=0.47.0dev0",
+        "numpy>=1.22",
+        "numpy<2.5,>=1.22"
+      ],
+      "license": "BSD",
+      "license_classifiers": [
+        "BSD License"
+      ],
+      "license_files": [
+        "numba-0.65.1.dist-info/licenses/LICENSE",
+        "numba-0.65.1.dist-info/licenses/LICENSES.third-party"
+      ]
+    },
+    {
+      "name": "numpy",
+      "version": "2.4.6",
+      "filename": "numpy-2.4.6-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "90f9849678c75fe7afa2d348ac842c168b0a4d3d61919687216dfc547976d853",
+      "size": 16645538,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/99/60/14115e6364fa676c5397c2ad3004e527e9aa487abf5d0706ec81bbd08529/numpy-2.4.6-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_27_x86_64",
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.11",
+      "requires_dist": [],
+      "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "license_classifiers": [],
+      "license_files": [
+        "numpy-2.4.6.dist-info/licenses/",
+        "numpy-2.4.6.dist-info/licenses/LICENSE.txt",
+        "numpy-2.4.6.dist-info/licenses/numpy/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/include/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/include/numpy/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/include/numpy/libdivide/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/common/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/common/pythoncapi-compat/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/common/pythoncapi-compat/COPYING",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/highway/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/highway/LICENSE",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/multiarray/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/multiarray/dragon4_LICENSE.txt",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/npysort/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/npysort/x86-simd-sort/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/npysort/x86-simd-sort/LICENSE.md",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/umath/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/umath/svml/",
+        "numpy-2.4.6.dist-info/licenses/numpy/_core/src/umath/svml/LICENSE",
+        "numpy-2.4.6.dist-info/licenses/numpy/fft/",
+        "numpy-2.4.6.dist-info/licenses/numpy/fft/pocketfft/",
+        "numpy-2.4.6.dist-info/licenses/numpy/fft/pocketfft/LICENSE.md",
+        "numpy-2.4.6.dist-info/licenses/numpy/linalg/",
+        "numpy-2.4.6.dist-info/licenses/numpy/linalg/lapack_lite/",
+        "numpy-2.4.6.dist-info/licenses/numpy/linalg/lapack_lite/LICENSE.txt",
+        "numpy-2.4.6.dist-info/licenses/numpy/ma/",
+        "numpy-2.4.6.dist-info/licenses/numpy/ma/LICENSE",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/LICENSE.md",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/distributions/",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/distributions/LICENSE.md",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/mt19937/",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/mt19937/LICENSE.md",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/pcg64/",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/pcg64/LICENSE.md",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/philox/",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/philox/LICENSE.md",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/sfc64/",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/sfc64/LICENSE.md",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/splitmix64/",
+        "numpy-2.4.6.dist-info/licenses/numpy/random/src/splitmix64/LICENSE.md"
+      ]
+    },
+    {
+      "name": "onnx-weekly",
+      "version": "1.24.0.dev20261102",
+      "filename": "onnx_weekly-1.24.0.dev20261102-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "491275b53630f99a951b5b698f26990b0c4c53037a5b9bc425a7d99102394a4a",
+      "size": 8904482,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/e9/76/781b3047e6e862ee302d9b08a5ff83ec2684dd020a3150540ca1553f9eb1/onnx_weekly-1.24.0.dev20261102-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-abi3-manylinux_2_27_x86_64",
+        "cp312-abi3-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.11",
+      "requires_dist": [
+        "numpy>=1.26",
+        "protobuf>=6.31.1",
+        "ml_dtypes>=0.5.4",
+        "Pillow>=12.2.0; extra == \"reference\""
+      ],
+      "license": "Apache-2.0",
+      "license_classifiers": [],
+      "license_files": [
+        "onnx_weekly-1.24.0.dev20261102.dist-info/licenses/",
+        "onnx_weekly-1.24.0.dev20261102.dist-info/licenses/LICENSE",
+        "onnx_weekly-1.24.0.dev20261102.dist-info/licenses/NOTICE"
+      ]
+    },
+    {
+      "name": "onnx",
+      "version": "1.21.0",
+      "filename": "onnx-1.21.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "a9261bd580fb8548c9c37b3c6750387eb8f21ea43c63880d37b2c622e1684285",
+      "size": 17613697,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/a7/00/4823f06357892d1e60d6f34e7299d2ba4ed2108c487cc394f7ce85a3ff14/onnx-1.21.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-abi3-manylinux_2_27_x86_64",
+        "cp312-abi3-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "numpy>=1.23.2",
+        "protobuf>=4.25.1",
+        "typing_extensions>=4.7.1",
+        "ml_dtypes>=0.5.0; platform_machine != \"s390x\"",
+        "ml_dtypes>=0.5.4; platform_machine == \"s390x\"",
+        "Pillow; extra == \"reference\""
+      ],
+      "license": "Apache-2.0",
+      "license_classifiers": [],
+      "license_files": [
+        "onnx-1.21.0.dist-info/licenses/",
+        "onnx-1.21.0.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "onnx2torch",
+      "version": "1.5.15",
+      "filename": "onnx2torch-1.5.15-py3-none-any.whl",
+      "sha256": "123258e0f147e07b259cf845c8113c5634b8260e52c5fb26b7d507226732d9e5",
+      "size": 80965,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/84/80/cec13a9bcb7525cbd941958037ccb5cd499e8466915130f3d2ee3772d34f/onnx2torch-1.5.15-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.6",
+      "requires_dist": [
+        "numpy >=1.16.4",
+        "onnx >=1.9.0",
+        "torch >=1.8.0",
+        "torchvision >=0.9.0",
+        "pytest ; extra == 'dev'",
+        "black ; extra == 'dev'",
+        "isort ; extra == 'dev'",
+        "pylint ; extra == 'dev'",
+        "pre-commit ; extra == 'dev'",
+        "onnxruntime ; extra == 'dev'",
+        "Pillow ; extra == 'dev'",
+        "requests ; extra == 'dev'",
+        "googledrivedownloader ; extra == 'dev'"
+      ],
+      "license": "Apache Software License (Apache License)",
+      "license_classifiers": [
+        "Apache Software License"
+      ],
+      "license_files": [
+        "onnx2torch-1.5.15.dist-info/LICENSE"
+      ]
+    },
+    {
+      "name": "onnx2torch-py313",
+      "version": "1.6.0",
+      "filename": "onnx2torch_py313-1.6.0-py3-none-any.whl",
+      "sha256": "03b1cc771f93941cc221635547e97dd7823dffc05f052057e51c6a45fbacba70",
+      "size": 81251,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/f3/14/bb49cfba5020c99ec37efcf64bb79f9793c1068992feffa81bcad9e10c92/onnx2torch_py313-1.6.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.6",
+      "requires_dist": [
+        "numpy>=1.16.4",
+        "onnx-weekly",
+        "torch>=1.8.0",
+        "torchvision>=0.9.0",
+        "pytest; extra == \"dev\"",
+        "black; extra == \"dev\"",
+        "isort; extra == \"dev\"",
+        "pylint; extra == \"dev\"",
+        "pre-commit; extra == \"dev\"",
+        "onnxruntime; extra == \"dev\"",
+        "Pillow; extra == \"dev\"",
+        "requests; extra == \"dev\"",
+        "googledrivedownloader; extra == \"dev\""
+      ],
+      "license": "Apache Software License (Apache License)",
+      "license_classifiers": [
+        "Apache Software License"
+      ],
+      "license_files": [
+        "onnx2torch_py313-1.6.0.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "onnxruntime",
+      "version": "1.26.0",
+      "filename": "onnxruntime-1.26.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "9b6dd70599005bd1bf29779f04a91978b92b5e719c11a20068a8f8e535f725b6",
+      "size": 18185439,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/7c/43/2a4e04f8dbeffad19bbcced4bcd4289bf478921518437404d6b92bdf213b/onnxruntime-1.26.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_27_x86_64",
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.11",
+      "requires_dist": [
+        "flatbuffers",
+        "numpy>=1.21.6",
+        "packaging",
+        "protobuf",
+        "sympy; extra == \"symbolic\"",
+        "ml_dtypes; extra == \"quantization\""
+      ],
+      "license": "MIT License",
+      "license_classifiers": [
+        "MIT License"
+      ],
+      "license_files": []
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "filename": "packaging-26.3-py3-none-any.whl",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "size": 129956,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [],
+      "license": "Apache-2.0 OR BSD-2-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "packaging-26.3.dist-info/licenses/LICENSE",
+        "packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+        "packaging-26.3.dist-info/licenses/LICENSE.BSD"
+      ]
+    },
+    {
+      "name": "pillow",
+      "version": "13.0.0",
+      "filename": "pillow-13.0.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "42d63be3af4f9b951b199b0a9d23365d37ab14687e6d77b74940432c8515c4ca",
+      "size": 7144542,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/e6/99/fdf65cc539e266ab93546c261bdf98411fe165c6e4e13f9dbf597097192b/pillow-13.0.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_27_x86_64",
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.11",
+      "requires_dist": [
+        "furo; extra == \"docs\"",
+        "olefile; extra == \"docs\"",
+        "sphinx>=8.2; extra == \"docs\"",
+        "sphinx-autobuild; extra == \"docs\"",
+        "sphinx-copybutton; extra == \"docs\"",
+        "sphinx-inline-tabs; extra == \"docs\"",
+        "sphinxext-opengraph; extra == \"docs\"",
+        "olefile; extra == \"fpx\"",
+        "olefile; extra == \"mic\"",
+        "arro3-compute; extra == \"test-arrow\"",
+        "arro3-core; extra == \"test-arrow\"",
+        "nanoarrow; extra == \"test-arrow\"",
+        "pyarrow; extra == \"test-arrow\"",
+        "coverage>=7.4.2; extra == \"tests\"",
+        "defusedxml; extra == \"tests\"",
+        "markdown2; extra == \"tests\"",
+        "olefile; extra == \"tests\"",
+        "packaging; extra == \"tests\"",
+        "psutil; (sys_platform == \"linux\" or sys_platform == \"darwin\") and extra == \"tests\"",
+        "pytest; extra == \"tests\"",
+        "pytest-cov; extra == \"tests\"",
+        "pytest-timeout; extra == \"tests\"",
+        "pytest-xdist; extra == \"tests\"",
+        "setuptools; extra == \"tests\"",
+        "trove-classifiers>=2024.10.12; extra == \"tests\"",
+        "defusedxml; extra == \"xmp\""
+      ],
+      "license": "MIT-CMU",
+      "license_classifiers": [],
+      "license_files": [
+        "pillow-13.0.0.dist-info/licenses/",
+        "pillow-13.0.0.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "platformdirs",
+      "version": "4.14.5",
+      "filename": "platformdirs-4.14.5-py3-none-any.whl",
+      "sha256": "8e778c6fa421516f4d3369449f8df3b0e1b72c0e0005fe88e3ec772d0a14e750",
+      "size": 35402,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/7c/ae/ecbbbfd0e4343a6a521d49b3c8656fb4643dee2a4f6eaf941cf3280391a8/platformdirs-4.14.5-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.11",
+      "requires_dist": [],
+      "license": "MIT",
+      "license_classifiers": [],
+      "license_files": [
+        "platformdirs-4.14.5.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "pooch",
+      "version": "1.9.0",
+      "filename": "pooch-1.9.0-py3-none-any.whl",
+      "sha256": "f265597baa9f760d25ceb29d0beb8186c243d6607b0f60b83ecf14078dbc703b",
+      "size": 67175,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/2a/2d/d4bf65e47cea8ff2c794a600c4fd1273a7902f268757c531e0ee9f18aa58/pooch-1.9.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [
+        "platformdirs>=2.5.0",
+        "packaging>=20.0",
+        "requests>=2.19.0",
+        "tqdm<5.0.0,>=4.41.0; extra == \"progress\"",
+        "paramiko>=2.7.0; extra == \"sftp\"",
+        "xxhash>=1.4.3; extra == \"xxhash\"",
+        "pytest-httpserver; extra == \"test\"",
+        "pytest-localftpserver; extra == \"test\""
+      ],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "pooch-1.9.0.dist-info/licenses/AUTHORS.md",
+        "pooch-1.9.0.dist-info/licenses/LICENSE.txt"
+      ]
+    },
+    {
+      "name": "protobuf",
+      "version": "7.36.2",
+      "filename": "protobuf-7.36.2-cp310-abi3-manylinux2014_x86_64.whl",
+      "sha256": "89f23aa53c24553a2416fd4fd1ec06f74fa42b14b546d8883128813f775bbfd2",
+      "size": 343223,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/db/f3/3996583dd2906297a637af12114deddf7658af6e683fedb83be061983fb5/protobuf-7.36.2-cp310-abi3-manylinux2014_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp310-abi3-manylinux2014_x86_64"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [],
+      "license": "3-Clause BSD License",
+      "license_classifiers": [],
+      "license_files": [
+        "protobuf-7.36.2.dist-info/LICENSE"
+      ]
+    },
+    {
+      "name": "pycparser",
+      "version": "3.12",
+      "filename": "pycparser-3.12-py3-none-any.whl",
+      "sha256": "a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e",
+      "size": 62600,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/b6/ae/315bbeee126a769cbde43cf4908acb4b40408d8bf8bbf334dd7368d8dadf/pycparser-3.12-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.11",
+      "requires_dist": [],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "pycparser-3.12.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "pydub",
+      "version": "0.25.1",
+      "filename": "pydub-0.25.1-py2.py3-none-any.whl",
+      "sha256": "65617e33033874b59d87db603aa1ed450633288aefead953b30bded59cb599a6",
+      "size": 32327,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/a6/53/d78dc063216e62fc55f6b2eebb447f6a4b0a59f55c8406376f76bf959b08/pydub-0.25.1-py2.py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py2-none-any",
+        "py3-none-any"
+      ],
+      "requires_python": "",
+      "requires_dist": [],
+      "license": "MIT",
+      "license_classifiers": [
+        "MIT License"
+      ],
+      "license_files": [
+        "pydub-0.25.1.dist-info/LICENSE"
+      ]
+    },
+    {
+      "name": "PyYAML",
+      "version": "6.0.3",
+      "filename": "pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc",
+      "size": 807870,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/8b/9d/b3589d3877982d4f2329302ef98a8026e7f4443c765c46cfecc8858c6b4b/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_17_x86_64",
+        "cp312-cp312-manylinux2014_x86_64",
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.8",
+      "requires_dist": [],
+      "license": "MIT",
+      "license_classifiers": [
+        "MIT License"
+      ],
+      "license_files": [
+        "pyyaml-6.0.3.dist-info/licenses/",
+        "pyyaml-6.0.3.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "requests",
+      "version": "2.34.2",
+      "filename": "requests-2.34.2-py3-none-any.whl",
+      "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+      "size": 73075,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "charset_normalizer<4,>=2",
+        "idna<4,>=2.5",
+        "urllib3<3,>=1.26",
+        "certifi>=2023.5.7",
+        "PySocks!=1.5.7,>=1.5.6; extra == \"socks\"",
+        "chardet<8,>=3.0.2; extra == \"use-chardet-on-py3\""
+      ],
+      "license": "Apache-2.0",
+      "license_classifiers": [
+        "Apache Software License"
+      ],
+      "license_files": [
+        "requests-2.34.2.dist-info/licenses/LICENSE",
+        "requests-2.34.2.dist-info/licenses/NOTICE"
+      ]
+    },
+    {
+      "name": "resampy",
+      "version": "0.4.3",
+      "filename": "resampy-0.4.3-py3-none-any.whl",
+      "sha256": "ad2ed64516b140a122d96704e32bc0f92b23f45419e8b8f478e5a05f83edcebd",
+      "size": 3076529,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/4d/b9/3b00ac340a1aab3389ebcc52c779914a44aadf7b0cb7a3bf053195735607/resampy-0.4.3-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": "",
+      "requires_dist": [
+        "numpy >=1.17",
+        "numba >=0.53",
+        "importlib-resources ; python_version < \"3.9\"",
+        "optuna >=2.10.0 ; extra == 'design'",
+        "numpydoc ; extra == 'docs'",
+        "sphinx !=1.3.1 ; extra == 'docs'",
+        "pytest <8 ; extra == 'tests'",
+        "pytest-cov ; extra == 'tests'",
+        "scipy >=1.1 ; extra == 'tests'"
+      ],
+      "license": "ISC",
+      "license_classifiers": [
+        "ISC License (ISCL)"
+      ],
+      "license_files": [
+        "resampy-0.4.3.dist-info/LICENSE.md"
+      ]
+    },
+    {
+      "name": "rotary-embedding-torch",
+      "version": "0.6.5",
+      "filename": "rotary_embedding_torch-0.6.5-py3-none-any.whl",
+      "sha256": "96c0b27b688820cbde652dd7869cf035b4f653eee53ddaf78133cf7cdd4aab19",
+      "size": 5454,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/10/1a/d78ef65d18ed5b9b8d04e68c69ef393adecc36f189186e250089ed432d7d/rotary_embedding_torch-0.6.5-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": "",
+      "requires_dist": [
+        "einops >=0.7",
+        "torch >=2.0"
+      ],
+      "license": "MIT",
+      "license_classifiers": [
+        "MIT License"
+      ],
+      "license_files": [
+        "rotary_embedding_torch-0.6.5.dist-info/LICENSE"
+      ]
+    },
+    {
+      "name": "samplerate",
+      "version": "0.1.0",
+      "filename": "samplerate-0.1.0-py2.py3-none-any.whl",
+      "sha256": "f55e5c9d0a8ba3c82a53b7d9c34a2d145439c61166a7f310efaec88f2781b8f8",
+      "size": 4028658,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/0c/3c/4c1aa376332d18e708dcc3289e4dbdd2c508bcac1b8eb1b35b73092fa00f/samplerate-0.1.0-py2.py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py2-none-any",
+        "py3-none-any"
+      ],
+      "requires_python": "",
+      "requires_dist": [
+        "cffi (>=1.0.0)",
+        "numpy"
+      ],
+      "license": "MIT",
+      "license_classifiers": [
+        "MIT License"
+      ],
+      "license_files": []
+    },
+    {
+      "name": "scikit-learn",
+      "version": "1.9.1",
+      "filename": "scikit_learn-1.9.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "e5d7b18a5b9dca241a74695f3275fa4c895a9dadc72b3d8df5fa9d1083c9b83e",
+      "size": 9166043,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/8e/57/a50162f3d29feb979ab6347c6debda506dfb525bcff3c50dd17606651c7e/scikit_learn-1.9.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_27_x86_64",
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.11",
+      "requires_dist": [
+        "numpy>=1.24.1",
+        "scipy>=1.10.0",
+        "joblib>=1.4.0",
+        "narwhals>=2.0.1",
+        "threadpoolctl>=3.5.0"
+      ],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "scikit_learn-1.9.1.dist-info/licenses/",
+        "scikit_learn-1.9.1.dist-info/licenses/COPYING"
+      ]
+    },
+    {
+      "name": "scipy",
+      "version": "1.17.1",
+      "filename": "scipy-1.17.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "02ae3b274fde71c5e92ac4d54bc06c42d80e399fec704383dcd99b301df37458",
+      "size": 35235890,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/01/8e/1e35281b8ab6d5d72ebe9911edcdffa3f36b04ed9d51dec6dd140396e220/scipy-1.17.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_27_x86_64",
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.11",
+      "requires_dist": [
+        "numpy<2.7,>=1.26.4",
+        "pytest>=8.0.0; extra == \"test\"",
+        "pytest-cov; extra == \"test\"",
+        "pytest-timeout; extra == \"test\"",
+        "pytest-xdist; extra == \"test\"",
+        "asv; extra == \"test\"",
+        "mpmath; extra == \"test\"",
+        "gmpy2; extra == \"test\"",
+        "threadpoolctl; extra == \"test\"",
+        "scikit-umfpack; extra == \"test\"",
+        "pooch; extra == \"test\"",
+        "hypothesis>=6.30; extra == \"test\"",
+        "array-api-strict>=2.3.1; extra == \"test\"",
+        "Cython; extra == \"test\"",
+        "meson; extra == \"test\"",
+        "ninja; sys_platform != \"emscripten\" and extra == \"test\"",
+        "sphinx<8.2.0,>=5.0.0; extra == \"doc\"",
+        "intersphinx_registry; extra == \"doc\"",
+        "pydata-sphinx-theme>=0.15.2; extra == \"doc\"",
+        "sphinx-copybutton; extra == \"doc\"",
+        "sphinx-design>=0.4.0; extra == \"doc\"",
+        "matplotlib>=3.5; extra == \"doc\"",
+        "numpydoc; extra == \"doc\"",
+        "jupytext; extra == \"doc\"",
+        "myst-nb>=1.2.0; extra == \"doc\"",
+        "pooch; extra == \"doc\"",
+        "jupyterlite-sphinx>=0.19.1; extra == \"doc\"",
+        "jupyterlite-pyodide-kernel; extra == \"doc\"",
+        "linkify-it-py; extra == \"doc\"",
+        "tabulate; extra == \"doc\"",
+        "click<8.3.0; extra == \"dev\"",
+        "spin; extra == \"dev\"",
+        "mypy==1.10.0; extra == \"dev\"",
+        "typing_extensions; extra == \"dev\"",
+        "types-psutil; extra == \"dev\"",
+        "pycodestyle; extra == \"dev\"",
+        "ruff>=0.12.0; extra == \"dev\"",
+        "cython-lint>=0.12.2; extra == \"dev\""
+      ],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [
+        "BSD License"
+      ],
+      "license_files": [
+        "scipy-1.17.1.dist-info/LICENSE.txt"
+      ]
+    },
+    {
+      "name": "setuptools",
+      "version": "81.0.0",
+      "filename": "setuptools-81.0.0-py3-none-any.whl",
+      "sha256": "fdd925d5c5d9f62e4b74b30d6dd7828ce236fd6ed998a08d81de62ce5a6310d6",
+      "size": 1062021,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/e1/e3/c164c88b2e5ce7b24d667b9bd83589cf4f3520d97cad01534cd3c4f55fdb/setuptools-81.0.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any",
+        "py3-none-any",
+        "py3-none-any",
+        "py3-none-any",
+        "py3-none-any",
+        "py3-none-any",
+        "py3-none-any",
+        "py3-none-any",
+        "py3-none-any",
+        "py3-none-any",
+        "py3-none-any",
+        "py3-none-any",
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [
+        "pytest!=8.1.*,>=6; extra == \"test\"",
+        "virtualenv>=13.0.0; extra == \"test\"",
+        "wheel>=0.44.0; extra == \"test\"",
+        "pip>=19.1; extra == \"test\"",
+        "packaging>=24.2; extra == \"test\"",
+        "jaraco.envs>=2.2; extra == \"test\"",
+        "pytest-xdist>=3; extra == \"test\"",
+        "jaraco.path>=3.7.2; extra == \"test\"",
+        "build[virtualenv]>=1.0.3; extra == \"test\"",
+        "filelock>=3.4.0; extra == \"test\"",
+        "ini2toml[lite]>=0.14; extra == \"test\"",
+        "tomli-w>=1.0.0; extra == \"test\"",
+        "pytest-timeout; extra == \"test\"",
+        "pytest-perf; sys_platform != \"cygwin\" and extra == \"test\"",
+        "jaraco.develop>=7.21; (python_version >= \"3.9\" and sys_platform != \"cygwin\") and extra == \"test\"",
+        "pytest-home>=0.5; extra == \"test\"",
+        "pytest-subprocess; extra == \"test\"",
+        "pyproject-hooks!=1.1; extra == \"test\"",
+        "jaraco.test>=5.5; extra == \"test\"",
+        "sphinx>=3.5; extra == \"doc\"",
+        "jaraco.packaging>=9.3; extra == \"doc\"",
+        "rst.linker>=1.9; extra == \"doc\"",
+        "furo; extra == \"doc\"",
+        "sphinx-lint; extra == \"doc\"",
+        "jaraco.tidelift>=1.4; extra == \"doc\"",
+        "pygments-github-lexers==0.0.5; extra == \"doc\"",
+        "sphinx-favicon; extra == \"doc\"",
+        "sphinx-inline-tabs; extra == \"doc\"",
+        "sphinx-reredirects; extra == \"doc\"",
+        "sphinxcontrib-towncrier; extra == \"doc\"",
+        "sphinx-notfound-page<2,>=1; extra == \"doc\"",
+        "pyproject-hooks!=1.1; extra == \"doc\"",
+        "towncrier<24.7; extra == \"doc\"",
+        "packaging>=24.2; extra == \"core\"",
+        "more_itertools>=8.8; extra == \"core\"",
+        "jaraco.text>=3.7; extra == \"core\"",
+        "importlib_metadata>=6; python_version < \"3.10\" and extra == \"core\"",
+        "tomli>=2.0.1; python_version < \"3.11\" and extra == \"core\"",
+        "wheel>=0.43.0; extra == \"core\"",
+        "platformdirs>=4.2.2; extra == \"core\"",
+        "jaraco.functools>=4; extra == \"core\"",
+        "more_itertools; extra == \"core\"",
+        "pytest-checkdocs>=2.4; extra == \"check\"",
+        "pytest-ruff>=0.2.1; sys_platform != \"cygwin\" and extra == \"check\"",
+        "ruff>=0.13.0; sys_platform != \"cygwin\" and extra == \"check\"",
+        "pytest-cov; extra == \"cover\"",
+        "pytest-enabler>=2.2; extra == \"enabler\"",
+        "pytest-mypy; extra == \"type\"",
+        "mypy==1.18.*; extra == \"type\"",
+        "importlib_metadata>=7.0.2; python_version < \"3.10\" and extra == \"type\"",
+        "jaraco.develop>=7.21; sys_platform != \"cygwin\" and extra == \"type\""
+      ],
+      "license": "MIT",
+      "license_classifiers": [],
+      "license_files": [
+        "setuptools/_vendor/importlib_metadata-8.7.1.dist-info/licenses/LICENSE",
+        "setuptools/_vendor/jaraco_context-6.1.0.dist-info/licenses/LICENSE",
+        "setuptools/_vendor/jaraco_functools-4.4.0.dist-info/licenses/LICENSE",
+        "setuptools/_vendor/more_itertools-10.8.0.dist-info/licenses/LICENSE",
+        "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE",
+        "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.APACHE",
+        "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.BSD",
+        "setuptools/_vendor/platformdirs-4.4.0.dist-info/licenses/LICENSE",
+        "setuptools/_vendor/tomli-2.4.0.dist-info/licenses/LICENSE",
+        "setuptools/_vendor/wheel-0.46.3.dist-info/licenses/LICENSE.txt",
+        "setuptools/_vendor/zipp-3.23.0.dist-info/licenses/LICENSE",
+        "setuptools-81.0.0.dist-info/licenses/LICENSE",
+        "setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE",
+        "setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE",
+        "setuptools/_vendor/jaraco.text-4.0.0.dist-info/LICENSE"
+      ]
+    },
+    {
+      "name": "six",
+      "version": "1.17.0",
+      "filename": "six-1.17.0-py2.py3-none-any.whl",
+      "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+      "size": 11050,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py2-none-any",
+        "py3-none-any"
+      ],
+      "requires_python": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*",
+      "requires_dist": [],
+      "license": "MIT",
+      "license_classifiers": [
+        "MIT License"
+      ],
+      "license_files": [
+        "six-1.17.0.dist-info/LICENSE"
+      ]
+    },
+    {
+      "name": "soundfile",
+      "version": "0.14.0",
+      "filename": "soundfile-0.14.0-py2.py3-none-manylinux_2_28_x86_64.whl",
+      "sha256": "1e38bac1853412871318e82a1ba69a8be677619b56025bbfcccdb41b6cafe82d",
+      "size": 1315963,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/7b/a2/70fd4432b924684c372df8b0a45708c36c057ef3596c9eb53e0a806b980b/soundfile-0.14.0-py2.py3-none-manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py2-none-manylinux_2_28_x86_64",
+        "py3-none-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "cffi >=1.0",
+        "numpy",
+        "typing-extensions"
+      ],
+      "license": "BSD 3-Clause License",
+      "license_classifiers": [
+        "BSD License"
+      ],
+      "license_files": [
+        "soundfile-0.14.0.dist-info/LICENSE"
+      ]
+    },
+    {
+      "name": "soxr",
+      "version": "1.1.0",
+      "filename": "soxr-1.1.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "3b033078e86f3c4a658e5697fac8995764fad9e799563616b630136b613167f1",
+      "size": 240413,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/5c/f1/0e55195893228609c9a08c3b13b7a83a46c3a992cd00d3304f0f320cfb07/soxr-1.1.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "cp312-abi3-manylinux_2_27_x86_64",
+        "cp312-abi3-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [
+        "numpy",
+        "sphinx; extra == \"docs\"",
+        "sphinx-book-theme; extra == \"docs\"",
+        "myst-parser; extra == \"docs\"",
+        "linkify-it-py; extra == \"docs\"",
+        "pytest; extra == \"test\""
+      ],
+      "license": "LGPL-2.1-or-later",
+      "license_classifiers": [],
+      "license_files": [
+        "soxr-1.1.0.dist-info/licenses/",
+        "soxr-1.1.0.dist-info/licenses/COPYING.LGPL",
+        "soxr-1.1.0.dist-info/licenses/LICENSE-PFFFT.txt",
+        "soxr-1.1.0.dist-info/licenses/LICENSE-libsoxr.txt",
+        "soxr-1.1.0.dist-info/licenses/LICENSE.txt"
+      ]
+    },
+    {
+      "name": "sympy",
+      "version": "1.14.0",
+      "filename": "sympy-1.14.0-py3-none-any.whl",
+      "sha256": "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5",
+      "size": 6299353,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [
+        "mpmath<1.4,>=1.1.0",
+        "pytest>=7.1.0; extra == \"dev\"",
+        "hypothesis>=6.70.0; extra == \"dev\""
+      ],
+      "license": "BSD",
+      "license_classifiers": [
+        "BSD License"
+      ],
+      "license_files": [
+        "sympy-1.14.0.dist-info/licenses/AUTHORS",
+        "sympy-1.14.0.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "threadpoolctl",
+      "version": "3.8.0",
+      "filename": "threadpoolctl-3.8.0-py3-none-any.whl",
+      "sha256": "f1b49c82704d50f13ffae019c727b0fa4f6791a58f48f06a09c45face1be66da",
+      "size": 32091,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/54/1b/831f2de4840a25db1dd7b1afea433ccafe6bb10aca07e13264f2079462d0/threadpoolctl-3.8.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "threadpoolctl-3.8.0.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "torch",
+      "version": "2.12.0+cpu",
+      "filename": "torch-2.12.0+cpu-cp312-cp312-manylinux_2_28_x86_64.whl",
+      "sha256": "5e3dc83725581fa38b7b2e45c58692e30b2a3cde19191af54b675ffcac3840a6",
+      "size": 192268791,
+      "source_kind": "https",
+      "url": "https://download.pytorch.org/whl/cpu/torch-2.12.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl",
+      "host": "download.pytorch.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "filelock",
+        "typing-extensions>=4.10.0",
+        "setuptools<82",
+        "sympy>=1.13.3",
+        "networkx>=2.5.1",
+        "jinja2",
+        "fsspec>=0.8.5",
+        "optree>=0.13.0; extra == \"optree\"",
+        "opt-einsum>=3.3; extra == \"opt-einsum\"",
+        "pyyaml; extra == \"pyyaml\""
+      ],
+      "license": "BSD-3-Clause",
+      "license_classifiers": [],
+      "license_files": [
+        "torch-2.12.0+cpu.dist-info/licenses/",
+        "torch-2.12.0+cpu.dist-info/licenses/LICENSE",
+        "torch-2.12.0+cpu.dist-info/licenses/NOTICE"
+      ]
+    },
+    {
+      "name": "torchvision",
+      "version": "0.27.0+cpu",
+      "filename": "torchvision-0.27.0+cpu-cp312-cp312-manylinux_2_28_x86_64.whl",
+      "sha256": "912a8b008d95fc9f8f8507e0663238aa01abfeb29f38e218116217560a1b6401",
+      "size": 1752868,
+      "source_kind": "https",
+      "url": "https://download.pytorch.org/whl/cpu/torchvision-0.27.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl",
+      "host": "download.pytorch.org",
+      "tags": [
+        "cp312-cp312-manylinux_2_28_x86_64"
+      ],
+      "requires_python": ">=3.10,!=3.14.1",
+      "requires_dist": [
+        "numpy",
+        "torch (==2.12.0)",
+        "pillow (!=8.3.*,>=5.3.0)",
+        "gdown (>=4.7.3) ; extra == 'gdown'",
+        "scipy ; extra == 'scipy'"
+      ],
+      "license": "BSD",
+      "license_classifiers": [],
+      "license_files": [
+        "torchvision-0.27.0+cpu.dist-info/LICENSE"
+      ]
+    },
+    {
+      "name": "tqdm",
+      "version": "4.67.3",
+      "filename": "tqdm-4.67.3-py3-none-any.whl",
+      "sha256": "ee1e4c0e59148062281c49d80b25b67771a127c85fc9676d3be5f243206826bf",
+      "size": 78374,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/16/e1/3079a9ff9b8e11b846c6ac5c8b5bfb7ff225eee721825310c91b3b50304f/tqdm-4.67.3-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.7",
+      "requires_dist": [
+        "colorama; platform_system == \"Windows\"",
+        "importlib_metadata; python_version < \"3.8\"",
+        "pytest>=6; extra == \"dev\"",
+        "pytest-cov; extra == \"dev\"",
+        "pytest-timeout; extra == \"dev\"",
+        "pytest-asyncio>=0.24; extra == \"dev\"",
+        "nbval; extra == \"dev\"",
+        "requests; extra == \"discord\"",
+        "slack-sdk; extra == \"slack\"",
+        "requests; extra == \"telegram\"",
+        "ipywidgets>=6; extra == \"notebook\""
+      ],
+      "license": "MPL-2.0 AND MIT",
+      "license_classifiers": [],
+      "license_files": [
+        "tqdm-4.67.3.dist-info/licenses/LICENCE"
+      ]
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.16.0",
+      "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "size": 45571,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.9",
+      "requires_dist": [],
+      "license": "PSF-2.0",
+      "license_classifiers": [],
+      "license_files": [
+        "typing_extensions-4.16.0.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "urllib3",
+      "version": "2.8.0",
+      "filename": "urllib3-2.8.0-py3-none-any.whl",
+      "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+      "size": 135717,
+      "source_kind": "https",
+      "url": "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl",
+      "host": "files.pythonhosted.org",
+      "tags": [
+        "py3-none-any"
+      ],
+      "requires_python": ">=3.10",
+      "requires_dist": [
+        "brotli>=1.2.0; (platform_python_implementation == 'CPython') and extra == 'brotli'",
+        "brotlicffi>=1.2.0.0; (platform_python_implementation != 'CPython') and extra == 'brotli'",
+        "h2<5,>=4; extra == 'h2'",
+        "pysocks!=1.5.7,<2.0,>=1.5.6; extra == 'socks'",
+        "backports-zstd>=1.0.0; (python_version < '3.14') and extra == 'zstd'"
+      ],
+      "license": "MIT",
+      "license_classifiers": [],
+      "license_files": [
+        "urllib3-2.8.0.dist-info/licenses/LICENSE.txt"
+      ]
+    }
+  ]
+}

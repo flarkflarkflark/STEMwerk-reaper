@@ -77,6 +77,13 @@ jobs:
       - name: Verify ReaPack payload sources are immutable
         run: python3 tools/release_gate.py --check
 
+      - name: Verify managed Python vendor pins for source revisions that ship them
+        run: |
+          if test -f scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/runtime-manifest.v1.tsv \
+              && test -f tools/check_managed_python_pins.py; then
+            python3 tools/check_managed_python_pins.py
+          fi
+
       - id: m
         name: Resolve BUILD vs PUBLICATION mode and validate the exact source commit
         shell: bash

@@ -1,0 +1,4 @@
+stemwerk-runtime-manifest/1
+linux-x86_64	python-3.12.16-20261026	https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz	34505639	ce4f6d0a6cfdb3bed6e44c2f9affd85943c76a42e25ad3a259002f31d6fb8a20
+darwin-arm64	python-3.12.16-20261026	https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-aarch64-apple-darwin-install_only_stripped.tar.gz	25035343	353d5f1b4fd2715e7053f12f068435d5bbad16b91e057006b5d01e0925709a7e
+win-x86_64	python-3.12.16-20261026	https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-pc-windows-msvc-install_only_stripped.tar.gz	22014416	1f2ab53880fc67ea323398c6388e05af28addc99a8e389209f08a51fdff4b149

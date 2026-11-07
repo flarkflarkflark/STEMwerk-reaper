@@ -11,15 +11,106 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  tests:
-    runs-on: ubuntu-latest
+  linux-managed-python-bootstrap:
+    name: Linux managed Python bootstrap
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install focused test dependency
+        run: python -m pip install pytest
+      - name: Obtain and verify the pinned Linux archive for deterministic fixtures
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/stemwerk-python-linux.tar.gz"
+          curl --fail --location --proto '=https' --proto-redir '=https' --max-redirs 5 --output "$archive" \
+            'https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz'
+          printf '%s  %s\n' 'ce4f6d0a6cfdb3bed6e44c2f9affd85943c76a42e25ad3a259002f31d6fb8a20' "$archive" | sha256sum -c -
+          test "$(wc -c < "$archive")" -eq 34505639
+          echo "STEMWERK_TEST_PINNED_PYTHON_ARCHIVE=$archive" >> "$GITHUB_ENV"
+      - name: Run Linux outer-bootstrap contract tests
+        run: python -m pytest -q --junitxml=linux-managed-python-bootstrap-junit.xml tests/test_linux_managed_bootstrap.py
+      - name: Require that the real GNU Wget hangup regression ran and passed
+        # pytest exits 0 when this test skips for a missing GNU Wget or openssl,
+        # so a skip must not look like a pass.
+        shell: python
+        run: |
+          import sys
+          import xml.etree.ElementTree as ET
+
+          report = "linux-managed-python-bootstrap-junit.xml"
+          name = "test_hangup_during_real_wget_download_is_a_contained_cancellation"
+          try:
+              root = ET.parse(report).getroot()
+          except (OSError, ET.ParseError) as exc:
+              sys.exit(f"{name}: cannot read JUnit report {report}: {exc}")
+          cases = [case for case in root.iter("testcase") if case.get("name") == name]
+          if len(cases) != 1:
+              sys.exit(f"{name}: expected exactly one testcase in {report}, found {len(cases)}")
+          outcomes = [
+              f"{child.tag}: {child.get('message', '')}"
+              for child in cases[0]
+              if child.tag in ("skipped", "error", "failure")
+          ]
+          if outcomes:
+              sys.exit(f"{name}: did not pass: {'; '.join(outcomes)}")
+          print(f"{name}: ran once and passed")
+      - name: Real entry-point smoke into a fresh runner-owned root
+        shell: bash
+        run: |
+          /bin/sh scripts/reaper/STEMwerk_Bootstrap_Linux.sh --managed-python-bootstrap \
+            --root "$RUNNER_TEMP/stemwerk-bootstrap-smoke" -- plan --module drum_kit > "$RUNNER_TEMP/stemwerk-bootstrap-plan.json"
+          python -c 'import json,os; p=os.environ["RUNNER_TEMP"]+"/stemwerk-bootstrap-plan.json"; assert json.load(open(p))["kind"] == "stemwerk_module_install_plan"'
+          /bin/sh scripts/reaper/STEMwerk_Bootstrap_Linux.sh --managed-python-bootstrap \
+            --root "$RUNNER_TEMP/stemwerk-bootstrap-smoke" -- plan --module drum_kit --scope s6_cpu > "$RUNNER_TEMP/stemwerk-bootstrap-s6-plan.json"
+          python -c 'import json,os; p=os.environ["RUNNER_TEMP"]+"/stemwerk-bootstrap-s6-plan.json"; d=json.load(open(p)); assert d["kind"] == "stemwerk_module_install_plan" and d["scope"] == "s6_cpu"'
+
+  tests:
+    # The 3.11 entry keeps the exact name `tests`, the required check on main;
+    # the 3.12 entry (managed runtime version, D2) is named `tests (3.12)`.
+    name: ${{ matrix.python-version == '3.11' && 'tests' || format('tests ({0})', matrix.python-version) }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
-          python-version: 3.11
+          python-version: ${{ matrix.python-version }}
+
+      - name: Show Python and OpenSSL versions
+        # This job is pinned to ubuntu-24.04 for its OpenSSL 3.0.x; the step
+        # fails if the runner's Python links another OpenSSL series.
+        env:
+          REQUIRED_OPENSSL_SERIES: "3.0"
+        shell: python
+        run: |
+          import os
+          import platform
+          import ssl
+          import sys
+
+          print("Python:", sys.version)
+          print("Platform:", platform.platform())
+          print("OpenSSL:", ssl.OPENSSL_VERSION)
+          required = os.environ.get("REQUIRED_OPENSSL_SERIES", "")
+          if required:
+              actual = "%d.%d" % ssl.OPENSSL_VERSION_INFO[:2]
+              if actual != required:
+                  sys.exit(
+                      f"expected OpenSSL {required}.x on this runner, found "
+                      f"{ssl.OPENSSL_VERSION}. The ubuntu-24.04 jobs keep "
+                      "OpenSSL 3.0.x coverage on purpose: socket races in "
+                      "asset acquisition surfaced only with it. Keep this "
+                      "runner on 3.0.x; observe newer OpenSSL in a separate "
+                      "matrix entry."
+                  )
 
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
@@ -32,7 +123,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          python -m pip install pytest pyyaml soundfile
+          python -m pip install pytest pyyaml soundfile jsonschema
 
       - name: Quick script smoke tests
         run: |
@@ -54,7 +145,43 @@ jobs:
             tests/test_linux_package_portability_2306.py \
             tests/test_macos_intel_dks_diagnostics_2306.py \
             tests/test_2306_narrow_hotfix.py \
+            tests/test_workflow_contracts.py \
+            tests/test_runtime_resolution.py \
+            tests/test_normal_stems_authoritative_contract_gate.py \
+            tests/test_dks_authoritative_contract_gate.py \
+            tests/test_drum_kit_capability_probe.py \
+            tests/test_linux_drumsep_rocm_fallback_chain.py \
             tests/i18n/test_languages.py
+
+      - name: Run portable runtime diagnostics harness tests
+        # Only the opt-in @pytest.mark.portable subset: fully controlled
+        # inputs, no managed-runtime/hardware discovery. The real-* tests
+        # require this repo's bootstrapped managed runtime and actual
+        # hardware and stay runnable separately, outside portable CI.
+        run: >-
+          python -m pytest -q -rs -m portable
+          tests/test_stemwerk_runtime_diagnostics_harness.py
+          tests/test_core_drumsep_runtime.py
+          tests/test_core_readiness.py
+          tests/test_core_readiness_hardening.py
+          tests/test_core_installation_plan.py
+          tests/test_core_asset_materialization.py
+          tests/test_core_asset_acquisition.py
+          tests/test_core_asset_preparation.py
+          tests/test_core_module_verify.py
+          tests/test_core_module_install.py
+          tests/test_core_install_preflight.py
+          tests/test_core_install_events.py
+          tests/test_core_cli_encoding.py
+          tests/test_core_process_identity.py
+          tests/test_core_install_lock.py
+          tests/test_core_install_journal.py
+          tests/test_core_runtime_manifest.py
+          tests/test_core_managed_python.py
+          tests/test_core_install_bootstrap.py
+          tests/test_core_s6_linux_install.py
+          tests/test_core_catalog_sync.py
+          tests/test_dependency_constraints.py::test_audio_separator_process_consumes_shared_managed_ffmpeg_candidates
 
       - name: Test i18n completeness
         run: |
@@ -63,3 +190,115 @@ jobs:
             echo "Language file validation failed"
             exit 1
           fi
+
+      - name: Install Lua
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+
+      - name: Run Lua workflow contract tests
+        run: |
+          lua5.4 tests/lua/test_workflow_contracts.lua
+          lua5.4 tests/lua/test_runtime_authority.lua
+
+  asset-publication-native:
+    name: Asset publication (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    env:
+      # Number of tests selected by -m native_publication in the fourteen files
+      # below: run pytest --collect-only with that marker and those files. Every
+      # matrix entry selects the same set. Raise it when native publication
+      # tests are added; the guard fails if fewer ran, so a deselected or removed
+      # test cannot pass.
+      # The S6 installer tests run here with injected Linux host facts and fake
+      # venv, pip and asset steps. Lock, journal, no-replace publication and tree
+      # hashing are native on each OS; the S6 route itself is Linux-only so far.
+      MIN_NATIVE_PUBLICATION_TESTS: "366"
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-24.04 keeps OpenSSL 3.0.x coverage; ubuntu-26.04 observes a
+        # newer OpenSSL alongside it.
+        os: [ubuntu-24.04, ubuntu-26.04, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: 3.11
+
+      - name: Show Python and OpenSSL versions
+        # Only the ubuntu-24.04 entry requires OpenSSL 3.0.x; the other
+        # entries print their versions without a requirement.
+        env:
+          REQUIRED_OPENSSL_SERIES: ${{ matrix.os == 'ubuntu-24.04' && '3.0' || '' }}
+        shell: python
+        run: |
+          import os
+          import platform
+          import ssl
+          import sys
+
+          print("Python:", sys.version)
+          print("Platform:", platform.platform())
+          print("OpenSSL:", ssl.OPENSSL_VERSION)
+          required = os.environ.get("REQUIRED_OPENSSL_SERIES", "")
+          if required:
+              actual = "%d.%d" % ssl.OPENSSL_VERSION_INFO[:2]
+              if actual != required:
+                  sys.exit(
+                      f"expected OpenSSL {required}.x on this runner, found "
+                      f"{ssl.OPENSSL_VERSION}. The ubuntu-24.04 jobs keep "
+                      "OpenSSL 3.0.x coverage on purpose: socket races in "
+                      "asset acquisition surfaced only with it. Keep this "
+                      "runner on 3.0.x; observe newer OpenSSL in a separate "
+                      "matrix entry."
+                  )
+
+      - name: Install test dependency
+        # The Core modules under test import only the standard library at
+        # module level; pytest is the only third-party requirement.
+        run: python -m pip install pytest
+
+      - name: Run native no-replace publication tests
+        run: >-
+          python -m pytest -q -rs -m native_publication
+          --junitxml=native-publication-junit.xml
+          tests/test_core_asset_materialization.py
+          tests/test_core_asset_preparation.py
+          tests/test_core_asset_acquisition.py
+          tests/test_core_module_verify.py
+          tests/test_core_module_install.py
+          tests/test_core_install_events.py
+          tests/test_core_cli_encoding.py
+          tests/test_core_process_identity.py
+          tests/test_core_install_lock.py
+          tests/test_core_install_journal.py
+          tests/test_core_runtime_manifest.py
+          tests/test_core_managed_python.py
+          tests/test_core_install_bootstrap.py
+          tests/test_core_s6_linux_install.py
+
+      - name: Require that native publication tests really ran
+        # A skip must not look like a pass: fail unless at least the minimum
+        # number of tests ran and none were skipped, errored or failed.
+        shell: python
+        run: |
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("native-publication-junit.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          totals = {
+              key: sum(int(suite.get(key, 0)) for suite in suites)
+              for key in ("tests", "skipped", "errors", "failures")
+          }
+          minimum = max(int(os.environ["MIN_NATIVE_PUBLICATION_TESTS"]), 1)
+          print(totals, "minimum", minimum)
+          if (
+              totals["tests"] < minimum
+              or totals["skipped"]
+              or totals["errors"]
+              or totals["failures"]
+          ):
+              sys.exit("native publication tests did not all execute and pass")
