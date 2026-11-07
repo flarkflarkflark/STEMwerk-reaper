@@ -211,7 +211,7 @@ jobs:
       # The S6 installer tests run here with injected Linux host facts and fake
       # venv, pip and asset steps. Lock, journal, no-replace publication and tree
       # hashing are native on each OS; the S6 route itself is Linux-only so far.
-      MIN_NATIVE_PUBLICATION_TESTS: "365"
+      MIN_NATIVE_PUBLICATION_TESTS: "366"
     strategy:
       fail-fast: false
       matrix:

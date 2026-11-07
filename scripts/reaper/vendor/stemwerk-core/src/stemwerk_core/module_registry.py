@@ -215,7 +215,10 @@ def _atomic_write_json(target: Path, payload: Mapping[str, Any]) -> bytes:
     target.parent.mkdir(parents=True, exist_ok=True)
     encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     tmp_path = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    # Windows opens descriptors in text mode unless O_BINARY is requested, which
+    # would write CRLF and break the hash of these exact bytes.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+    fd = os.open(tmp_path, flags, 0o644)
     try:
         os.write(fd, encoded)
         os.fsync(fd)

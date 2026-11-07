@@ -603,6 +603,82 @@ def test_tree_identity_and_receipt_registry_consistency(tmp_path):
     assert reason2 == "registry_receipt_sha256_mismatch"
 
 
+def _write_all_state_files(root: Path):
+    """Write the receipt, registry and publication record; return their paths and the receipt hash."""
+    receipt = {"kind": "test", "components": {}, "text": "line one\nline two"}
+    receipt_path, receipt_sha256 = module_registry.write_receipt(root, "drum_kit", receipt)
+    registry = module_registry.write_registry_from_receipt(
+        root, "drum_kit", receipt, receipt_sha256, updated_at_utc="2026-01-01T00:00:00Z"
+    )
+    tree = root / "runtimes" / "drum_kit" / "tree"
+    tree.mkdir(parents=True)
+    (tree / "file.txt").write_bytes(b"x")
+    record = module_registry.write_publication_record(
+        root, "drum_kit", operation_id="12345678-1234-4234-8234-1234567890ab", module_venv_dir=tree,
+        module_venv_pin_id="pin", identity=module_registry.compute_tree_identity(tree),
+    )
+    return receipt, receipt_path, receipt_sha256, registry, record
+
+
+@pytest.mark.native_publication
+def test_state_files_are_written_as_exact_lf_bytes(tmp_path):
+    root = _private_dir(tmp_path / "root")
+    receipt, receipt_path, receipt_sha256, registry, record = _write_all_state_files(root)
+
+    # The recorded hash must cover the bytes on disk, which Windows text mode would change.
+    expected = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    assert receipt_path.read_bytes() == expected
+    assert receipt_sha256 == hashlib.sha256(expected).hexdigest()
+    for path in (receipt_path, registry, record):
+        data = path.read_bytes()
+        assert b"\r" not in data and data.endswith(b"\n"), path.name
+        json.loads(data.decode("utf-8"))
+    registry_doc = json.loads(registry.read_text(encoding="utf-8"))
+    assert registry_doc["modules"]["drum_kit"]["receipt_sha256"] == receipt_sha256
+
+
+@POSIX_ONLY
+def test_state_files_ask_for_binary_descriptors_so_windows_text_mode_cannot_alter_them(tmp_path, monkeypatch):
+    """Emulates the Windows C runtime: a descriptor opened without O_BINARY
+    writes CRLF for every LF. Only a request for O_BINARY keeps the bytes exact."""
+    binary = 0x40000000  # not a flag this kernel knows; removed before the real open
+    text_mode = set()
+    real_open, real_write, real_close = os.open, os.write, os.close
+
+    def open_like_windows(path, flags, *args, **kwargs):
+        descriptor = real_open(path, flags & ~binary, *args, **kwargs)
+        if not flags & binary:
+            text_mode.add(descriptor)
+        return descriptor
+
+    def write_like_windows(descriptor, data):
+        if descriptor in text_mode:
+            return real_write(descriptor, data.replace(b"\n", b"\r\n")) and len(data)
+        return real_write(descriptor, data)
+
+    def close_like_windows(descriptor):
+        text_mode.discard(descriptor)
+        return real_close(descriptor)
+
+    root = _private_dir(tmp_path / "root")
+    with monkeypatch.context() as windows:
+        windows.setattr(os, "O_BINARY", binary, raising=False)
+        windows.setattr(os, "open", open_like_windows)
+        windows.setattr(os, "write", write_like_windows)
+        windows.setattr(os, "close", close_like_windows)
+        # The emulation really converts: a plain descriptor gets CRLF.
+        plain = tmp_path / "plain.txt"
+        descriptor = os.open(plain, os.O_WRONLY | os.O_CREAT, 0o644)
+        os.write(descriptor, b"a\nb\n")
+        os.close(descriptor)
+        assert plain.read_bytes() == b"a\r\nb\r\n"
+        _receipt, receipt_path, receipt_sha256, registry, record = _write_all_state_files(root)
+
+    for path in (receipt_path, registry, record):
+        assert b"\r" not in path.read_bytes(), path.name
+    assert hashlib.sha256(receipt_path.read_bytes()).hexdigest() == receipt_sha256
+
+
 # --- 4. Module verification with S6 runtime verifiers --------------------------
 
 
@@ -1189,7 +1265,8 @@ def test_s6_fresh_install_gates_managed_python_and_rejects_a_changed_publication
     _private_dir(assets_dir.parent)
     dead_op = _dead_s6_operation(root)
     asset_lock = assets_dir.parent / f".{assets_dir.name}.stemwerk-materialize.lock"
-    asset_lock.write_text(dead_op + "\n", encoding="ascii")
+    # Bytes, as the materializer writes them: Windows text mode would add a CR.
+    asset_lock.write_bytes((dead_op + "\n").encode("ascii"))
     asset_stage = assets_dir.parent / f".{assets_dir.name}.stemwerk-stage-{dead_op}"
     asset_stage.mkdir()
 
