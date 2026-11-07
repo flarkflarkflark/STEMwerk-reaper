@@ -332,8 +332,13 @@ def build_s6_receipt(
     drumsep_artifacts: Mapping[str, Mapping[str, Any]],
     drumsep_assets_ownership: str,
     created_at_utc: Optional[str] = None,
+    ffmpeg_entry: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Construct the canonical S6 module receipt payload."""
+    """Construct the canonical S6 module receipt payload.
+
+    ``ffmpeg_entry`` is the S7 ``components.ffmpeg`` entry; without it the
+    receipt records the pair as not installed.
+    """
     root = Path(runtime_root)
     ts = created_at_utc or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return {
@@ -345,7 +350,7 @@ def build_s6_receipt(
         "platform_key": platform_key,
         "backend": backend,
         "installed_state": "partial",
-        "pending_slices": ["s7_managed_ffmpeg", "s9_activation"],
+        "pending_slices": pending_slices(ffmpeg_entry),
         "created_at_utc": ts,
         "components": {
             "managed_python": {
@@ -381,10 +386,41 @@ def build_s6_receipt(
                 "artifacts": {k: dict(v) for k, v in sorted(drumsep_artifacts.items())},
                 "ownership": drumsep_assets_ownership,
             },
-            "ffmpeg": None,
+            "ffmpeg": None if ffmpeg_entry is None else dict(ffmpeg_entry),
             "reaper_activation": None,
         },
     }
+
+
+def pending_slices(ffmpeg_entry: Optional[Mapping[str, Any]]) -> list[str]:
+    """Slices still missing from a module: the pair once S7 has installed it, activation always (S9)."""
+    return ["s9_activation"] if ffmpeg_entry is not None else ["s7_managed_ffmpeg", "s9_activation"]
+
+
+def receipt_with_ffmpeg(
+    receipt: Mapping[str, Any],
+    ffmpeg_entry: Mapping[str, Any],
+    *,
+    operation_id: str,
+    plan_fingerprint: str,
+    updated_at_utc: Optional[str] = None,
+) -> Dict[str, Any]:
+    """A copy of an S6 receipt that also records the FFmpeg pair.
+
+    The other components are carried over byte for byte: adding the pair never
+    re-describes the interpreter, the environment or the assets.
+    """
+    components = dict(receipt["components"])
+    components["ffmpeg"] = dict(ffmpeg_entry)
+    updated = dict(receipt)
+    updated.update(
+        operation_id=operation_id,
+        plan_fingerprint=plan_fingerprint,
+        pending_slices=pending_slices(ffmpeg_entry),
+        updated_at_utc=updated_at_utc or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        components=components,
+    )
+    return updated
 
 
 def write_receipt(runtime_root: Path, module_id: str, receipt_payload: Mapping[str, Any]) -> Tuple[Path, str]:
@@ -420,6 +456,7 @@ def write_registry_from_receipt(
     mp = components.get("managed_python") or {}
     mv = components.get("module_venv") or {}
     da = components.get("drumsep_assets") or {}
+    ff = components.get("ffmpeg")
     ts = updated_at_utc or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     existing_modules[module_id] = {
@@ -462,7 +499,15 @@ def write_registry_from_receipt(
             }
             if isinstance(da, Mapping)
             else None,
-            "ffmpeg": components.get("ffmpeg"),
+            "ffmpeg": {
+                "path": ff.get("path"),
+                "relpath": ff.get("relpath"),
+                "pin_id": ff.get("pin_id"),
+                "tree_sha256": ff.get("tree_sha256"),
+                "ownership": ff.get("ownership"),
+            }
+            if isinstance(ff, Mapping)
+            else None,
             "reaper_activation": components.get("reaper_activation"),
         },
     }
@@ -491,6 +536,9 @@ def _validate_receipt_structure(receipt: Any, module_id: str) -> Mapping[str, An
         comp = components.get(required_comp)
         if not isinstance(comp, Mapping) or not comp.get("path"):
             raise RegistryError("receipt_invalid", f"receipt component {required_comp} missing or invalid")
+    ffmpeg = components.get("ffmpeg")
+    if ffmpeg is not None and (not isinstance(ffmpeg, Mapping) or not ffmpeg.get("path")):
+        raise RegistryError("receipt_invalid", "receipt component ffmpeg is invalid")
     return receipt
 
 
@@ -603,5 +651,16 @@ def read_and_validate_module_record(
         if comp_id in {"managed_python", "module_venv"}:
             if reg_c.get("pin_id") != rec_c.get("pin_id") or reg_c.get("tree_sha256") != rec_c.get("tree_sha256"):
                 return "unverifiable", None, f"registry_component_mismatch:{comp_id}:digest"
+
+    reg_ff, rec_ff = reg_comps.get("ffmpeg"), rec_comps.get("ffmpeg")
+    if rec_ff is None:
+        if reg_ff is not None:
+            return "unverifiable", None, "registry_component_mismatch:ffmpeg:presence"
+    else:
+        if not isinstance(reg_ff, Mapping):
+            return "unverifiable", None, "registry_component_invalid:ffmpeg"
+        for key in ("path", "relpath", "ownership", "pin_id", "tree_sha256"):
+            if reg_ff.get(key) != rec_ff.get(key):
+                return "unverifiable", None, f"registry_component_mismatch:ffmpeg:{key}"
 
     return "valid", validated_receipt, None

@@ -8,8 +8,8 @@ never takes a lock and never repairs.
 The lookup is the only source of locations. When ``state/module-registry.v1.json``
 and ``state/modules/<module>.receipt.json`` are absent, ``NoRegistryLookup`` is
 used and every component is ``absent``; when either exists, ``RegistryLookup``
-validates their consistency and locates the receipted S6 components
-(``managed_python``, ``module_venv``, ``drumsep_assets``). Legacy 2.3 layouts
+validates their consistency and locates the receipted components
+(``managed_python``, ``module_venv``, ``drumsep_assets`` and, from S7, ``ffmpeg``). Legacy 2.3 layouts
 are never consulted here.
 
 The document also reports whether an installation operation is running
@@ -30,7 +30,7 @@ import tempfile
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Tuple
 
 from . import asset_materialization as materialization
-from . import install_lock, managed_python, managed_runtime, module_descriptors, module_registry
+from . import install_lock, managed_ffmpeg, managed_python, managed_runtime, module_descriptors, module_registry
 from . import runtime_manifest, subprocess_policy, wheel_lock
 from .module_descriptors import AssetPin, ComponentDescriptor, ModuleDescriptor
 
@@ -159,7 +159,7 @@ class UnverifiableRegistryLookup:
         self.reason = reason
 
     def locate(self, module_id: str, component_id: str) -> Optional[ComponentLocation]:
-        if component_id in {"managed_python", "module_venv", "drumsep_assets"}:
+        if component_id in {"managed_python", "module_venv", "drumsep_assets", "ffmpeg"}:
             raise ComponentLookupError(self.reason)
         return None
 
@@ -648,9 +648,134 @@ def verify_s6_runtime_interpreter(python_path: Path) -> Tuple[bool, str]:
     return True, "verified"
 
 
+def _verify_ffmpeg_with_receipt(
+    component: ComponentDescriptor, location: ComponentLocation, *, probe: bool
+) -> ComponentVerdict:
+    """The installed pair against the pin AND the receipt, then (optionally) the probe.
+
+    The vendor SHA-256 pins the archive only, so the extracted files are compared
+    one by one. Any difference is ``present_failing`` (``repair_required``), never
+    a pass; a file that cannot be read is ``unverifiable``.
+    """
+    receipt = location.receipt_entry or {}
+    ownership = str(receipt.get("ownership") or "unknown")
+    base: Dict[str, Any] = {"ownership": ownership}
+    label = f"location of {component.component_id}"
+    try:
+        directory = materialization._absolute_path(location.path, label)
+        materialization._reject_symlink_components(directory, label)
+    except materialization.MaterializationError as exc:
+        if exc.code == "symlink_not_allowed":
+            return ComponentVerdict(PRESENT_FAILING, "symlink_not_allowed", base)
+        return ComponentVerdict(UNVERIFIABLE, "location_invalid", base)
+
+    try:
+        pin = managed_ffmpeg.load_pin(str(receipt.get("platform_key") or "linux-x86_64"))
+    except managed_ffmpeg.FFmpegError as exc:
+        return ComponentVerdict(UNVERIFIABLE, "ffmpeg_pin_unavailable", {**base, "detail": exc.code})
+    runtime_root = location.runtime_root or directory.parent.parent.parent
+    if receipt.get("pin_id") != pin.pin_id or directory != managed_ffmpeg.published_directory(runtime_root, pin):
+        return ComponentVerdict(
+            PRESENT_FAILING,
+            "ffmpeg_pin_mismatch",
+            {**base, "expected_pin_id": pin.pin_id, "observed_pin_id": receipt.get("pin_id")},
+        )
+    try:
+        report = managed_ffmpeg.inspect_tree(directory, pin)
+    except managed_ffmpeg.FFmpegError as exc:
+        return ComponentVerdict(UNVERIFIABLE, exc.code, {**base, "detail": exc.message})
+    if not report.ok:
+        return ComponentVerdict(PRESENT_FAILING, report.reason, {**base, "problems": list(report.problems)})
+    mismatch = managed_ffmpeg.receipt_matches_report(receipt, pin, report)
+    if mismatch is not None:
+        return ComponentVerdict(PRESENT_FAILING, mismatch, base)
+    details: Dict[str, Any] = {
+        **base,
+        "pin_id": pin.pin_id,
+        "version": pin.version,
+        "tree_sha256": report.tree_sha256,
+        "files": {path: dict(entry) for path, entry in sorted(report.files.items())},
+    }
+    if probe:
+        try:
+            details["probe"] = managed_ffmpeg.probe_pair(directory, pin)
+        except managed_ffmpeg.FFmpegError as exc:
+            return ComponentVerdict(PRESENT_FAILING, exc.code, {**base, "detail": exc.message})
+        except OSError as exc:
+            return ComponentVerdict(UNVERIFIABLE, "probe_unavailable", {**base, "detail": type(exc).__name__})
+    return ComponentVerdict(PRESENT_PASSING, REASON_VERIFIED, details)
+
+
+def verify_ffmpeg_component(
+    component: ComponentDescriptor, location: ComponentLocation
+) -> ComponentVerdict:
+    """Verify the managed FFmpeg pair when backed by a validated Core receipt;
+    an unreceipted location stays ``unverifiable`` (never adopted)."""
+    if location.receipt_entry is None:
+        return ComponentVerdict(UNVERIFIABLE, REASON_VERIFIER_UNAVAILABLE)
+    return _verify_ffmpeg_with_receipt(component, location, probe=True)
+
+
+S6_REGISTERED = "registered"
+S6_UNREGISTERED = "unregistered"
+
+
+def s6_ffmpeg_pair(
+    runtime_root: Path, module_id: str = "drum_kit", *, probe: bool = False
+) -> Tuple[str, str, Optional[Path]]:
+    """What a process under ``runtime_root`` may use as FFmpeg.
+
+    Returns ``(state, reason, directory)``: ``("unregistered", ..., None)`` when no
+    module registry exists (legacy discovery stays the caller's business),
+    ``("verified", "verified", <pair directory>)`` when the registered pair passed
+    verification, and ``("refused", <reason>, None)`` otherwise. A registered
+    root NEVER yields a system FFmpeg. ``probe`` adds the round-trip probe; the
+    worker guard runs without it (size, SHA-256 and tree identity only).
+    """
+    status, receipt, reason = module_registry.read_and_validate_module_record(runtime_root, module_id)
+    if status == "absent":
+        return S6_UNREGISTERED, "no_registration", None
+    if status != "valid" or receipt is None:
+        return "refused", f"registration_{reason or status}", None
+    entry = (receipt.get("components") or {}).get("ffmpeg")
+    if not isinstance(entry, Mapping):
+        return "refused", "managed_ffmpeg_pending", None
+    descriptor = module_descriptors.get_module_descriptor(module_id)
+    component = next(c for c in descriptor.components if c.component_id == "ffmpeg")
+    location = ComponentLocation(Path(str(entry["path"])), entry, Path(runtime_root))
+    verdict = _verify_ffmpeg_with_receipt(component, location, probe=probe)
+    if verdict.component_class != PRESENT_PASSING:
+        return "refused", verdict.reason_code, None
+    return "verified", REASON_VERIFIED, Path(location.path)
+
+
+def verify_s6_ffmpeg_for_interpreter(python_path: Path) -> Tuple[bool, str, Optional[Path]]:
+    """The pair belonging to an S6 module interpreter under ``<root>/runtimes/<module>/<pin>/``.
+
+    ``(True, "not_s6_managed", None)`` for any other path. For an S6 interpreter the
+    pair must be registered and verified; anything else is ``(False, reason, None)``
+    and the caller must not start the job.
+    """
+    try:
+        abs_path = Path(os.path.abspath(python_path))
+    except OSError as exc:
+        return False, f"s6_ffmpeg_unresolvable:{exc}", None
+    parts = abs_path.parts
+    if len(parts) < 6 or parts[-5] != "runtimes":
+        return True, "not_s6_managed", None
+    try:
+        state, reason, directory = s6_ffmpeg_pair(Path(*parts[:-5]), parts[-4])
+    except Exception as exc:
+        return False, f"s6_ffmpeg_unverifiable:{type(exc).__name__}", None
+    if state != "verified":
+        return False, f"s6_ffmpeg_refused:{reason}", None
+    return True, "verified", directory
+
+
 DEFAULT_VERIFIERS: Mapping[str, Verifier] = {
     module_descriptors.KIND_ASSET: verify_asset_component,
     module_descriptors.KIND_RUNTIME: verify_runtime_component,
+    module_descriptors.KIND_FFMPEG: verify_ffmpeg_component,
 }
 
 

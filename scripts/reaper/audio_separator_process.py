@@ -364,6 +364,26 @@ def _managed_runtime():
     return managed_runtime
 
 
+def _managed_ffmpeg():
+    """Lazy access to the pinned FFmpeg pair module (same no-_require_core rationale)."""
+    _prefer_vendored_stemwerk_core()
+    from stemwerk_core import managed_ffmpeg
+    return managed_ffmpeg
+
+
+def _registered_ffmpeg_pair() -> Tuple[str, str, Optional[Path]]:
+    """``(state, reason, directory)`` for the managed-runtime root: ``unregistered``
+    (no module registry: legacy discovery applies), ``verified`` (STEMwerk's own pair
+    passed size, SHA-256 and tree checks) or ``refused``. Never raises."""
+    try:
+        _prefer_vendored_stemwerk_core()
+        from stemwerk_core import module_verify as _mv
+
+        return _mv.s6_ffmpeg_pair(_managed_runtime().managed_runtime_root())
+    except Exception as exc:
+        return "refused", f"s6_ffmpeg_unverifiable:{type(exc).__name__}", None
+
+
 def _drumsep_runtime():
     """Lazy access to the Core-owned DrumSep selection implementation."""
     _prefer_vendored_stemwerk_core()
@@ -2623,6 +2643,17 @@ def _run_direct_dks_drumsep_helper(
     if not _s6_ok:
         return False, {}, "drumsep_helper_failed", f"S6 runtime verification failed: {_s6_reason}"
     if _s6_reason == "verified":
+        # The module's own pair, verified, is the only FFmpeg this job may see: no
+        # fallback, no user override, and its directory first on the helper's PATH
+        # (audio-separator and pydub look up bare "ffmpeg" and "ffprobe").
+        try:
+            _ff_ok, _ff_reason, _ff_dir = _mv.verify_s6_ffmpeg_for_interpreter(Path(drumsep_python))
+        except Exception as exc:
+            _ff_ok, _ff_reason, _ff_dir = False, f"verification_unavailable:{type(exc).__name__}", None
+        if not _ff_ok or _ff_dir is None:
+            return False, {}, "drumsep_helper_failed", f"S6 FFmpeg verification failed: {_ff_reason}"
+        helper_env = _managed_ffmpeg().pair_environment(helper_env, _ff_dir)
+        print(f"drumsep_helper_ffmpeg_dir={_ff_dir}", file=sys.stderr)
         try:
             helper_env["NUMBA_CACHE_DIR"] = str(_operation_numba_cache_dir(_runtime_venv_root(drumsep_python)))
         except OSError as exc:
@@ -2916,6 +2947,19 @@ def _candidate_ffmpeg_paths() -> List[Path]:
 
 
 def _configure_ffmpeg_runtime() -> Tuple[Optional[Path], Optional[Path], Optional[str]]:
+    state, reason, pair_dir = _registered_ffmpeg_pair()
+    if state == "verified" and pair_dir is not None:
+        # A registered module uses STEMwerk's own verified pair and nothing else:
+        # user overrides are replaced, our bin directory goes first on PATH, and no
+        # system FFmpeg is looked up.
+        managed_ffmpeg = _managed_ffmpeg()
+        pinned = managed_ffmpeg.pair_environment(os.environ, pair_dir)
+        for key in (*managed_ffmpeg.FFMPEG_ENV_VARS, *managed_ffmpeg.FFPROBE_ENV_VARS, "PATH"):
+            os.environ[key] = pinned[key]
+        bin_dir = managed_ffmpeg.bin_directory(pair_dir)
+        return bin_dir / "ffmpeg", None, str(bin_dir)
+    if state == "refused":
+        print(f"STEMWERK_DIAG ffmpeg_registered_pair_refused={reason}", file=sys.stderr)
     for candidate in _candidate_ffmpeg_paths():
         try:
             if not candidate.exists() or candidate.is_dir():

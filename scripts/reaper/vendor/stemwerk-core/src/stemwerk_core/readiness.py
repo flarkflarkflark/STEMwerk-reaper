@@ -566,6 +566,25 @@ def _finalize_collected(component: Mapping[str, Any], *, reason_code: str) -> Di
     return result
 
 
+def _registered_ffmpeg_evidence(runtime_root: Path) -> Dict[str, Any]:
+    from . import module_verify  # local: module_verify does not import readiness, keep it that way
+
+    evidence = {"source": "collected", "evidence_kind": "managed_ffmpeg_verification"}
+    state, reason, directory = module_verify.s6_ffmpeg_pair(runtime_root, "drum_kit", probe=True)
+    if state == "verified" and directory is not None:
+        return {
+            "verdict": PASS,
+            "path": str(directory / "bin" / "ffmpeg"),
+            "evidence": {**evidence, "usability": "pinned_pair_verified_with_probe"},
+        }
+    return {
+        "verdict": FAIL,
+        "reason_code": REASON_FFMPEG_UNAVAILABLE,
+        "reason": f"the registered managed FFmpeg pair did not verify: {reason}",
+        "evidence": {**evidence, "refusal": reason},
+    }
+
+
 def _live_model_component(
     model_id: str, flavor: str, providers: Optional[Mapping[str, Callable[[], Mapping[str, Any]]]]
 ) -> Dict[str, Any]:
@@ -1087,8 +1106,9 @@ def assess_readiness(
             ]
             ffmpeg_evidence: Optional[Mapping[str, Any]] = None
             if coerced.workflow_id == "drum_kit_direct":
+                runtime_root = managed_runtime.managed_runtime_root()
                 registration, receipt, _ = module_registry.read_and_validate_module_record(
-                    managed_runtime.managed_runtime_root(), "drum_kit"
+                    runtime_root, "drum_kit"
                 )
                 if registration != "absent" and (
                     registration != "valid"
@@ -1104,6 +1124,10 @@ def assess_readiness(
                             "registration_status": registration,
                         },
                     }
+                elif registration == "valid":
+                    # A registered module is judged by its own pinned pair, verified
+                    # and run through the round-trip probe. A system FFmpeg never counts.
+                    ffmpeg_evidence = _registered_ffmpeg_evidence(runtime_root)
             if ffmpeg_evidence is None:
                 ffmpeg_evidence = readiness_collect.collect_ffmpeg()
             ffmpeg = _finalize_collected(ffmpeg_evidence, reason_code=REASON_FFMPEG_UNAVAILABLE)

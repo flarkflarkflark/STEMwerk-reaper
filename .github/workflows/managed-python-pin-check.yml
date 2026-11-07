@@ -14,3 +14,5 @@ jobs:
           python-version: '3.12'
       - name: Check pinned vendor URLs, sizes, hashes and broken-pin rejection
         run: python tools/check_managed_python_pins.py
+      - name: Check the pinned FFmpeg archive URL, size, hash and broken-pin rejection
+        run: python tools/check_ffmpeg_pins.py

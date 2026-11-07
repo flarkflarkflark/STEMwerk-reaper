@@ -1,4 +1,8 @@
-"""S6 Linux-first Direct Kit CPU installation orchestrator for STEMwerk Core."""
+"""S6 Linux-first Direct Kit CPU installation orchestrator for STEMwerk Core.
+
+S7 adds the pinned FFmpeg pair to the same transaction, and to an existing S6
+root that lacks it, without touching the interpreter, the environment or the assets.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +30,7 @@ from . import (
     install_journal,
     install_lock,
     install_preflight,
+    managed_ffmpeg,
     managed_python,
     managed_runtime,
     model_assets,
@@ -229,6 +234,14 @@ def _verify_published_object(root: Path, module_id: str, path: Path) -> bool:
         return False
     if rel.startswith(f"runtimes/{module_id}/"):
         return module_registry.matches_publication_record(root, module_id, path)
+    if rel.startswith("runtimes/ffmpeg/"):
+        # The pair's bytes are vendor-pinned, so no seal is needed: a published
+        # directory is acceptable only when it is exactly the pinned tree.
+        try:
+            pin = managed_ffmpeg.load_pin("linux-x86_64")
+        except managed_ffmpeg.FFmpegError:
+            return False
+        return path == managed_ffmpeg.published_directory(root, pin) and managed_ffmpeg.matches_pin(path, pin)
     if rel == module_registry.receipt_relpath(module_id).as_posix():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -303,9 +316,11 @@ def _reconcile_interrupted_receipt_under_lock(root: Path, module_id: str) -> boo
     descriptor = module_descriptors.get_module_descriptor(module_id)
     lookup = module_verify.RegistryLookup(root, validated)
     for comp in descriptor.components:
-        if comp.component_id not in {"managed_python", "module_venv", "drumsep_assets"}:
+        if comp.component_id not in {"managed_python", "module_venv", "drumsep_assets", "ffmpeg"}:
             continue
         loc = lookup.locate(module_id, comp.component_id)
+        if loc is None and comp.component_id == "ffmpeg":
+            continue  # a receipt written before the pair was installed
         if loc is None:
             return False
         verifier = module_verify.DEFAULT_VERIFIERS.get(comp.kind)
@@ -439,6 +454,109 @@ def _acquire_drumsep_sources_into(
     return result
 
 
+def _acquire_ffmpeg(
+    writer: install_events.EventWriter,
+    journal: install_journal.Journal,
+    root: Path,
+    pin: managed_ffmpeg.FFmpegPin,
+    *,
+    source_dir: Optional[Path],
+    opener: Optional[Callable[..., Any]],
+    trigger_fault: Callable[[str], None],
+) -> Tuple[Optional[Path], managed_ffmpeg.TreeReport, str]:
+    """Fetch, verify, extract and probe the pair, or adopt an exact published one.
+
+    Returns ``(stage, report, ownership)``. ``stage`` is ``None`` when a previous
+    run already published a tree that matches the pin byte for byte; then nothing
+    is downloaded. Any other directory at the destination is a ``runtime_conflict``.
+    """
+    destination = managed_ffmpeg.published_directory(root, pin)
+    writer.append("active_indeterminate", "fetch_ffmpeg", since_seconds=0)
+    if os.path.lexists(destination):
+        try:
+            report = managed_ffmpeg.inspect_tree(destination, pin)
+        except managed_ffmpeg.FFmpegError as exc:
+            raise S6InstallError("fetch_ffmpeg", "runtime_conflict", f"{destination} cannot be read: {exc.code}") from exc
+        if not report.ok:
+            raise S6InstallError(
+                "fetch_ffmpeg",
+                "runtime_conflict",
+                f"pre-existing directory {destination} is not the pinned FFmpeg tree: {report.reason}",
+            )
+        writer.append("done", "fetch_ffmpeg", verified=True)
+        writer.append("active_indeterminate", "verify_ffmpeg", since_seconds=0)
+        _probe_ffmpeg(destination, pin)
+        writer.append("done", "verify_ffmpeg", verified=True)
+        return None, report, "unknown"
+
+    writer.append("active_determinate", "fetch_ffmpeg", done=0, total=pin.archive_size, unit="bytes")
+    work = journal.create_directory(journal.core_directory / "ffmpeg")
+    download = journal.create_directory(work / "download")
+    stage = journal.create_directory(work / "stage")
+    env_cache = os.environ.get(managed_ffmpeg.ARCHIVE_CACHE_ENV, "").strip()
+    cache = source_dir if source_dir is not None else (Path(env_cache) if env_cache else None)
+    try:
+        report = managed_ffmpeg.stage_pair(pin, download, stage, source_dir=cache, opener=opener)
+    except managed_ffmpeg.FFmpegError as exc:
+        raise S6InstallError("fetch_ffmpeg", exc.code, exc.message, details=exc.details) from exc
+    writer.append("active_determinate", "fetch_ffmpeg", done=pin.archive_size, total=pin.archive_size, unit="bytes")
+    writer.append("done", "fetch_ffmpeg", verified=True)
+    writer.append("active_indeterminate", "verify_ffmpeg", since_seconds=0)
+    _probe_ffmpeg(stage, pin)
+    trigger_fault("after_ffmpeg_staging")
+    writer.append("done", "verify_ffmpeg", verified=True)
+    return stage, report, "core_managed"
+
+
+def _probe_ffmpeg(directory: Path, pin: managed_ffmpeg.FFmpegPin) -> None:
+    """Run the pair before it is published or adopted; a failure blocks registration."""
+    try:
+        managed_ffmpeg.probe_pair(directory, pin)
+    except managed_ffmpeg.FFmpegError as exc:
+        raise S6InstallError("verify_ffmpeg", exc.code, exc.message, details=exc.details) from exc
+
+
+def _publish_ffmpeg(
+    journal: install_journal.Journal,
+    root: Path,
+    pin: managed_ffmpeg.FFmpegPin,
+    stage: Optional[Path],
+) -> Path:
+    destination = managed_ffmpeg.published_directory(root, pin)
+    if stage is None:
+        return destination
+    ensure_directories(root, ("runtimes", "ffmpeg"))
+    try:
+        journal.rename(stage, destination)
+    except asset_materialization.MaterializationError as exc:
+        raise S6InstallError("publish", "runtime_conflict", str(exc)) from exc
+    return destination
+
+
+def _confirm_published_ffmpeg(
+    destination: Path, pin: managed_ffmpeg.FFmpegPin, staged: managed_ffmpeg.TreeReport
+) -> managed_ffmpeg.TreeReport:
+    """The published tree must be the tree that was verified, before any receipt names it."""
+    try:
+        report = managed_ffmpeg.inspect_tree(destination, pin)
+    except managed_ffmpeg.FFmpegError as exc:
+        raise S6InstallError("publish", "runtime_conflict", f"the published FFmpeg tree is unreadable: {exc.code}") from exc
+    if not report.ok or report.tree_sha256 != staged.tree_sha256:
+        raise S6InstallError(
+            "publish",
+            "runtime_conflict",
+            f"the published FFmpeg tree differs from the verified one: {report.reason}",
+        )
+    return report
+
+
+def _ffmpeg_result_entry(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        key: entry[key]
+        for key in ("path", "pin_id", "version", "tree_sha256", "entry_count", "total_bytes", "ownership")
+    }
+
+
 def _cleanup_bootstrap_handover_file(root: Path, operation_id: str) -> None:
     op_tmp = root / "tmp" / operation_id
     handover = op_tmp / "bootstrap-operation.json"
@@ -499,9 +617,15 @@ def install_module(
     facts: Optional[install_preflight.HostFacts] = None,
     wheel_cache_dir: Optional[Path] = None,
     asset_source_dir: Optional[Path] = None,
+    ffmpeg_source_dir: Optional[Path] = None,
+    ffmpeg_opener: Optional[Callable[..., Any]] = None,
     fault_hook: Optional[Callable[[str], None]] = None,
 ) -> Tuple[int, Dict[str, Any]]:
     """Execute the S6 Linux-first Direct Kit CPU installation transaction.
+
+    The pinned FFmpeg pair is part of the transaction (S7). A root that already
+    holds the verified S6 components but not the pair gets the pair added; its
+    interpreter, environment and assets are not touched.
 
     Returns ``(exit_code, document)`` where ``exit_code`` is ``0`` on success
     and ``2`` on structured refusal or failure.
@@ -527,7 +651,10 @@ def install_module(
             fault_hook(point)
         if env_point and env_point == point:
             raise S6InstallError(
-                "publish" if "receipt" in point or "publish" in point else "install_packages",
+                "publish"
+                if "receipt" in point or "publish" in point
+                else "verify_ffmpeg" if "ffmpeg" in point
+                else "install_packages",
                 f"fault_injected_{point}",
                 f"injected fault at {point}",
             )
@@ -650,21 +777,29 @@ def install_module(
         bundle_id = module_registry.DRUMSEP_ASSET_SET_ID
         assets_dir = module_registry.expected_drumsep_assets_dir(root_path)
 
-        # 2e. Check if S6 components are already installed and verified (idempotent no-op)
+        try:
+            ffmpeg_pin = managed_ffmpeg.load_pin("linux-x86_64")
+        except managed_ffmpeg.FFmpegError as exc:
+            raise S6InstallError("preflight", exc.code, exc.message) from exc
+
+        # 2e. Check if the components are already installed and verified (idempotent no-op)
         pre_verify = module_verify.verify_module(module_id, root=root_path)
         pre_classes = {
             str(c.get("component_id")): c.get("class")
             for c in (pre_verify.get("components") or ())
             if isinstance(c, Mapping)
         }
-        if (
+        s6_installed = (
             pre_classes.get("managed_python") == module_verify.PRESENT_PASSING
             and pre_classes.get("module_venv") == module_verify.PRESENT_PASSING
             and pre_classes.get("drumsep_assets") == module_verify.PRESENT_PASSING
-        ):
+        )
+        if s6_installed and pre_classes.get("ffmpeg") == module_verify.PRESENT_PASSING:
             for phase in (
                 "create_environment",
                 "install_packages",
+                "fetch_ffmpeg",
+                "verify_ffmpeg",
                 "fetch_assets",
                 "verify_assets",
                 "publish",
@@ -701,9 +836,128 @@ def install_module(
                 "installation_state": pre_verify["installation_state"],
                 "readiness": "not_ready",
                 "decided_by_rule": pre_verify["decided_by_rule"],
-                "pending_slices": ["s7_managed_ffmpeg", "s9_activation"],
+                "pending_slices": ["s9_activation"],
                 "recovery": recovery_report.to_json(),
                 "verification": pre_verify,
+            }
+            install_events.write_result(op_log_dir, op_id, 0, doc)
+            return 0, doc
+
+        def finish_transaction(receipt_payload: Dict[str, Any]) -> Tuple[Dict[str, Any], module_registry.TreeIdentity]:
+            """Receipt, registry, fresh verification, managed-Python gate, journal cleanup."""
+            nonlocal journal
+            receipt_bytes = (json.dumps(receipt_payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+            receipt_sha256 = hashlib.sha256(receipt_bytes).hexdigest()
+            staged_receipt = journal.create_file(core_dir / f"{module_id}.receipt.json", receipt_bytes)
+            target_receipt = module_registry.receipt_path(root_path, module_id)
+            journal.rename(staged_receipt, target_receipt, publish=os.replace)
+
+            trigger_fault("between_receipt_and_registry")
+
+            module_registry.write_registry_from_receipt(
+                root_path, module_id, receipt_payload, receipt_sha256
+            )
+            module_registry.remove_publication_record(root_path, module_id)
+            writer.append("done", "publish", verified=True)
+
+            # Final verification and managed-Python invariance gate
+            writer.append("active_indeterminate", "verify_module", since_seconds=0)
+            post_verify = module_verify.verify_module(module_id, root=root_path)
+            post_classes = {
+                str(c.get("component_id")): c.get("class")
+                for c in (post_verify.get("components") or ())
+                if isinstance(c, Mapping)
+            }
+            if (
+                post_verify.get("installation_state") != module_verify.PARTIAL
+                or post_verify.get("decided_by_rule") != 4
+                or post_classes.get("managed_python") != module_verify.PRESENT_PASSING
+                or post_classes.get("module_venv") != module_verify.PRESENT_PASSING
+                or post_classes.get("drumsep_assets") != module_verify.PRESENT_PASSING
+                or post_classes.get("ffmpeg") != module_verify.PRESENT_PASSING
+                or post_classes.get("reaper_activation") != module_verify.ABSENT
+            ):
+                raise S6InstallError(
+                    "verify_module",
+                    "post_install_verification_failed",
+                    f"unexpected post-install verification state: {post_verify.get('installation_state')} ({post_classes})",
+                )
+
+            trigger_fault("before_final_integrity_check")
+            mp_after = managed_python.verify_managed_python(root_path, py_rec)
+            mp_after_identity = module_registry.compute_tree_identity(mp_dir)
+            if (
+                mp_after.get("status") != managed_python.VERIFIED
+                or mp_after_identity != mp_before_identity
+            ):
+                raise S6InstallError(
+                    "verify_module",
+                    "managed_python_mutated",
+                    "managed Python runtime tree was modified during S6 installation",
+                )
+            writer.append("done", "verify_module", verified=True)
+
+            # Clean up this operation's journal and staging directory
+            journal.close()
+            journal = None
+            install_journal._recover_operation(
+                root_path,
+                install_journal.operation_directory(root_path, op_id),
+                op_id,
+                verify_published=lambda path: _verify_published_object(root_path, module_id, path),
+            )
+            _cleanup_bootstrap_handover_file(root_path, op_id)
+            return post_verify, mp_after_identity
+
+        if s6_installed and pre_classes.get("ffmpeg") == module_verify.ABSENT:
+            # S6 is complete and receipted; only the pair is missing. Nothing but the
+            # pair, the receipt and the registry entry is written.
+            journal = install_journal.open_journal(root_path, op_id)
+            core_dir = journal.core_directory
+            for phase in ("create_environment", "install_packages"):
+                writer.append("active_indeterminate", phase, since_seconds=0)
+                writer.append("done", phase, verified=True)
+            ffmpeg_stage, ffmpeg_report, ffmpeg_ownership = _acquire_ffmpeg(
+                writer, journal, root_path, ffmpeg_pin,
+                source_dir=ffmpeg_source_dir, opener=ffmpeg_opener, trigger_fault=trigger_fault,
+            )
+            for phase in ("fetch_assets", "verify_assets"):
+                writer.append("active_indeterminate", phase, since_seconds=0)
+                writer.append("done", phase, verified=True)
+            writer.append("active_indeterminate", "publish", since_seconds=0)
+            ensure_directories(root_path, ("state", "modules"))
+            ffmpeg_dir = _publish_ffmpeg(journal, root_path, ffmpeg_pin, ffmpeg_stage)
+            trigger_fault("after_ffmpeg_publish")
+            published_report = _confirm_published_ffmpeg(ffmpeg_dir, ffmpeg_pin, ffmpeg_report)
+            ffmpeg_entry = managed_ffmpeg.receipt_entry(
+                root_path, ffmpeg_dir, ffmpeg_pin, published_report, ffmpeg_ownership
+            )
+            trigger_fault("before_receipt")
+            status, current_receipt, reason = module_registry.read_and_validate_module_record(root_path, module_id)
+            if status != "valid" or current_receipt is None:
+                raise S6InstallError("publish", "registration_changed", f"the registration is {status}: {reason}")
+            post_verify, _mp_identity = finish_transaction(
+                module_registry.receipt_with_ffmpeg(
+                    current_receipt, ffmpeg_entry, operation_id=op_id, plan_fingerprint=plan_fingerprint
+                )
+            )
+            doc = {
+                "kind": "stemwerk_module_install_result",
+                "schema_version": "1.0.0",
+                "operation": "install",
+                "operation_id": op_id,
+                "module_id": descriptor.module_id,
+                "platform_key": "linux-x86_64",
+                "backend": "cpu",
+                "plan_fingerprint": plan_fingerprint,
+                "outcome": "ffmpeg_added",
+                "installation_state": post_verify["installation_state"],
+                "readiness": "not_ready",
+                "decided_by_rule": post_verify["decided_by_rule"],
+                "pending_slices": ["s9_activation"],
+                "components": {"ffmpeg": _ffmpeg_result_entry(ffmpeg_entry)},
+                "recovery": recovery_report.to_json(),
+                "verification": post_verify,
             }
             install_events.write_result(op_log_dir, op_id, 0, doc)
             return 0, doc
@@ -912,6 +1166,12 @@ def install_module(
             writer.append("done", "install_packages", verified=True)
             trigger_fault("after_venv_staging")
 
+        # 5. Fetch, verify and probe the pinned FFmpeg pair (before the assets, design 7.2)
+        ffmpeg_stage, ffmpeg_report, ffmpeg_ownership = _acquire_ffmpeg(
+            writer, journal, root_path, ffmpeg_pin,
+            source_dir=ffmpeg_source_dir, opener=ffmpeg_opener, trigger_fault=trigger_fault,
+        )
+
         # 5 & 6. Fetch and verify DrumSep model assets
         asset_comp_desc = next(c for c in descriptor.components if c.component_id == "drumsep_assets")
         existing_asset_verdict = (
@@ -1006,6 +1266,9 @@ def install_module(
                 raise S6InstallError("publish", "runtime_conflict", str(exc)) from exc
             trigger_fault("after_venv_publish")
 
+        ffmpeg_dir = _publish_ffmpeg(journal, root_path, ffmpeg_pin, ffmpeg_stage)
+        trigger_fault("after_ffmpeg_publish")
+
         trigger_fault("before_receipt")
         _probe_published_entry_points(venv_dir)
         # The receipt must pin exactly what was sealed before publication.
@@ -1016,6 +1279,10 @@ def install_module(
                 "the published module environment differs from its sealed identity",
             )
         venv_identity = module_registry.compute_tree_identity(venv_dir)
+        ffmpeg_entry = managed_ffmpeg.receipt_entry(
+            root_path, ffmpeg_dir, ffmpeg_pin,
+            _confirm_published_ffmpeg(ffmpeg_dir, ffmpeg_pin, ffmpeg_report), ffmpeg_ownership,
+        )
 
         policy_assets = {a.name: a for a in asset_acquisition._production_policy().assets}
         drumsep_artifacts = {
@@ -1050,68 +1317,9 @@ def install_module(
             drumsep_bundle_id=bundle_id,
             drumsep_artifacts=drumsep_artifacts,
             drumsep_assets_ownership=assets_ownership,
+            ffmpeg_entry=ffmpeg_entry,
         )
-        receipt_bytes = (json.dumps(receipt_payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
-        receipt_sha256 = hashlib.sha256(receipt_bytes).hexdigest()
-        staged_receipt = journal.create_file(core_dir / f"{module_id}.receipt.json", receipt_bytes)
-        target_receipt = module_registry.receipt_path(root_path, module_id)
-        journal.rename(staged_receipt, target_receipt, publish=os.replace)
-
-        trigger_fault("between_receipt_and_registry")
-
-        module_registry.write_registry_from_receipt(
-            root_path, module_id, receipt_payload, receipt_sha256
-        )
-        module_registry.remove_publication_record(root_path, module_id)
-        writer.append("done", "publish", verified=True)
-
-        # 8. Final verification and managed-Python invariance gate
-        writer.append("active_indeterminate", "verify_module", since_seconds=0)
-        post_verify = module_verify.verify_module(module_id, root=root_path)
-        post_classes = {
-            str(c.get("component_id")): c.get("class")
-            for c in (post_verify.get("components") or ())
-            if isinstance(c, Mapping)
-        }
-        if (
-            post_verify.get("installation_state") != module_verify.PARTIAL
-            or post_verify.get("decided_by_rule") != 4
-            or post_classes.get("managed_python") != module_verify.PRESENT_PASSING
-            or post_classes.get("module_venv") != module_verify.PRESENT_PASSING
-            or post_classes.get("drumsep_assets") != module_verify.PRESENT_PASSING
-            or post_classes.get("ffmpeg") != module_verify.ABSENT
-            or post_classes.get("reaper_activation") != module_verify.ABSENT
-        ):
-            raise S6InstallError(
-                "verify_module",
-                "post_install_verification_failed",
-                f"unexpected post-install verification state: {post_verify.get('installation_state')} ({post_classes})",
-            )
-
-        trigger_fault("before_final_integrity_check")
-        mp_after = managed_python.verify_managed_python(root_path, py_rec)
-        mp_after_identity = module_registry.compute_tree_identity(mp_dir)
-        if (
-            mp_after.get("status") != managed_python.VERIFIED
-            or mp_after_identity != mp_before_identity
-        ):
-            raise S6InstallError(
-                "verify_module",
-                "managed_python_mutated",
-                "managed Python runtime tree was modified during S6 installation",
-            )
-        writer.append("done", "verify_module", verified=True)
-
-        # Clean up this operation's journal and staging directory
-        journal.close()
-        journal = None
-        install_journal._recover_operation(
-            root_path,
-            install_journal.operation_directory(root_path, op_id),
-            op_id,
-            verify_published=lambda path: _verify_published_object(root_path, module_id, path),
-        )
-        _cleanup_bootstrap_handover_file(root_path, op_id)
+        post_verify, mp_after_identity = finish_transaction(receipt_payload)
 
         result_doc: Dict[str, Any] = {
             "kind": "stemwerk_module_install_result",
@@ -1126,7 +1334,7 @@ def install_module(
             "installation_state": post_verify["installation_state"],
             "readiness": "not_ready",
             "decided_by_rule": post_verify["decided_by_rule"],
-            "pending_slices": ["s7_managed_ffmpeg", "s9_activation"],
+            "pending_slices": ["s9_activation"],
             "components": {
                 "managed_python": {
                     "path": str(mp_dir),
@@ -1148,6 +1356,7 @@ def install_module(
                     "pyc_count": venv_identity.pyc_count,
                     "ownership": "core_managed",
                 },
+                "ffmpeg": _ffmpeg_result_entry(ffmpeg_entry),
                 "drumsep_assets": {
                     "path": str(assets_dir),
                     "bundle_id": bundle_id,

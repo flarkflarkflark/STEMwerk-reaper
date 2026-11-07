@@ -142,22 +142,26 @@ volume. Unknown quantities are JSON `null` or listed in
 `unknown_quantities`; they are never treated as zero or as proof of
 sufficient space. The hard `known_minimum_bytes` currently counts only
 the pinned final DrumSep assets in the read-only S4 assessment. Its larger
-`estimate_bytes` combines the sampled Linux S6 CPU bytes with provisional S7
-FFmpeg and margin allowances; it is not the S6 execution gate. The wheel
+`estimate_bytes` combines the sampled Linux S6 CPU bytes with the FFmpeg and
+margin allowances (the Linux pair is measured; other platforms keep a 1 GiB
+placeholder); it is not the S6 execution gate. The wheel
 cache allowance excludes asset and FFmpeg
 downloads; the asset row separately assumes download, staged and final
-copies coexist. Static FFmpeg is counted in the estimate, and the
-Linux candidate archive/pair and Windows candidate archive are shown
-separately. Falling below the estimate gives `below_provisional_estimate`
+copies coexist. Static FFmpeg is counted in the estimate; the pinned Linux
+archive and pair are shown with their measured sizes, the Windows candidate
+archive separately, and `ffmpeg_final_size_unknown` remains for Windows and macOS. Falling below the estimate gives `below_provisional_estimate`
 as a warning. Falling below the known minimum gives
 `insufficient_known_space` as a blocker with available and required bytes.
 Neither check reserves space. The S6 CPU plan separately enforces a
-2,653,536,256-byte budget on the volume holding `<root>`: the sampled ext4
-allocated peak of a fresh install plus 256 MiB (Appendix A.8). All S6 staging
+2,934,386,688-byte budget on the volume holding `<root>`: the sampled ext4
+allocated peak of a fresh install including the FFmpeg pair (2,665,951,232; the
+pair is published before the assets, so it adds to the asset-phase peak), plus
+256 MiB (Appendix A.8). All S6 staging
 and downloads write under `<root>`; supplied caches are read-only, and
 `TMPDIR` holds about 2 MB of pip and verification scratch. A complete
 installation, or an interrupted one past its large publications, needs only
-64 MiB. When another operation's journal awaits recovery the plan reports
+64 MiB; an S6 root that still lacks the pair needs 64 MiB plus the pair's
+fetch-and-stage phase (archive plus one staged copy, 416,807,968 allocated bytes). When another operation's journal awaits recovery the plan reports
 `space_recheck_after_recovery` instead of the blocker, because stale staging
 can be reclaimed only under the lock; the replan under the lock enforces the
 budget against what recovery freed.
@@ -277,6 +281,14 @@ executes the S6 Linux CPU installation transaction:
    the generated scripts (updating their `RECORD` rows), adds `-B` to each console
    script's interpreter, normalizes modes, and probes the staged runtime under
    `-I -B`. A failed probe (`staged_venv_probe_failed`) stops before publication.
+   (S7) Fetches the pinned FFmpeg archive (`ffmpeg-pin.v1.json`, Appendix A.2):
+   size and SHA-256 are checked before the archive is opened, any link, device,
+   absolute or `..` member rejects the whole archive, and only `ffmpeg`,
+   `ffprobe` and `LICENSE.txt` are extracted with explicit modes (`0755`/`0644`);
+   Core writes `NOTICE.txt`. The staged pair must equal its per-file pins and pass
+   the round-trip probe (Verification, "The FFmpeg pair") before it is published.
+   `STEMWERK_FFMPEG_SOURCE_DIR` names a read-only cache of the archive for tests
+   and offline runs; the cached file is verified like a download.
 4. Acquires and verifies the two pinned DrumSep model artifacts and publishes
    them via `prepare_drumsep_assets` to
    `<root>/assets/drumsep-mdx23c-aufr33-jarredou/`. A verified asset set
@@ -286,17 +298,23 @@ executes the S6 Linux CPU installation transaction:
    `<root>/state/modules/drum_kit.venv-publication.json`, publishes the venv via
    native no-replace rename to `<root>/runtimes/drum_kit/<venv_pin_id>/`, starts
    the published `pip` and `audio-separator` console scripts, confirms the tree
-   still matches the record, writes the integrity-checked receipt
+   still matches the record, publishes the FFmpeg pair by no-replace rename to
+   `<root>/runtimes/ffmpeg/<pin-id>/` and confirms the published tree is the
+   verified one, writes the integrity-checked receipt
    `<root>/state/modules/drum_kit.receipt.json`, atomically updates
    `<root>/state/module-registry.v1.json`, removes the publication record,
    verifies that `verify_module("drum_kit")`
-   reports `installation_state: "partial"` (`decided_by_rule: 4`) while S7
-   managed FFmpeg and S9 REAPER activation remain `absent`, and confirms that
+   reports `installation_state: "partial"` (`decided_by_rule: 4`) with the four
+   installed components passing and only S9 REAPER activation `absent`, and confirms that
    the managed Python runtime's `s5b_tree_sha256` is byte-identical before and
    after installation.
 6. Writes `<root>/logs/<op>/result.json` and emits the `stemwerk_module_install_result`
-   document (`outcome`: `"installed_s6_partial"`, `"reused"`, or
-   `"reused_after_recovery"`, `readiness: "not_ready"`). Pre-existing
+   document (`outcome`: `"installed_s6_partial"`, `"ffmpeg_added"`, `"reused"`,
+   or `"reused_after_recovery"`, `readiness: "not_ready"`). `"ffmpeg_added"` is a
+   root that already held the verified S6 components and lacked the pair: only
+   the pair, the receipt and the registry entry are written; interpreter,
+   environment and assets are not touched and their receipt entries are carried
+   over unchanged. Pre-existing
    `runtime_conflict` destinations are never overwritten or deleted; they are
    reported as `runtime_conflict` and preserved intact.
 
@@ -311,6 +329,7 @@ lock, in this order:
 | Before the venv rename | Journal recovery removes the operation's staging; the venv is rebuilt. |
 | During asset materialization | A destination lock naming the dead operation, and its `.<asset-set>.stemwerk-stage-<op>` directory, are removed before journal recovery. A stage holding anything the materializer never writes is refused (`recovery_incomplete`) and kept. A lock naming anyone else, or empty, stays, and publication reports `publication_conflict`. |
 | After asset publication | The verified assets are reused with `ownership: "unknown"`. |
+| After the pair's rename, before the receipt | The directory is adopted, not fetched again, only if it is exactly the pinned tree (`recoverable_ffmpeg_publication`; `ownership: "unknown"`). Anything else at that destination is `runtime_conflict` and is kept. No seal is needed: the bytes are vendor-pinned. |
 | After the venv rename, before the registry commit | The directory is adopted, not rebuilt, only if it matches the publication record. Another interruption keeps that right, because the record outlives journal recovery. |
 | Between receipt and registry | The registry is written from the receipt only if every component verifies against it. Otherwise the receipt stays as it is and the changed component is refused. |
 
@@ -331,5 +350,5 @@ already-conflicted root is a later slice.
 ## Not in this slice
 
 Detached runs and the startup handshake with a front end (S9), Windows and
-macOS S6 wheel locks, managed FFmpeg acquisition and verification (S7), and
-cancellation at safe points (S8).
+macOS S6 wheel locks, the Windows and macOS FFmpeg pins (their platform steps),
+and cancellation at safe points (S8).

@@ -180,6 +180,7 @@ jobs:
           tests/test_core_managed_python.py
           tests/test_core_install_bootstrap.py
           tests/test_core_s6_linux_install.py
+          tests/test_core_s7_linux_ffmpeg.py
           tests/test_core_catalog_sync.py
           tests/test_dependency_constraints.py::test_audio_separator_process_consumes_shared_managed_ffmpeg_candidates
 
@@ -203,7 +204,7 @@ jobs:
     name: Asset publication (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     env:
-      # Number of tests selected by -m native_publication in the fourteen files
+      # Number of tests selected by -m native_publication in the fifteen files
       # below: run pytest --collect-only with that marker and those files. Every
       # matrix entry selects the same set. Raise it when native publication
       # tests are added; the guard fails if fewer ran, so a deselected or removed
@@ -211,7 +212,9 @@ jobs:
       # The S6 installer tests run here with injected Linux host facts and fake
       # venv, pip and asset steps. Lock, journal, no-replace publication and tree
       # hashing are native on each OS; the S6 route itself is Linux-only so far.
-      MIN_NATIVE_PUBLICATION_TESTS: "366"
+      # The S7 tests use a synthetic vendor archive and the same fakes; the stand-in
+      # programs only run on POSIX, so tests that execute them are not marked native.
+      MIN_NATIVE_PUBLICATION_TESTS: "427"
     strategy:
       fail-fast: false
       matrix:
@@ -277,6 +280,7 @@ jobs:
           tests/test_core_managed_python.py
           tests/test_core_install_bootstrap.py
           tests/test_core_s6_linux_install.py
+          tests/test_core_s7_linux_ffmpeg.py
 
       - name: Require that native publication tests really ran
         # A skip must not look like a pass: fail unless at least the minimum

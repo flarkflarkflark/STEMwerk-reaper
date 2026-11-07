@@ -16,7 +16,7 @@ module: module `drum_kit`, workflow `drum_kit_direct`, engine
 | --- | --- | --- |
 | `managed_python` | runtime | S5a `verify_managed_python` + S6 receipt `tree_sha256` and `s5b_tree_sha256` |
 | `module_venv` | runtime | S6 receipt `tree_sha256`, zero-`.pyc` gate, and `-I -B` runtime import probe |
-| `ffmpeg` | ffmpeg | none yet (S7) |
+| `ffmpeg` | ffmpeg | S7: installed tree against the pin AND the receipt (exact entries, kinds, modes, size and SHA-256 of `ffmpeg`, `ffprobe`, `LICENSE.txt`, `NOTICE.txt`), then the round-trip probe |
 | `drumsep_assets` | asset | exact size, then SHA-256 |
 | `reaper_activation` | activation | none yet (S9) |
 
@@ -46,8 +46,8 @@ if neither `<root>/state/module-registry.v1.json` nor
 `not_installed` (`decided_by_rule: 3`). When both the registry and the
 integrity-checked module receipt exist and match (`read_and_validate_module_record`),
 it returns `RegistryLookup` (`lookup: "module_registry"`), which resolves
-`managed_python`, `module_venv`, and `drumsep_assets` (leaving `ffmpeg` and
-`reaper_activation` absent until S7 and S9). If either the registry or
+`managed_python`, `module_venv`, `drumsep_assets` and, from S7, `ffmpeg` (leaving
+`reaper_activation` absent until S9). If either the registry or
 receipt is missing while the other exists, or if they disagree or fail schema
 validation, it returns `UnverifiableRegistryLookup` (`lookup: "module_registry"`),
 which raises `ComponentLookupError` so the module is classified as
@@ -101,11 +101,13 @@ is missing or the registration is unverifiable, so legacy `<root>/models/`
 cannot mask a damaged S6 installation. It falls back to legacy models only
 when no S6 registration exists.
 
-For live `drum_kit_direct` readiness, an S6 registration with no managed
-FFmpeg receipt reports `managed_ffmpeg_pending` and remains unavailable,
-even if a system FFmpeg or legacy runtime is usable on the same host.
-S7 supplies the verified managed pair; the S6 install result also names
-S9 activation as pending.
+For live `drum_kit_direct` readiness, a registration with no managed
+FFmpeg receipt entry reports `managed_ffmpeg_pending` and remains unavailable,
+even if a system FFmpeg or legacy runtime is usable on the same host. With an
+entry, readiness is the module's own pair: verified, then run through the
+round-trip probe. A pair that does not verify is `FAIL`
+(`ffmpeg_unavailable`); a system FFmpeg is never consulted for a registered
+module. The install result names S9 activation as pending.
 
 **State.** The first matching rule of section 2.1 decides: any
 `present_failing` -> `repair_required`; any `unverifiable` -> `unknown`; all
@@ -152,6 +154,33 @@ still `held`.
 
 ## Not in this slice
 
-The FFmpeg verifier arrives with S7 and the REAPER activation check with S9.
-Until S7 and S9 are present, a verified S6 installation reports
-`installation_state: "partial"` (`decided_by_rule: 4`).
+## The FFmpeg pair (S7)
+
+The vendor SHA-256 in `ffmpeg-pin.v1.json` covers the archive only. At
+extraction Core records the size and SHA-256 of the extracted `ffmpeg`,
+`ffprobe`, `LICENSE.txt` and `NOTICE.txt` in the receipt (`components.ffmpeg.files`),
+together with `tree_sha256`. Verification re-reads the installed files and
+compares them with the pin and with the receipt. Any difference is
+`present_failing`, hence `repair_required`: a wrong size or hash
+(`ffmpeg_file_size_mismatch`, `ffmpeg_file_hash_mismatch`), a missing or extra
+entry (`ffmpeg_file_missing`, `ffmpeg_unexpected_entry`), a link or other
+non-regular file (`ffmpeg_not_regular_file`), a changed mode
+(`ffmpeg_mode_mismatch`), a pin or receipt that disagrees (`ffmpeg_pin_mismatch`,
+`ffmpeg_receipt_mismatch`). A file that cannot be read is `unverifiable`.
+
+The probe then runs the installed binaries from a private scratch directory
+outside the runtime tree, with a minimal explicit environment, 30 s per command
+and 60 s in total: version lines and build configuration equal to the pin
+(no `--enable-gpl`, no `--enable-nonfree`), and deterministic stereo 16- and
+24-bit audio, 2 s, encoded WAV to FLAC and decoded back to WAV, which must be
+bit-exact; `ffprobe` must describe the FLAC file. A missing codec, a crash, a
+timeout or a lossy decode is `present_failing` with a `probe_*` reason code.
+
+The worker guard (`verify_s6_ffmpeg_for_interpreter`, `s6_ffmpeg_pair`) checks
+the tree without the probe and refuses to start a Direct Kit job when the pair
+is not verified. A registered module never falls back to a system FFmpeg.
+
+## Not in this slice
+
+The REAPER activation check arrives with S9. Until it is present, a verified
+installation reports `installation_state: "partial"` (`decided_by_rule: 4`).

@@ -23,5 +23,5 @@ rocm = []
 where = ["src"]
 
 [tool.setuptools.package-data]
-"stemwerk_core" = ["runtime-manifest.v1.tsv", "wheel-lock-linux-x86_64-cpu.v1.json"]
+"stemwerk_core" = ["runtime-manifest.v1.tsv", "wheel-lock-linux-x86_64-cpu.v1.json", "ffmpeg-pin.v1.json"]
 "stemwerk_core.catalog" = ["*.json", "schemas/*.json"]

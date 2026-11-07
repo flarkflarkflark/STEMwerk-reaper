@@ -35,7 +35,13 @@ def test_disk_minimum_and_estimate_have_different_outcomes(tmp_path):
     estimate = baseline["space"]["estimate_bytes"]
     assert 0 < minimum < estimate
     assert minimum == install_preflight.ASSET_BYTES
-    assert baseline["space"]["storage"]["final"]["ffmpeg_bytes"] is None
+    # S7 pinned the Linux pair; Windows and macOS stay unmeasured and keep their flag.
+    assert baseline["space"]["storage"]["final"]["ffmpeg_bytes"] == install_preflight.LINUX_FFMPEG_INSTALLED_LOGICAL_BYTES
+    assert "ffmpeg_final_size_unknown" not in baseline["incomplete"]
+    assert baseline["space"]["unknown_quantities"] == []
+    windows = install_preflight.plan("drum_kit", root, host("win-x86_64", os_version="10.0.19045"))
+    assert windows["space"]["storage"]["final"]["ffmpeg_bytes"] is None
+    assert "ffmpeg_final_size_unknown" in windows["incomplete"]
     assert baseline["space"]["storage"]["final"]["candidate_ffmpeg_bytes"] > 0
     assert estimate == sum(baseline["space"]["estimate_items"].values())
     assert baseline["space"]["estimate_items"]["ffmpeg_static_pair_bytes"] > 0

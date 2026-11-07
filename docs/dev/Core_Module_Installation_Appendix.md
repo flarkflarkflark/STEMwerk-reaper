@@ -70,6 +70,40 @@ untested. BtbN keeps month-end builds for about two years and only the
 last 14 daily builds (REPORTED,
 https://github.com/BtbN/FFmpeg-Builds/blob/master/README.md).
 
+### A.2a FINAL Linux pin (S7, owner decision 2026-11-07)
+
+The Linux candidate above was superseded by the newer month-end build, which passes
+the same checks (encoders and decoders, `-buildconf` without `--enable-gpl` and
+`--enable-nonfree`, `-L` LGPL v3 or later, highest glibc symbol `GLIBC_2.28`, bit-exact
+WAV to FLAC to WAV at 16 and 24 bit). It is pinned in `CORE/ffmpeg-pin.v1.json`, a
+Core-only file: the shared `runtime-manifest.v1.tsv` stays Python-only and the shell
+bootstrap is unchanged.
+
+| Item | Value |
+| --- | --- |
+| Vendor, release | BtbN/FFmpeg-Builds, `autobuild-2026-10-31-12-59` |
+| Build | `n9.0.2-39-g7adfbe40dc-20261031`, FFmpeg commit `7adfbe40dcde598f93a6963d2f7b22cd75202ccc`, recipe commit `5031c6f1082414e53688d39e521849905071070d` |
+| Archive | `ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-lgpl-9.0.tar.xz`, 136,027,168 bytes, SHA-256 `6046d6731b26f58887e953561551d254a6eec9fbca4100dfeab56e19af8328d5` (equal to the vendor `checksums.sha256`) |
+| Archive layout | 73 members (66 files, 7 directories), 444,067,173 bytes in regular files, no links, devices or unsafe paths |
+| `bin/ffmpeg` | 140,488,520 bytes, SHA-256 `d372f20463a8ffb9eef1675242cdbf9aae19b647503b073fc9b5b1f42b91c94a` |
+| `bin/ffprobe` | 140,259,080 bytes, SHA-256 `9a7f735d3df4f56dd8406cd7a03a227686bec55b1edc496c25bd8b1867e44498` |
+| `LICENSE.txt` | 7,651 bytes, SHA-256 `da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768` (LGPL v3, unchanged) |
+| `NOTICE.txt` | written by Core from the pin (3,202 bytes): source pointers and the build configuration |
+
+The vendor SHA-256 covers the archive only. At extraction the SHA-256 and size of the
+extracted files are pinned one by one and recorded in the receipt; verification
+compares the installed files with both (Verification, "The FFmpeg pair").
+
+The vendor build links third-party libraries statically (the configuration line
+names, for example, OpenSSL, libvpx, libopenh264, libopencore-amrnb/wb, libopus and
+libass). Their licence texts are not in the archive and S7 does not ship them. That
+question, including patent questions for the codecs, is a backlog item next to the
+`diffq` licence; it must be decided before the first shared build. Option B is
+STEMwerk's own minimal audio-only LGPL Linux build.
+
+BtbN keeps month-end builds for about two years, so this pin stays downloadable until
+about November 2028; the weekly pin check turns red if the asset disappears.
+
 ## A.3 Managed Python CANDIDATE sizes and hashes (from design section 6.2)
 
 Sizes and hashes (REPORTED, Astra research 2026-10-30, from
@@ -219,7 +253,17 @@ CC BY-NC 4.0, so its distribution stays an open release gate.
 | `TMPDIR` peak on tmpfs (`statvfs`) | 2,064,384 | measured physical, tmpfs only |
 | Retained root on ext4, including state and logs | 1,830,456,846 | sampled logical |
 | Retained root on ext4, including state and logs | 1,947,435,008 | sampled allocated |
-| Enforced S6 budget (ext4 allocated peak + 256 MiB) | 2,653,536,256 | policy |
+| Enforced S6 budget before S7 (ext4 allocated peak + 256 MiB) | 2,653,536,256 | policy, superseded |
+| S7: vendor FFmpeg archive, transient (`linux-x86_64`) | 136,027,168 | pinned |
+| S7: kept `ffmpeg` + `ffprobe` | 280,747,600 | pinned |
+| S7: published pair tree (`ffmpeg`, `ffprobe`, `LICENSE.txt`, `NOTICE.txt`; 6 entries) | 280,758,453 | logical |
+| S7: `<root>/runtimes/ffmpeg` on ext4 (`du --block-size=1`) | 280,780,800 | measured allocated |
+| S7: FFmpeg fetch-and-stage phase (archive + staged pair) | 416,807,968 | calculated allocated |
+| S7: root peak on ext4 (`du -s -b`), fresh install with the pair | 2,548,934,631 | sampled logical |
+| S7: root peak on ext4 (`du -s --block-size=1`), fresh install with the pair | 2,665,951,232 | sampled allocated |
+| S7: retained root on ext4, including state and logs | 2,111,290,923 | sampled logical |
+| S7: retained root on ext4, including state and logs | 2,228,350,976 | sampled allocated |
+| Enforced budget with the pair (S7 ext4 allocated peak + 256 MiB) | 2,934,386,688 | policy |
 
 One fresh install per file system, from verified local wheel and asset caches,
 so no network or `.part` bytes. The ext4 run took 664 samples over 42 seconds
@@ -232,4 +276,14 @@ The peak occurs in asset materialization, when the staged venv, managed Python
 and the source and staged asset copies coexist. The wheelhouse was removed
 before that, and the Python archive before the plan. The 256 MiB headroom covers
 file system and path-length differences, metadata, Core wheel growth, and a
-`TMPDIR` on the same volume. S7 FFmpeg is not in this budget.
+`TMPDIR` on the same volume.
+
+S7 repeats the ext4 sample with the pair (1,798 samples, median gap 3.5 ms; wheels and
+assets from verified caches, FFmpeg fetched from the real vendor URL; root
+`~/.cache/stemwerk-s7-e2e-…/root-fresh`). The pair is published before the assets, so the
+peak is still in asset materialization: it equals the S6 peak plus the pair's allocated
+bytes plus 68 KiB of path-length and metadata difference. The 136 MB archive is deleted
+after extraction, before that phase. These are logical and allocated bytes on ext4; no
+physical (tmpfs `statvfs`) high-water mark was measured for S7, and the tmpfs rows above are
+the S6 measurements. An S6 root that lacks the pair needs the fetch-and-stage phase
+(416,807,968 allocated bytes) plus 64 MiB.

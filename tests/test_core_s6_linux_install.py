@@ -27,6 +27,7 @@ from stemwerk_core import (  # noqa: E402
     asset_preparation,
     drumsep_runtime,
     install_preflight,
+    managed_ffmpeg,
     managed_python,
     managed_runtime,
     model_assets,
@@ -41,6 +42,7 @@ from stemwerk_core import (  # noqa: E402
     subprocess_policy,
     wheel_lock,
 )
+from tests import ffmpeg_fixture  # noqa: E402
 
 pytestmark = pytest.mark.portable
 POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits and symlinks")
@@ -440,8 +442,11 @@ def test_worker_routes_numba_cache_outside_a_verified_runtime_only(tmp_path, mon
 
     monkeypatch.setattr(worker.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(module_verify, "verify_s6_runtime_interpreter", lambda _p: (True, "verified"))
+    pair_dir = tmp_path / "root" / "runtimes" / "ffmpeg" / "pair"
+    monkeypatch.setattr(module_verify, "verify_s6_ffmpeg_for_interpreter", lambda _p: (True, "verified", pair_dir))
     with pytest.raises(Spawned) as spawned:
         _run_worker_helper(worker, tmp_path, python)
+    assert spawned.value.env["PATH"].split(os.pathsep)[0] == str(pair_dir / "bin")
     cache = Path(spawned.value.env["NUMBA_CACHE_DIR"])
     assert cache.is_dir() and scratch in cache.parents and venv not in cache.parents
     assert not (venv / "inherited-cache").exists()
@@ -888,7 +893,14 @@ def test_s6_cpu_preflight_scope_and_existing_runtime_conflict(tmp_path):
     storage = install_preflight.OBSERVED_S6_LINUX_CPU_STORAGE
     budget = plan_doc["space"]["known_minimum_bytes"]
     assert budget == storage["s6_enforced_root_budget_bytes"]
-    assert budget == storage["s6_sampled_allocated_peak_root_bytes"] + storage["s6_root_budget_headroom_bytes"]
+    # S7: the pair is published before the assets, so it is part of the asset-phase peak.
+    assert budget == storage["s7_sampled_allocated_peak_root_bytes"] + storage["s6_root_budget_headroom_bytes"]
+    pair_in_peak = (
+        storage["s7_sampled_allocated_peak_root_bytes"] - storage["s6_sampled_allocated_peak_root_bytes"]
+        - storage["s7_ffmpeg_installed_allocated_bytes"]
+    )
+    assert 0 <= pair_in_peak < install_preflight.MIB  # the sample moved by the pair and path-length noise only
+    assert storage["s7_sampled_allocated_peak_root_bytes"] > storage["s7_sampled_logical_peak_root_bytes"]
     assert storage["s6_sampled_allocated_peak_root_bytes"] > storage["s6_sampled_logical_peak_root_bytes"]
     assert storage["s6_sampled_allocated_peak_root_bytes"] > storage["s6_measured_tmpfs_physical_peak_root_bytes"]
     def plan_with_free(free, **kwargs):
@@ -926,7 +938,11 @@ def test_s6_cpu_preflight_scope_and_existing_runtime_conflict(tmp_path):
     resumable = install_preflight.plan("drum_kit", root=root, facts=facts, scope="s6_cpu")
     assert resumable["preflight_result"] == "no_blocker_found"
     assert "recoverable_venv_publication" in resumable["warnings"]
-    assert "insufficient_known_space" not in plan_with_free(64 * install_preflight.MIB)["blockers"]
+    # With the sealed venv but no pair yet, the pair's fetch-and-stage phase still needs room.
+    pair_peak = storage["s7_ffmpeg_phase_peak_allocated_bytes"]
+    assert "insufficient_known_space" in plan_with_free(64 * install_preflight.MIB)["blockers"]
+    assert "insufficient_known_space" in plan_with_free(64 * install_preflight.MIB + pair_peak - 1)["blockers"]
+    assert "insufficient_known_space" not in plan_with_free(64 * install_preflight.MIB + pair_peak)["blockers"]
     (venv_dest / "unrelated.txt").write_text("changed", encoding="utf-8")
     tampered = install_preflight.plan("drum_kit", root=root, facts=facts, scope="s6_cpu")
     assert "runtime_conflict" in tampered["blockers"]
@@ -1068,6 +1084,13 @@ def _prepare_fake_install(tmp_path, monkeypatch):
     monkeypatch.setattr(asset_preparation, "prepare_drumsep_assets", fake_prepare_assets)
 
     monkeypatch.setattr(module_installer, "_probe_published_entry_points", lambda _venv: None)
+
+    # S7: a synthetic vendor archive replaces the download; its stand-in programs
+    # cannot run on every OS, so the round-trip probe is stubbed here (the S7 tests run it).
+    pair = ffmpeg_fixture.build_pair(tmp_path / "ffmpeg-cache")
+    monkeypatch.setattr(managed_ffmpeg, "load_pin", lambda platform_key="linux-x86_64", **_kw: pair.pin)
+    monkeypatch.setenv(managed_ffmpeg.ARCHIVE_CACHE_ENV, str(pair.cache_dir))
+    ffmpeg_fixture.stub_probe(monkeypatch)
     return facts, root, unrelated, seen_commands
 
 

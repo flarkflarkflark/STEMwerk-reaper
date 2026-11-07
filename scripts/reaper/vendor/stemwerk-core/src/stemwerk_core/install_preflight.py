@@ -24,6 +24,7 @@ from . import (
     install_events,
     install_journal,
     install_lock,
+    managed_ffmpeg,
     managed_python,
     managed_runtime,
     model_assets,
@@ -44,9 +45,17 @@ GIB = 1024**3
 MIB = 1024**2
 WINDOWS_MAX_PATH = 259  # Characters before the terminating NUL, without long-path opt-in.
 ASSET_BYTES = asset_acquisition.CHECKPOINT_SIZE + asset_acquisition.CONFIG_SIZE
-LINUX_FFMPEG_PAIR_BYTES = 142_534_568 + 142_305_128
-FFMPEG_ARCHIVE_BYTES = {"linux-x86_64": 137_863_452, "win-x86_64": 171_535_354}
+# Linux: the pinned BtbN pair (ffmpeg-pin.v1.json, checked against it by a test).
+# Windows is still the F3 candidate's API size; macOS has no figure. Both stay
+# unmeasured until their platform steps.
+LINUX_FFMPEG_PAIR_BYTES = 140_488_520 + 140_259_080
+LINUX_FFMPEG_INSTALLED_LOGICAL_BYTES = LINUX_FFMPEG_PAIR_BYTES + 7_651 + 3_202  # + LICENSE.txt + NOTICE.txt
+# Allocated on ext4 (`du --block-size=1` of <root>/runtimes/ffmpeg, parent directory included),
+# measured in the S7 end-to-end run; the 4 KiB-block calculation gave 280,768,512.
+LINUX_FFMPEG_INSTALLED_ALLOCATED_BYTES = 280_780_800
+FFMPEG_ARCHIVE_BYTES = {"linux-x86_64": 136_027_168, "win-x86_64": 171_535_354}
 FFMPEG_CANDIDATE_PAIR_BYTES = {"linux-x86_64": LINUX_FFMPEG_PAIR_BYTES}
+FFMPEG_INSTALLED_BYTES = {"linux-x86_64": LINUX_FFMPEG_INSTALLED_LOGICAL_BYTES}
 
 # One sampled fresh install from verified local caches, so without downloads.
 # Logical bytes, allocated blocks and physical pages are different quantities:
@@ -70,13 +79,28 @@ OBSERVED_S6_LINUX_CPU_STORAGE = {
     "s6_retained_logical_root_bytes": 1_830_456_846,
     "s6_retained_allocated_root_bytes": 1_947_435_008,
     "s6_root_budget_headroom_bytes": 256 * MIB,
-    "s6_enforced_root_budget_bytes": 2_385_100_800 + 256 * MIB,
+    # S7: the pair is published before the assets, so its allocated bytes add to the
+    # asset-phase peak; the archive (136 MB) is gone by then. One fresh install with the
+    # pair, from verified wheel and asset caches and the real vendor URL for FFmpeg, on
+    # ext4 (du every 3.5 ms, 1,798 samples): the peak is the S6 peak plus the pair (plus
+    # 68 KiB of path-length and metadata difference) and occurs in the asset phase.
+    # Logical and allocated bytes; no physical (tmpfs) high-water mark was re-measured.
+    "s7_sampled_logical_peak_root_bytes": 2_548_934_631,
+    "s7_sampled_allocated_peak_root_bytes": 2_665_951_232,
+    "s7_retained_logical_root_bytes": 2_111_290_923,
+    "s7_retained_allocated_root_bytes": 2_228_350_976,
+    "s7_ffmpeg_archive_bytes": 136_027_168,
+    "s7_ffmpeg_pair_bytes": LINUX_FFMPEG_PAIR_BYTES,
+    "s7_ffmpeg_installed_logical_bytes": LINUX_FFMPEG_INSTALLED_LOGICAL_BYTES,
+    "s7_ffmpeg_installed_allocated_bytes": LINUX_FFMPEG_INSTALLED_ALLOCATED_BYTES,
+    "s7_ffmpeg_phase_peak_allocated_bytes": 136_027_168 + LINUX_FFMPEG_INSTALLED_ALLOCATED_BYTES,
+    "s6_enforced_root_budget_bytes": 2_665_951_232 + 256 * MIB,
     "posix_venv_max_relpath_length": 163,
     "windows_venv_max_relpath_length": 152,
 }
 
 # Calibrated from observed S6 Linux x86_64 CPU measurements (replacing the S4
-# provisional 13 GiB ROCm figures). S7 FFmpeg remains separate until S7 pins it.
+# provisional 13 GiB ROCm figures). The Linux FFmpeg pair is the S7 pin.
 ESTIMATE_ITEMS = {
     "module_environment_bytes": OBSERVED_S6_LINUX_CPU_STORAGE["module_venv_installed_bytes"],
     "wheel_download_cache_bytes": (
@@ -95,7 +119,8 @@ ESTIMATE_ITEMS = {
     "safety_margin_bytes": 256 * MIB,
 }
 ESTIMATE_FFMPEG_BYTES = {
-    "linux-x86_64": 137_863_452 + 2 * LINUX_FFMPEG_PAIR_BYTES,
+    # streaming extraction: the archive and one staged copy of the kept files
+    "linux-x86_64": 136_027_168 + LINUX_FFMPEG_INSTALLED_ALLOCATED_BYTES,
     "win-x86_64": GIB,
     "darwin-arm64": GIB,
 }
@@ -317,16 +342,18 @@ def _space_assessment(facts: HostFacts) -> tuple[dict[str, Any], list[str], list
     estimate_items = dict(ESTIMATE_ITEMS)
     estimate_items["ffmpeg_static_pair_bytes"] = ESTIMATE_FFMPEG_BYTES.get(facts.platform_id, GIB)
     candidate_ffmpeg = FFMPEG_CANDIDATE_PAIR_BYTES.get(facts.platform_id)
+    installed_ffmpeg = FFMPEG_INSTALLED_BYTES.get(facts.platform_id)
     archive = FFMPEG_ARCHIVE_BYTES.get(facts.platform_id)
-    # In the full S4 assessment, FFmpeg (S7) is still a candidate rather than a
-    # selected release pin, so S4 keeps ASSET_BYTES as the cross-platform known
-    # minimum while reporting the calibrated S6 Linux CPU measurements in storage.
+    # FFmpeg is pinned on Linux only; Windows and macOS stay candidates. S4 keeps
+    # ASSET_BYTES as the cross-platform known minimum while reporting the
+    # calibrated S6 Linux CPU measurements in storage.
     known_minimum = ASSET_BYTES
     estimate = sum(estimate_items.values())
     blockers: list[str] = []
     warnings: list[str] = []
     incomplete = ["actual_pinned_install_space"]
-    incomplete.append("ffmpeg_final_size_unknown")
+    if installed_ffmpeg is None:
+        incomplete.append("ffmpeg_final_size_unknown")
     if facts.free_bytes is None:
         incomplete.append("free_space_unknown")
     elif facts.free_bytes < known_minimum:
@@ -339,7 +366,11 @@ def _space_assessment(facts: HostFacts) -> tuple[dict[str, Any], list[str], list
             "available_bytes": facts.free_bytes,
             "known_minimum_bytes": known_minimum,
             "estimate_bytes": estimate,
-            "estimate_status": "calibrated_s6_cpu_pending_s7_ffmpeg",
+            "estimate_status": (
+                "calibrated_s6_cpu_s7_ffmpeg_linux"
+                if installed_ffmpeg is not None
+                else "calibrated_s6_cpu_ffmpeg_unmeasured"
+            ),
             "estimate_items": estimate_items,
             "observed_s6_linux_cpu": dict(OBSERVED_S6_LINUX_CPU_STORAGE),
             "estimate_provenance": {
@@ -360,7 +391,8 @@ def _space_assessment(facts: HostFacts) -> tuple[dict[str, Any], list[str], list
                     "during atomic staging-to-publication materialization"
                 ),
                 "ffmpeg_static_pair_bytes": (
-                    "Linux candidate archive and pair measurements; other platforms unmeasured 1 GiB allowance"
+                    "Linux: pinned archive (136,027,168 bytes) + one staged copy of the kept files "
+                    "(280,768,512 allocated bytes); other platforms unmeasured 1 GiB allowance"
                 ),
                 "safety_margin_bytes": "256 MiB bounded filesystem headroom",
             },
@@ -375,7 +407,7 @@ def _space_assessment(facts: HostFacts) -> tuple[dict[str, Any], list[str], list
                 "temporary": {
                     "filesystem": "root_volume_planned",
                     "assets_bytes": ASSET_BYTES,
-                    "ffmpeg_pair_bytes": None,
+                    "ffmpeg_pair_bytes": installed_ffmpeg,
                     "candidate_ffmpeg_pair_bytes": candidate_ffmpeg,
                     "venv_bytes": OBSERVED_S6_LINUX_CPU_STORAGE["module_venv_staging_peak_bytes"],
                     "coexistence": "sampled root peak: 2,268,102,042 logical and 2,385,100,800 allocated bytes on ext4; 2,361,139,200 physical on tmpfs",
@@ -383,15 +415,15 @@ def _space_assessment(facts: HostFacts) -> tuple[dict[str, Any], list[str], list
                 "final": {
                     "filesystem": "root_volume",
                     "assets_bytes": ASSET_BYTES,
-                    "ffmpeg_bytes": None,
+                    "ffmpeg_bytes": installed_ffmpeg,
                     "candidate_ffmpeg_bytes": candidate_ffmpeg,
                     "venv_bytes": OBSERVED_S6_LINUX_CPU_STORAGE["module_venv_installed_bytes"],
                     "managed_python_bytes": OBSERVED_S6_LINUX_CPU_STORAGE["python_installed_bytes"],
-                    "coexistence": "sampled retained root: 1,830,456,846 logical and 1,947,435,008 allocated bytes on ext4; S7 FFmpeg pending",
+                    "coexistence": "sampled retained root: 1,830,456,846 logical and 1,947,435,008 allocated bytes on ext4, plus the Linux FFmpeg pair (280,758,453 logical, 280,768,512 allocated bytes)",
                 },
             },
             "known_minimum_scope": "pinned final asset bytes in S4 full-route view; see s6_cpu for S6 minimum",
-            "unknown_quantities": ["release_ffmpeg_pair"],
+            "unknown_quantities": [] if installed_ffmpeg is not None else ["release_ffmpeg_pair"],
         },
         blockers,
         warnings,
@@ -629,6 +661,20 @@ def _s6_destination_assessment(
         venv_dir = None
 
     assets_dir = module_registry.expected_drumsep_assets_dir(root)
+    try:
+        ffmpeg_pin = managed_ffmpeg.load_pin("linux-x86_64")
+        ffmpeg_dir: Optional[Path] = managed_ffmpeg.published_directory(root, ffmpeg_pin)
+    except managed_ffmpeg.FFmpegError:
+        ffmpeg_pin, ffmpeg_dir = None, None
+
+    def ffmpeg_destination_findings() -> None:
+        # A directory at the pair's destination that no receipt names is adopted
+        # only when it is exactly the pinned tree (a run killed after publishing).
+        if ffmpeg_dir is not None and os.path.lexists(ffmpeg_dir):
+            if managed_ffmpeg.matches_pin(ffmpeg_dir, ffmpeg_pin):
+                warnings.append("recoverable_ffmpeg_publication")
+            else:
+                blockers.append("runtime_conflict")
 
     components_by_id = {
         str(c.get("component_id")): c
@@ -644,6 +690,8 @@ def _s6_destination_assessment(
             blockers.append("runtime_conflict")
         if da_comp.get("class") == "present_failing":
             blockers.append("asset_conflict")
+        if (components_by_id.get("ffmpeg") or {}).get("class") == "present_failing":
+            blockers.append("runtime_conflict")
         if "runtime_conflict" not in blockers and "asset_conflict" not in blockers:
             blockers.append("runtime_conflict")
     elif state == "unknown":
@@ -668,6 +716,7 @@ def _s6_destination_assessment(
             )
             if verdict.component_class != module_verify.PRESENT_PASSING:
                 blockers.append("asset_conflict")
+        ffmpeg_destination_findings()
     elif state in {"partial", "installed"}:
         warnings.append("existing_installation_detected")
         # If module_venv is absent in registry while its target directory exists on disk,
@@ -675,12 +724,15 @@ def _s6_destination_assessment(
         mv_comp = components_by_id.get("module_venv") or {}
         if mv_comp.get("class") == "absent" and venv_dir is not None and venv_dir.exists():
             blockers.append("runtime_conflict")
+        if (components_by_id.get("ffmpeg") or {}).get("class") == "absent":
+            ffmpeg_destination_findings()
 
     return (
         {
             "status": state if state != "unknown" else "unknown",
             "lookup": lookup,
             "reported_state": state,
+            "ffmpeg": (components_by_id.get("ffmpeg") or {}).get("class"),
         },
         {"status": "self_held" if is_self_lock else lock_status, "operation_id": operation_id},
         sorted(set(blockers)),
@@ -721,6 +773,11 @@ def plan_s6_cpu(
     except wheel_lock.WheelLockError as exc:
         raise PreflightError(exc.code) from exc
 
+    try:
+        ffmpeg_pin = managed_ffmpeg.load_pin("linux-x86_64")
+    except managed_ffmpeg.FFmpegError as exc:
+        raise PreflightError(exc.code) from exc
+
     platform_blockers, platform_incomplete = _platform_findings(actual_facts)
     if actual_facts.platform_id in ("darwin-arm64", "win-x86_64"):
         platform_incomplete.append("s6_platform_port_pending")
@@ -756,6 +813,12 @@ def plan_s6_cpu(
         {"recoverable_venv_publication", "recoverable_receipt_journal"} & set(inspect_warnings)
     )
     required_minimum = 64 * MIB if already_s6_satisfied else s6_known_minimum
+    # An S6 root without the pair still has to fetch and stage it (archive + one copy).
+    ffmpeg_done = installation.get("ffmpeg") == module_verify.PRESENT_PASSING or (
+        "recoverable_ffmpeg_publication" in inspect_warnings
+    )
+    if already_s6_satisfied and not ffmpeg_done:
+        required_minimum += OBSERVED_S6_LINUX_CPU_STORAGE["s7_ffmpeg_phase_peak_allocated_bytes"]
     if actual_facts.free_bytes is None:
         space_incomplete.append("free_space_unknown")
     elif actual_facts.free_bytes < required_minimum:
@@ -777,14 +840,15 @@ def plan_s6_cpu(
         }
         - {""}
     )
+    ffmpeg_hosts = (urlparse(ffmpeg_pin.archive_url).hostname or "", *managed_ffmpeg.REDIRECT_HOSTS)
     network_hosts = sorted(
-        {host for host in (python_host, *lock_manifest.allowed_hosts, *asset_hosts) if host}
+        {host for host in (python_host, *lock_manifest.allowed_hosts, *asset_hosts, *ffmpeg_hosts) if host}
     )
 
     s6_components = [
         asdict(c)
         for c in descriptor.components
-        if c.component_id in {"managed_python", "module_venv", "drumsep_assets"}
+        if c.component_id in {"managed_python", "module_venv", "drumsep_assets", "ffmpeg"}
     ]
     venv_pin_id = module_registry.compute_venv_pin_id(
         lock_manifest.python_pin_name, lock_manifest.manifest_sha256
@@ -796,6 +860,7 @@ def plan_s6_cpu(
     )
     venv_dest = str(root_path / "runtimes" / descriptor.module_id / venv_pin_id)
     assets_dest = str(module_registry.expected_drumsep_assets_dir(root_path))
+    ffmpeg_dest = str(managed_ffmpeg.published_directory(root_path, ffmpeg_pin))
 
     actions = {
         "operation": "install",
@@ -810,9 +875,11 @@ def plan_s6_cpu(
         "root": str(root_path),
         "managed_python": python_pin,
         "module_venv_pin_id": venv_pin_id,
+        "ffmpeg": ffmpeg_pin.to_json(),
         "destinations": {
             "managed_python": mp_dest,
             "module_venv": venv_dest,
+            "ffmpeg": ffmpeg_dest,
             "drumsep_assets": assets_dest,
         },
         "wheel_lock": {
@@ -834,6 +901,14 @@ def plan_s6_cpu(
                     lock_manifest.total_wheel_bytes
                     + OBSERVED_S6_LINUX_CPU_STORAGE["module_venv_staging_peak_bytes"]
                 ),
+            },
+            {
+                "phase": "fetch_ffmpeg",
+                "estimate_bytes": OBSERVED_S6_LINUX_CPU_STORAGE["s7_ffmpeg_phase_peak_allocated_bytes"],
+            },
+            {
+                "phase": "verify_ffmpeg",
+                "estimate_bytes": None,
             },
             {
                 "phase": "fetch_assets",
