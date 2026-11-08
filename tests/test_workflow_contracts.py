@@ -681,3 +681,333 @@ def test_shared_workflow_result_corpus_matches_python_and_json_schema(case):
 
     assert python_accepted is case["expected"]["python"]
     assert schema_accepted is case["expected"]["schema"]
+
+
+# ---------------------------------------------------------------------------
+# CI workflow JUnit guard contracts (S8 fix4 delta)
+# ---------------------------------------------------------------------------
+
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci-full.yml"
+BOOTSTRAP_DASH_CASE = "test_a_proc_view_of_another_pid_namespace_releases_nothing_under_dash"
+PORTABLE_FOREIGN_NS_CASES = (
+    "test_fix4_REAL_foreign_namespace_retry_keeps_a_live_writers_core_staging[missing]",
+    "test_fix4_REAL_foreign_namespace_retry_keeps_a_live_writers_core_staging[recorded]",
+    "test_fix4_REAL_foreign_namespace_stale_cleanup_keeps_a_live_writers_bootstrap_staging[empty]",
+    "test_fix4_REAL_foreign_namespace_stale_cleanup_keeps_a_live_writers_bootstrap_staging[recorded]",
+    "test_fix4_REAL_proc_view_of_another_namespace_is_no_proof_of_the_owners_absence[False]",
+    "test_fix4_REAL_proc_view_of_another_namespace_is_no_proof_of_the_owners_absence[True]",
+)
+
+
+def _ci_jobs() -> dict:
+    import yaml
+
+    return yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+
+
+def _ci_step_run(job_id: str, step_name: str) -> str:
+    steps = _ci_jobs()[job_id]["steps"]
+    matches = [step for step in steps if step.get("name") == step_name]
+    assert len(matches) == 1, f"{job_id}: expected one step {step_name!r}, found {len(matches)}"
+    step = matches[0]
+    assert step.get("shell") == "python"
+    assert "if" not in step and "continue-on-error" not in step
+    return step["run"]
+
+
+def _run_guard_code(code: str, cwd: Path) -> tuple[int, str]:
+    import contextlib
+    import io
+    import os
+
+    buf = io.StringIO()
+    old_cwd = Path.cwd()
+    os.chdir(cwd)
+    try:
+        with contextlib.redirect_stdout(buf):
+            exec(compile(code, str(CI_WORKFLOW), "exec"), {"__name__": "__main__"})
+        return 0, buf.getvalue()
+    except SystemExit as exc:
+        if isinstance(exc.code, int):
+            return exc.code, buf.getvalue()
+        return 1, (buf.getvalue() + "\n" + str(exc.code)).strip()
+    finally:
+        os.chdir(old_cwd)
+
+
+def _write_bootstrap_junit(
+    path: Path,
+    *,
+    dash_count: int = 1,
+    dash_classname: str = "tests.test_linux_managed_bootstrap",
+    dash_file: str | None = None,
+    dash_name: str = BOOTSTRAP_DASH_CASE,
+    dash_outcome: str | None = None,
+    filler_count: int = 62,
+    suite_tests: int | None = None,
+    suite_errors: int = 0,
+    suite_failures: int = 0,
+) -> None:
+    import xml.etree.ElementTree as ET
+
+    cases: list[ET.Element] = []
+    for _ in range(dash_count):
+        attrib = {"classname": dash_classname, "name": dash_name}
+        if dash_file is not None:
+            attrib["file"] = dash_file
+        tc = ET.Element("testcase", attrib)
+        if dash_outcome is not None:
+            ET.SubElement(tc, dash_outcome, {"message": f"forced {dash_outcome}"})
+        cases.append(tc)
+    for idx in range(filler_count):
+        cases.append(
+            ET.Element(
+                "testcase",
+                {"classname": "tests.test_linux_managed_bootstrap", "name": f"test_bootstrap_filler_{idx}"},
+            )
+        )
+    total = len(cases) if suite_tests is None else suite_tests
+    skipped = 1 if dash_outcome == "skipped" else 0
+    errors = suite_errors + (1 if dash_outcome == "error" else 0)
+    failures = suite_failures + (1 if dash_outcome == "failure" else 0)
+    suite = ET.Element(
+        "testsuite",
+        {
+            "name": "pytest",
+            "tests": str(total),
+            "skipped": str(skipped),
+            "errors": str(errors),
+            "failures": str(failures),
+        },
+    )
+    suite.extend(cases)
+    ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _write_portable_junit(
+    path: Path,
+    *,
+    foreign_names: tuple[str, ...] = PORTABLE_FOREIGN_NS_CASES,
+    foreign_classname: str = "tests.test_core_install_bootstrap",
+    foreign_file: str | None = None,
+    foreign_outcomes: dict[str, str] | None = None,
+    duplicate_name: str | None = None,
+    s8_count: int = 85,
+    s8_outcome: str | None = None,
+    include_s7_opt_in_skip: bool = True,
+) -> None:
+    import xml.etree.ElementTree as ET
+
+    outcomes = foreign_outcomes or {}
+    cases: list[ET.Element] = []
+    for name in foreign_names:
+        copies = 2 if name == duplicate_name else 1
+        for _ in range(copies):
+            attrib = {"classname": foreign_classname, "name": name}
+            if foreign_file is not None:
+                attrib["file"] = foreign_file
+            tc = ET.Element("testcase", attrib)
+            if name in outcomes:
+                ET.SubElement(tc, outcomes[name], {"message": f"forced {outcomes[name]}"})
+            cases.append(tc)
+    for idx in range(s8_count):
+        tc = ET.Element(
+            "testcase",
+            {"classname": "tests.test_core_s8_cancel", "name": f"test_s8_case_{idx}"},
+        )
+        if idx == 0 and s8_outcome is not None:
+            ET.SubElement(tc, s8_outcome, {"message": f"forced {s8_outcome}"})
+        cases.append(tc)
+    if include_s7_opt_in_skip:
+        s7_tc = ET.Element(
+            "testcase",
+            {
+                "classname": "tests.test_core_s7_linux_ffmpeg",
+                "name": "test_real_pinned_linux_archive_installs_and_verifies_when_supplied",
+            },
+        )
+        ET.SubElement(s7_tc, "skipped", {"message": "opt-in real archive test"})
+        cases.append(s7_tc)
+    skipped = sum(1 for c in cases for child in c if child.tag == "skipped")
+    errors = sum(1 for c in cases for child in c if child.tag == "error")
+    failures = sum(1 for c in cases for child in c if child.tag == "failure")
+    suite = ET.Element(
+        "testsuite",
+        {
+            "name": "pytest",
+            "tests": str(len(cases)),
+            "skipped": str(skipped),
+            "errors": str(errors),
+            "failures": str(failures),
+        },
+    )
+    suite.extend(cases)
+    ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def test_ci_workflow_preserves_pytest_exit_status_and_native_zero_skip_guard():
+    jobs = _ci_jobs()
+    boot_steps = {s.get("name"): s for s in jobs["linux-managed-python-bootstrap"]["steps"]}
+    boot_pytest = boot_steps["Run Linux outer-bootstrap contract tests"]["run"]
+    assert "--junitxml=linux-managed-python-bootstrap-junit.xml" in boot_pytest
+    assert "||" not in boot_pytest and "|" not in boot_pytest
+
+    portable_steps = {s.get("name"): s for s in jobs["tests"]["steps"]}
+    portable_pytest = portable_steps["Run portable runtime diagnostics harness tests"]["run"]
+    assert "--junitxml=portable-junit.xml" in portable_pytest
+    assert "||" not in portable_pytest and "|" not in portable_pytest
+    assert jobs["tests"]["strategy"]["matrix"]["python-version"] == ["3.11", "3.12"]
+
+    native_job = jobs["asset-publication-native"]
+    assert native_job["env"]["MIN_NATIVE_PUBLICATION_TESTS"] == "457"
+    native_guard = _ci_step_run("asset-publication-native", "Require that native publication tests really ran")
+    assert 'totals["skipped"]' in native_guard
+
+
+def test_ci_linux_bootstrap_guard_requires_dash_namespace_case_and_aggregate_count(tmp_path: Path):
+    guard = _ci_step_run(
+        "linux-managed-python-bootstrap",
+        "Require that the Linux bootstrap selection really ran",
+    )
+    report = tmp_path / "linux-managed-python-bootstrap-junit.xml"
+
+    # Genuine green: 63 passing tests including the required dash namespace test.
+    _write_bootstrap_junit(report)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc == 0, out
+    assert f"tests.test_linux_managed_bootstrap::{BOOTSTRAP_DASH_CASE}: ran once and passed" in out
+
+    # Deselected (62 tests) -> red.
+    _write_bootstrap_junit(report, dash_count=0, filler_count=62)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    # Absent even if aggregate count stays 63 -> red.
+    _write_bootstrap_junit(report, dash_count=0, filler_count=63)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    # Duplicate record -> red.
+    _write_bootstrap_junit(report, dash_count=2, filler_count=61)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "found 2" in out
+
+    # Skipped, error, or failure record -> red.
+    for outcome in ("skipped", "error", "failure"):
+        _write_bootstrap_junit(report, dash_outcome=outcome)
+        rc, out = _run_guard_code(guard, tmp_path)
+        assert rc != 0 and f"did not pass: {outcome}:" in out
+
+    # Wrong class or file identity -> red.
+    _write_bootstrap_junit(report, dash_classname="tests.test_other")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    _write_bootstrap_junit(report, dash_file="tests/test_other.py")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    # Aggregate count below 63 even when named dash case passes -> red.
+    _write_bootstrap_junit(report, dash_count=1, filler_count=61)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "the Linux bootstrap selection did not all execute and pass" in out
+
+    # Missing or malformed report -> red.
+    report.unlink()
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "cannot read JUnit report" in out
+
+    report.write_text("<not-closed", encoding="utf-8")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "cannot read JUnit report" in out
+
+    report.write_text("<root/>", encoding="utf-8")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "cannot read JUnit report" in out
+
+
+@pytest.mark.parametrize("dropped_case", PORTABLE_FOREIGN_NS_CASES)
+def test_ci_portable_guard_rejects_dropping_any_single_foreign_namespace_case(
+    tmp_path: Path, dropped_case: str
+):
+    guard = _ci_step_run("tests", "Require that the Core S8 cancellation cases really ran")
+    report = tmp_path / "portable-junit.xml"
+    remaining = tuple(name for name in PORTABLE_FOREIGN_NS_CASES if name != dropped_case)
+    _write_portable_junit(report, foreign_names=remaining)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0
+    assert f"tests.test_core_install_bootstrap::{dropped_case}: expected exactly one testcase" in out
+
+
+def test_ci_portable_guard_accepts_passing_suite_and_rejects_skip_duplicate_error_failure(
+    tmp_path: Path,
+):
+    guard = _ci_step_run("tests", "Require that the Core S8 cancellation cases really ran")
+    report = tmp_path / "portable-junit.xml"
+
+    # Genuine green with all 6 foreign-namespace cases passing, 85 S8 cases passing,
+    # and the permitted opt-in S7 skip elsewhere in the portable suite.
+    _write_portable_junit(report, include_s7_opt_in_skip=True)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc == 0, out
+    assert "6 required foreign-namespace cases ran once and passed" in out
+    assert "tests/test_core_s8_cancel.py: 85 cases ran, minimum 85" in out
+
+    # All 6 foreign-namespace cases deselected -> red.
+    _write_portable_junit(report, foreign_names=())
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    # All 6 foreign-namespace cases skipped -> red.
+    _write_portable_junit(
+        report,
+        foreign_outcomes={name: "skipped" for name in PORTABLE_FOREIGN_NS_CASES},
+    )
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "did not pass: skipped:" in out
+
+    # Single required case skipped, errored, failed, or duplicated -> red.
+    target = PORTABLE_FOREIGN_NS_CASES[0]
+    for outcome in ("skipped", "error", "failure"):
+        _write_portable_junit(report, foreign_outcomes={target: outcome})
+        rc, out = _run_guard_code(guard, tmp_path)
+        assert rc != 0 and f"tests.test_core_install_bootstrap::{target}: did not pass: {outcome}:" in out
+
+    _write_portable_junit(report, duplicate_name=target)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and f"tests.test_core_install_bootstrap::{target}: expected exactly one testcase" in out
+
+    # Wrong class/file identity or wrong parameter ID -> red.
+    _write_portable_junit(report, foreign_classname="tests.test_core_s8_cancel")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    _write_portable_junit(report, foreign_file="tests/test_core_s8_cancel.py")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    wrong_param = (
+        "test_fix4_REAL_foreign_namespace_retry_keeps_a_live_writers_core_staging[other]",
+        *PORTABLE_FOREIGN_NS_CASES[1:],
+    )
+    _write_portable_junit(report, foreign_names=wrong_param)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    # S8 file count below 85 or skipped -> red.
+    _write_portable_junit(report, s8_count=84)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "the Core S8 cancellation selection did not all execute and pass" in out
+
+    _write_portable_junit(report, s8_outcome="skipped")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "the Core S8 cancellation selection did not all execute and pass" in out
+
+    # Missing or malformed report -> red.
+    report.unlink()
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "cannot read JUnit report" in out
+
+    report.write_text("not xml", encoding="utf-8")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "cannot read JUnit report" in out

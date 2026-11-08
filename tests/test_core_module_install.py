@@ -104,7 +104,7 @@ def test_describe_document_matches_the_code():
         "event_protocol": "stemwerk-install-events/1",
         "core_version": module_install.core_version(),
         "modules": ["drum_kit"],
-        "operations": ["plan", "verify", "install"],
+        "operations": ["plan", "verify", "install", "cancel"],
         "platforms": ["linux-x86_64", "darwin-arm64", "win-x86_64"],
         "current_platform": module_install.current_platform(),
         "schemas": {
@@ -132,7 +132,10 @@ def test_describe_lists_exactly_the_operations_the_cli_offers():
     commands = next(
         action for action in parser._actions if action.dest == "command"
     ).choices
-    assert sorted(commands) == sorted(module_install.describe()["operations"])
+    advertised = module_install.describe()["operations"]
+    # "cancel" advertises the D6 marker capability; it is no subcommand.
+    assert "cancel" in advertised
+    assert sorted(commands) == sorted(op for op in advertised if op != "cancel")
 
 
 @pytest.mark.parametrize(
@@ -181,7 +184,7 @@ def test_cli_child_documented_isolated_entry_point_runs():
     )
     result = run_cli(["-c", script, str(CORE_SRC)], isolated=True)
     assert result.returncode == 0
-    assert single_json_line(result.stdout)["operations"] == ["plan", "verify", "install"]
+    assert single_json_line(result.stdout)["operations"] == ["plan", "verify", "install", "cancel"]
 
 
 @pytest.mark.native_publication

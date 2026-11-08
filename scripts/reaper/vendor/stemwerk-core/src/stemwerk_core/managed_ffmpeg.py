@@ -39,6 +39,8 @@ import urllib.parse
 import urllib.request
 import wave
 
+from . import install_cancel
+
 PIN_SCHEMA = "stemwerk-ffmpeg-pin/1"
 PIN_FILENAME = "ffmpeg-pin.v1.json"
 PLATFORMS = ("linux-x86_64",)
@@ -377,15 +379,47 @@ def _default_opener() -> Callable[..., Any]:
     return urllib.request.build_opener(_RedirectGuard()).open
 
 
-def _copy_bounded(reader: Any, part: Path, limit: int, name: str) -> None:
-    """Write at most ``limit`` bytes; one more byte is a size mismatch, not a partial success."""
+def _copy_bounded(
+    reader: Any,
+    part: Path,
+    limit: int,
+    name: str,
+    cancel: Optional[Callable[[], None]] = None,
+) -> None:
+    """Write at most ``limit`` bytes; one more byte is a size mismatch, not a partial success.
+
+    ``cancel`` is the S8 probe: with it, reads wait interruptibly (about one
+    second) and the marker is checked per chunk; without it the loop is the
+    exact pre-S8 one.
+    """
 
     total = 0
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _binary_flag()
     descriptor = os.open(part, flags, 0o600)
+    # One fixed ceiling for the whole transfer (distinct from the per-chunk
+    # idle deadline), so a trickling server cannot extend it indefinitely.
+    overall_deadline = time.monotonic() + install_cancel.OVERALL_TIMEOUT_SECONDS
     try:
         while True:
-            chunk = reader.read(256 * 1024)
+            if cancel is None:
+                chunk = reader.read(256 * 1024)
+            else:
+                chunk = install_cancel.read_download_chunk(
+                    reader,
+                    256 * 1024,
+                    cancel,
+                    idle_deadline=install_cancel.idle_deadline_from_now(),
+                    idle_error=lambda: FFmpegError(
+                        "download_failed",
+                        f"{name} sent no data for {install_cancel.IDLE_TIMEOUT_SECONDS:.0f} seconds",
+                    ),
+                    overall_deadline=overall_deadline,
+                    overall_error=lambda: FFmpegError(
+                        "download_failed",
+                        f"{name} exceeded the overall transfer limit of "
+                        f"{install_cancel.OVERALL_TIMEOUT_SECONDS:.0f} seconds",
+                    ),
+                )
             if not chunk:
                 break
             total += len(chunk)
@@ -406,12 +440,14 @@ def fetch_archive(
     source_dir: Optional[Path] = None,
     opener: Optional[Callable[..., Any]] = None,
     timeout: float = 120.0,
+    cancel: Optional[Callable[[], None]] = None,
 ) -> Path:
     """Place the verified vendor archive in ``directory`` and return its path.
 
     ``source_dir`` is a read-only cache (tests, offline runs); a file there is
     copied and then verified exactly like a download. Otherwise the pinned URL
     is fetched over HTTPS, redirects included, from the allowlisted hosts only.
+    ``cancel`` is the S8 probe, checked before and during the transfer.
     """
 
     directory = Path(directory)
@@ -422,10 +458,12 @@ def fetch_archive(
         if cached is not None and cached.is_file() and not cached.is_symlink():
             try:
                 with open(cached, "rb") as reader:
-                    _copy_bounded(reader, part, pin.archive_size, pin.archive_name)
+                    _copy_bounded(reader, part, pin.archive_size, pin.archive_name, cancel)
             except OSError as exc:
                 raise FFmpegError("archive_copy_failed", f"cannot copy the cached archive: {type(exc).__name__}") from exc
         else:
+            if cancel is not None:
+                cancel()
             parsed = urllib.parse.urlparse(pin.archive_url)
             if parsed.scheme != "https" or parsed.hostname not in DOWNLOAD_HOSTS:
                 raise FFmpegError("download_host_forbidden", f"refusing to download from {parsed.hostname!r}")
@@ -438,7 +476,7 @@ def fetch_archive(
                             "archive_size_mismatch",
                             f"the server announced {length} bytes, expected {pin.archive_size}",
                         )
-                    _copy_bounded(response, part, pin.archive_size, pin.archive_name)
+                    _copy_bounded(response, part, pin.archive_size, pin.archive_name, cancel)
             except FFmpegError:
                 raise
             except (OSError, urllib.error.URLError, ValueError) as exc:
@@ -469,13 +507,20 @@ def _member_path(name: Any, top: str) -> str:
     return "/".join(parts[1:])
 
 
-def _write_file(path: Path, source: Any, record: FileRecord) -> None:
+def _write_file(
+    path: Path,
+    source: Any,
+    record: FileRecord,
+    cancel: Optional[Callable[[], None]] = None,
+) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _binary_flag()
     descriptor = os.open(path, flags, 0o600)
     digest = hashlib.sha256()
     total = 0
     try:
         while True:
+            if cancel is not None:
+                cancel()
             chunk = source.read(_CHUNK)
             if not chunk:
                 break
@@ -514,7 +559,12 @@ def write_notice(directory: Path, pin: FFmpegPin) -> None:
     os.chmod(Path(directory) / NOTICE_NAME, record.mode)
 
 
-def extract_archive(archive: Path, stage: Path, pin: FFmpegPin) -> None:
+def extract_archive(
+    archive: Path,
+    stage: Path,
+    pin: FFmpegPin,
+    cancel: Optional[Callable[[], None]] = None,
+) -> None:
     """Stream the vendor archive into the empty directory ``stage``.
 
     The archive's size and SHA-256 are verified before it is opened. The whole
@@ -523,7 +573,8 @@ def extract_archive(archive: Path, stage: Path, pin: FFmpegPin) -> None:
     directory, or when the member count or total size differs from the pin, even
     for members that would be ignored. Only the three kept members are written,
     each with its pinned size, SHA-256 and an explicit mode; ``NOTICE.txt`` is
-    written by Core. A refusal removes whatever was written.
+    written by Core. A refusal removes whatever was written. ``cancel`` is the
+    S8 probe, checked per member and per written chunk.
     """
 
     stage = Path(stage)
@@ -531,7 +582,7 @@ def extract_archive(archive: Path, stage: Path, pin: FFmpegPin) -> None:
     if not stage.is_dir() or any(stage.iterdir()):
         raise FFmpegError("stage_not_empty", f"{stage} must be an empty directory")
     try:
-        _extract_verified(Path(archive), stage, pin)
+        _extract_verified(Path(archive), stage, pin, cancel)
     except BaseException:
         for entry in list(stage.iterdir()):
             if entry.is_dir() and not entry.is_symlink():
@@ -544,7 +595,12 @@ def extract_archive(archive: Path, stage: Path, pin: FFmpegPin) -> None:
         raise
 
 
-def _extract_verified(archive: Path, stage: Path, pin: FFmpegPin) -> None:
+def _extract_verified(
+    archive: Path,
+    stage: Path,
+    pin: FFmpegPin,
+    cancel: Optional[Callable[[], None]] = None,
+) -> None:
     import lzma  # not imported at module level: the check is only needed here
 
     kept = {record.path: record for record in pin.files}
@@ -555,6 +611,8 @@ def _extract_verified(archive: Path, stage: Path, pin: FFmpegPin) -> None:
     try:
         with tarfile.open(archive, "r|xz") as tar:
             for member in tar:
+                if cancel is not None:
+                    cancel()
                 count += 1
                 if count > pin.member_count:
                     raise FFmpegError("archive_layout_mismatch", "the archive has more members than its pin")
@@ -581,7 +639,7 @@ def _extract_verified(archive: Path, stage: Path, pin: FFmpegPin) -> None:
                 source = tar.extractfile(member)
                 if source is None:
                     raise FFmpegError("archive_unsafe_member", "a kept member has no data")
-                _write_file(destination, source, record)
+                _write_file(destination, source, record, cancel)
                 written.add(relative)
     except (tarfile.TarError, lzma.LZMAError, EOFError) as exc:
         raise FFmpegError("archive_unreadable", f"the archive cannot be read: {type(exc).__name__}") from exc
@@ -757,15 +815,17 @@ def stage_pair(
     *,
     source_dir: Optional[Path] = None,
     opener: Optional[Callable[..., Any]] = None,
+    cancel: Optional[Callable[[], None]] = None,
 ) -> TreeReport:
     """Fetch, verify and extract the pair into ``stage``; the archive is removed.
 
-    Returns the report of the staged tree, which must be ``ok``.
+    Returns the report of the staged tree, which must be ``ok``. ``cancel`` is
+    the S8 probe, honoured during the download and the extraction.
     """
 
-    archive = fetch_archive(pin, Path(download_dir), source_dir=source_dir, opener=opener)
+    archive = fetch_archive(pin, Path(download_dir), source_dir=source_dir, opener=opener, cancel=cancel)
     try:
-        extract_archive(archive, Path(stage), pin)
+        extract_archive(archive, Path(stage), pin, cancel)
     finally:
         try:
             archive.unlink()

@@ -392,7 +392,7 @@ def _space_assessment(facts: HostFacts) -> tuple[dict[str, Any], list[str], list
                 ),
                 "ffmpeg_static_pair_bytes": (
                     "Linux: pinned archive (136,027,168 bytes) + one staged copy of the kept files "
-                    "(280,768,512 allocated bytes); other platforms unmeasured 1 GiB allowance"
+                    "(280,780,800 allocated bytes); other platforms unmeasured 1 GiB allowance"
                 ),
                 "safety_margin_bytes": "256 MiB bounded filesystem headroom",
             },
@@ -419,7 +419,7 @@ def _space_assessment(facts: HostFacts) -> tuple[dict[str, Any], list[str], list
                     "candidate_ffmpeg_bytes": candidate_ffmpeg,
                     "venv_bytes": OBSERVED_S6_LINUX_CPU_STORAGE["module_venv_installed_bytes"],
                     "managed_python_bytes": OBSERVED_S6_LINUX_CPU_STORAGE["python_installed_bytes"],
-                    "coexistence": "sampled retained root: 1,830,456,846 logical and 1,947,435,008 allocated bytes on ext4, plus the Linux FFmpeg pair (280,758,453 logical, 280,768,512 allocated bytes)",
+                    "coexistence": "sampled retained root: 1,830,456,846 logical and 1,947,435,008 allocated bytes on ext4, plus the Linux FFmpeg pair (280,758,453 logical, 280,780,800 allocated bytes)",
                 },
             },
             "known_minimum_scope": "pinned final asset bytes in S4 full-route view; see s6_cpu for S6 minimum",

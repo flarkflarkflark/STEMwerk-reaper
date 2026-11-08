@@ -26,6 +26,7 @@ from stemwerk_core import (  # noqa: E402
     asset_materialization,
     asset_preparation,
     drumsep_runtime,
+    install_cancel,
     install_preflight,
     managed_ffmpeg,
     managed_python,
@@ -1079,11 +1080,75 @@ def _prepare_fake_install(tmp_path, monkeypatch):
 
     seen_commands = []
     monkeypatch.setattr(module_installer.subprocess, "run", fake_subprocess_run)
+
+    # S8: the installer runs venv and pip through install_cancel.cancellable_run,
+    # which spawns subprocess.Popen directly. Fake venv/pip the same way as
+    # fake_subprocess_run; anything else (the S7 probe stand-ins) runs for real.
+    real_popen = subprocess.Popen
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            self._delegate = None
+            self._stdout = self._stderr = None
+            self._returncode = None
+            self.args = cmd
+            command = [str(part) for part in cmd]
+            if ("-m" in command and "venv" in command) or (
+                "-m" in command and "pip" in command
+            ):
+                completed = fake_subprocess_run(command, **kwargs)
+                self._stdout, self._stderr = completed.stdout, completed.stderr
+                self._returncode = completed.returncode
+                self.pid = 0x40000000  # never signalled: no such process group
+            else:
+                self._delegate = real_popen(cmd, **kwargs)
+                self.pid = self._delegate.pid
+
+        @property
+        def returncode(self):
+            if self._delegate is not None:
+                return self._delegate.returncode
+            return self._returncode
+
+        def communicate(self, input=None, timeout=None):
+            if self._delegate is not None:
+                return self._delegate.communicate(input=input, timeout=timeout)
+            return self._stdout, self._stderr
+
+        def poll(self):
+            if self._delegate is not None:
+                return self._delegate.poll()
+            return self._returncode
+
+        def wait(self, timeout=None):
+            if self._delegate is not None:
+                return self._delegate.wait(timeout=timeout)
+            return self._returncode
+
+        def terminate(self):
+            if self._delegate is not None:
+                self._delegate.terminate()
+
+        def kill(self):
+            if self._delegate is not None:
+                self._delegate.kill()
+
+        def __enter__(self):
+            if self._delegate is not None:
+                self._delegate.__enter__()
+            return self
+
+        def __exit__(self, *exc_info):
+            if self._delegate is not None:
+                return self._delegate.__exit__(*exc_info)
+            return False
+
+    monkeypatch.setattr(install_cancel.subprocess, "Popen", FakePopen)
     monkeypatch.setattr(wheel_lock, "stage_and_verify_wheelhouse", fake_stage_wheelhouse)
     monkeypatch.setattr(module_installer, "_acquire_drumsep_sources_into", fake_acquire_sources)
     monkeypatch.setattr(asset_preparation, "prepare_drumsep_assets", fake_prepare_assets)
 
-    monkeypatch.setattr(module_installer, "_probe_published_entry_points", lambda _venv: None)
+    monkeypatch.setattr(module_installer, "_probe_published_entry_points", lambda _venv, **_kw: None)
 
     # S7: a synthetic vendor archive replaces the download; its stand-in programs
     # cannot run on every OS, so the round-trip probe is stubbed here (the S7 tests run it).
@@ -1098,7 +1163,7 @@ def _prepare_fake_install(tmp_path, monkeypatch):
 def test_s6_installer_fault_recovery_and_idempotency(tmp_path, monkeypatch):
     facts, root, unrelated, seen_commands = _prepare_fake_install(tmp_path, monkeypatch)
     entry_probes = []
-    def record_entry_probe(venv):
+    def record_entry_probe(venv, **_kw):
         entry_probes.append((venv, module_registry.receipt_path(root, "drum_kit").exists()))
     monkeypatch.setattr(module_installer, "_probe_published_entry_points", record_entry_probe)
     monkeypatch.setenv("PIP_TARGET", str(tmp_path / "outside-target"))

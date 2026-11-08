@@ -17,7 +17,8 @@ import shutil
 import stat
 import subprocess
 import tempfile
-from typing import Any, Callable, Dict, Mapping, Optional, Tuple
+import time
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 import urllib.request
 import uuid
@@ -26,6 +27,7 @@ from . import (
     asset_acquisition,
     asset_materialization,
     asset_preparation,
+    install_cancel,
     install_events,
     install_journal,
     install_lock,
@@ -207,8 +209,15 @@ def _rewrite_staged_venv_paths(stage: Path, published: Path) -> None:
     _update_record_rows(stage, changed)
 
 
-def _probe_published_entry_points(venv_dir: Path) -> None:
+def _probe_published_entry_points(
+    venv_dir: Path,
+    *,
+    guard: Optional["install_cancel.CancelGuard"] = None,
+) -> None:
     """Fail before registration if shipped console scripts cannot start."""
+    run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+    if guard is not None:
+        run = lambda cmd, **kwargs: install_cancel.cancellable_run(guard, "publish", cmd, **kwargs)
     with tempfile.TemporaryDirectory(prefix="stemwerk-console-probe-") as scratch:
         env = subprocess_policy.clean_pip_env()
         env["NUMBA_CACHE_DIR"] = str(Path(scratch) / "numba")
@@ -217,8 +226,8 @@ def _probe_published_entry_points(venv_dir: Path) -> None:
             if not script.is_file():
                 raise S6InstallError("publish", "entry_point_missing", str(script))
             try:
-                result = subprocess.run([str(script), *args], env=env, capture_output=True,
-                                        text=True, timeout=60, check=False)
+                result = run([str(script), *args], env=env, capture_output=True,
+                             text=True, timeout=60, check=False)
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise S6InstallError("publish", "entry_point_failed", f"{name}: {exc}") from exc
             if result.returncode != 0:
@@ -259,6 +268,9 @@ def _recover_s6_asset_materializations(root: Path, current_op: str) -> None:
     A journal proves an S6 operation that is no longer running; only a lock
     naming that operation, and the stage named after it, belong to it. A lock
     naming anything else may belong to a live or unknown materializer and stays.
+    An operation whose journal records a suspected writer that is not proven gone
+    (S8) is skipped entirely: its stage and lock stay until a later run proves
+    the writer gone.
     """
     tmp = root / "tmp"
     if not tmp.is_dir():
@@ -273,9 +285,13 @@ def _recover_s6_asset_materializations(root: Path, current_op: str) -> None:
             continue
         try:
             install_events._check_operation_id(op, "journal_invalid")
-            install_journal.parse_journal((op_dir / install_journal.JOURNAL_FILENAME).read_bytes(), op)
+            records = install_journal.parse_journal(
+                (op_dir / install_journal.JOURNAL_FILENAME).read_bytes(), op
+            )
         except (install_events.InstallFileError, install_journal.JournalError, OSError):
             continue  # no readable journal: nothing here is proven to be S6's
+        if install_journal.suspected_writer(records) is not None:
+            continue  # a cancelled writer may still be publishing: stage and lock stay (S8)
         try:
             stage = dest.parent / f".{dest.name}.stemwerk-stage-{op}"
             if os.path.lexists(stage):
@@ -338,6 +354,7 @@ def _acquire_drumsep_sources_into(
     staging_sources_dir: Path,
     *,
     asset_source_dir: Optional[Path] = None,
+    guard: Optional[install_cancel.CancelGuard] = None,
 ) -> Mapping[str, Path]:
     """Acquire and verify DrumSep model source files into ``staging_sources_dir``."""
     staging_sources_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -356,6 +373,8 @@ def _acquire_drumsep_sources_into(
         staging_sources_dir.mkdir(parents=True, exist_ok=True)
         result: Dict[str, Path] = {}
         for asset in policy.assets:
+            if guard is not None:
+                guard.check("fetch_assets")
             src = cache_dir / asset.name
             dst = staging_sources_dir / asset.name
             shutil.copyfile(src, dst)
@@ -372,9 +391,14 @@ def _acquire_drumsep_sources_into(
 
     try:
         acquired = asset_acquisition.acquire_drumsep_sources(
-            asset_acquisition.AcquisitionRequest(staging_sources_dir)
+            asset_acquisition.AcquisitionRequest(
+                staging_sources_dir,
+                cancel=None if guard is None else lambda: guard.check("fetch_assets"),
+            )
         )
         return {k: Path(v) for k, v in (acquired.get("sources") or {}).items()}
+    except install_cancel.CancelRequested:
+        raise
     except asset_acquisition.AcquisitionError as direct_exc:
         # When running behind an HTTPS proxy where raw socket.getaddrinfo is
         # disabled (e.g. sandboxed environments with HTTPS_PROXY), fall back to
@@ -412,8 +436,22 @@ def _acquire_drumsep_sources_into(
                 with part.open("wb") as out:
                     total = 0
                     hasher = hashlib.sha256()
+                    # One fixed ceiling for the whole transfer (distinct from
+                    # the per-chunk idle deadline): a trickle cannot extend it.
+                    overall_deadline = time.monotonic() + install_cancel.OVERALL_TIMEOUT_SECONDS
                     while True:
-                        chunk = resp.read(256 * 1024)
+                        if guard is None:
+                            chunk = resp.read(256 * 1024)
+                        else:
+                            chunk = install_cancel.read_download_chunk(
+                                resp,
+                                256 * 1024,
+                                lambda: guard.check("fetch_assets"),
+                                idle_deadline=install_cancel.idle_deadline_from_now(),
+                                idle_error=lambda: TimeoutError("asset download idle timeout"),
+                                overall_deadline=overall_deadline,
+                                overall_error=lambda: TimeoutError("asset download overall timeout"),
+                            )
                         if not chunk:
                             break
                         total += len(chunk)
@@ -441,6 +479,9 @@ def _acquire_drumsep_sources_into(
                 )
             os.replace(part, target)
             result[asset.name] = target
+        except install_cancel.CancelRequested:
+            part.unlink(missing_ok=True)
+            raise
         except S6InstallError:
             part.unlink(missing_ok=True)
             raise
@@ -463,6 +504,7 @@ def _acquire_ffmpeg(
     source_dir: Optional[Path],
     opener: Optional[Callable[..., Any]],
     trigger_fault: Callable[[str], None],
+    guard: Optional[install_cancel.CancelGuard] = None,
 ) -> Tuple[Optional[Path], managed_ffmpeg.TreeReport, str]:
     """Fetch, verify, extract and probe the pair, or adopt an exact published one.
 
@@ -473,6 +515,8 @@ def _acquire_ffmpeg(
     destination = managed_ffmpeg.published_directory(root, pin)
     writer.append("active_indeterminate", "fetch_ffmpeg", since_seconds=0)
     if os.path.lexists(destination):
+        if guard is not None:
+            guard.check("fetch_ffmpeg", "ffmpeg_inspect")
         try:
             report = managed_ffmpeg.inspect_tree(destination, pin)
         except managed_ffmpeg.FFmpegError as exc:
@@ -485,7 +529,7 @@ def _acquire_ffmpeg(
             )
         writer.append("done", "fetch_ffmpeg", verified=True)
         writer.append("active_indeterminate", "verify_ffmpeg", since_seconds=0)
-        _probe_ffmpeg(destination, pin)
+        _probe_ffmpeg(destination, pin, guard=guard)
         writer.append("done", "verify_ffmpeg", verified=True)
         return None, report, "unknown"
 
@@ -495,23 +539,42 @@ def _acquire_ffmpeg(
     stage = journal.create_directory(work / "stage")
     env_cache = os.environ.get(managed_ffmpeg.ARCHIVE_CACHE_ENV, "").strip()
     cache = source_dir if source_dir is not None else (Path(env_cache) if env_cache else None)
+    if guard is not None:
+        guard.check("fetch_ffmpeg", "fetch_ffmpeg_download")
     try:
-        report = managed_ffmpeg.stage_pair(pin, download, stage, source_dir=cache, opener=opener)
+        report = managed_ffmpeg.stage_pair(
+            pin,
+            download,
+            stage,
+            source_dir=cache,
+            opener=opener,
+            cancel=None if guard is None else lambda: guard.check("fetch_ffmpeg"),
+        )
     except managed_ffmpeg.FFmpegError as exc:
         raise S6InstallError("fetch_ffmpeg", exc.code, exc.message, details=exc.details) from exc
     writer.append("active_determinate", "fetch_ffmpeg", done=pin.archive_size, total=pin.archive_size, unit="bytes")
     writer.append("done", "fetch_ffmpeg", verified=True)
     writer.append("active_indeterminate", "verify_ffmpeg", since_seconds=0)
-    _probe_ffmpeg(stage, pin)
+    _probe_ffmpeg(stage, pin, guard=guard)
     trigger_fault("after_ffmpeg_staging")
     writer.append("done", "verify_ffmpeg", verified=True)
     return stage, report, "core_managed"
 
 
-def _probe_ffmpeg(directory: Path, pin: managed_ffmpeg.FFmpegPin) -> None:
+def _probe_ffmpeg(
+    directory: Path,
+    pin: managed_ffmpeg.FFmpegPin,
+    *,
+    guard: Optional[install_cancel.CancelGuard] = None,
+) -> None:
     """Run the pair before it is published or adopted; a failure blocks registration."""
+    probe_kwargs: Dict[str, Any] = {}
+    if guard is not None:
+        probe_kwargs["run"] = lambda cmd, **kwargs: install_cancel.cancellable_run(
+            guard, "verify_ffmpeg", cmd, **kwargs
+        )
     try:
-        managed_ffmpeg.probe_pair(directory, pin)
+        managed_ffmpeg.probe_pair(directory, pin, **probe_kwargs)
     except managed_ffmpeg.FFmpegError as exc:
         raise S6InstallError("verify_ffmpeg", exc.code, exc.message, details=exc.details) from exc
 
@@ -608,6 +671,309 @@ def _finalize_failure(
     return 2, doc
 
 
+def _writer_protection(root_path: Path, operation_id: str) -> Optional[Dict[str, Any]]:
+    """The journal's current writer protection for this operation, if any."""
+
+    try:
+        records = install_journal.parse_journal(
+            (install_journal.operation_directory(root_path, operation_id)
+             / install_journal.JOURNAL_FILENAME).read_bytes(),
+            operation_id,
+        )
+    except (OSError, install_journal.JournalError):
+        return None
+    entry = install_journal.suspected_writer(records)
+    if entry is None:
+        return None
+    return {
+        "pgid": entry.get("pgid"),
+        "boot_id": entry.get("boot_id"),
+        "pid_namespace": entry.get("pid_namespace"),
+        "staging": entry.get("staging"),
+        "recorded_in": f"tmp/{operation_id}/{install_journal.JOURNAL_FILENAME}",
+    }
+
+
+def _finalize_cancelled(
+    writer: Optional[install_events.EventWriter],
+    op_log_dir: Optional[Path],
+    root_path: Path,
+    operation_id: str,
+    module_id: str,
+    exc: install_cancel.CancelRequested,
+    *,
+    lock_held: bool,
+    retained: Optional[Mapping[str, str]] = None,
+    prior_error: Optional[BaseException] = None,
+) -> Tuple[int, Dict[str, Any]]:
+    """Terminal outcome of a cancelled operation (design 7.4, owner decisions d-f).
+
+    Exit 2 with exactly one result whose ``error.code`` is ``cancelled``; an
+    already-written terminal result is preserved. Under the held lock only
+    this operation's journaled staging is removed, identity-checked by the
+    journal recovery code; a published but unreceipted component is left in
+    place, untrusted, and named. When a cancelled subprocess may have
+    survived, NOTHING is deleted (a writer could still write into its
+    staging): the staging is retained, named in ``remains``, and the
+    suspected process group and boot id are recorded in the journal so that a
+    later operation (journal recovery under the lock) removes it only once the
+    writer is proven gone. ``remains`` comes from the
+    recovery report and a bounded disk inspection, never from assumptions.
+    """
+
+    cleanup_items: List[Dict[str, Any]] = []
+    cleanup_failures: List[str] = []
+    published_not_registered: List[str] = []
+    uncertainty: List[str] = []
+    suspected_writer: Optional[Dict[str, Any]] = None
+    writer_may_survive = bool(exc.child_stop and exc.child_stop.get("survivors_suspected"))
+    if lock_held and writer_may_survive:
+        # Decisions c/f: cleanup only once writers are known to be gone. A
+        # surviving writer could still write into its staging, so NOTHING is
+        # deleted now — not by journal recovery here and not by the staging
+        # parent rmdir below. The staging is named in remains and a later
+        # operation performs the journal-driven recovery once the writer is
+        # gone (it answers to startup recovery like any interrupted operation).
+        pgid = exc.child_stop.get("pgid") if exc.child_stop else None
+        try:
+            suspect_record = install_journal.record_suspected_writer(
+                root_path, operation_id, pgid=pgid if isinstance(pgid, int) else None
+            )
+            suspected_writer = {
+                "pgid": suspect_record["pgid"],
+                "boot_id": suspect_record["boot_id"],
+                "pid_namespace": suspect_record["pid_namespace"],
+                "staging": suspect_record["staging"],
+                "recorded_in": f"tmp/{operation_id}/{install_journal.JOURNAL_FILENAME}",
+            }
+            uncertainty.append(
+                "a cancelled subprocess may have survived; its staging was "
+                "retained and is named in staging_entries and suspected_writer; "
+                "a later operation keeps it while that process group exists and "
+                "removes it once the group is gone or the boot id has changed"
+            )
+        except (install_journal.JournalError, OSError) as record_exc:
+            # The supplementary suspect record failed. Safety does not depend
+            # on it: a write-ahead writer intent already in the journal keeps
+            # the staging protected. Say which of the two is true.
+            protection = _writer_protection(root_path, operation_id)
+            if protection is not None:
+                suspected_writer = protection
+                uncertainty.append(
+                    "a cancelled subprocess may have survived; the supplementary "
+                    f"suspect record could not be written ({type(record_exc).__name__}: "
+                    f"{record_exc}) but the write-ahead writer record keeps its staging "
+                    "retained until the writer is proven gone"
+                )
+            else:
+                uncertainty.append(
+                    "a cancelled subprocess may have survived and its staging was "
+                    "retained, but the suspected writer could not be recorded "
+                    f"({type(record_exc).__name__}: {record_exc}) and no writer record "
+                    "exists; a later operation may remove that staging"
+                )
+    elif lock_held:
+        try:
+            recovery = install_journal._recover_operation(
+                root_path,
+                install_journal.operation_directory(root_path, operation_id),
+                operation_id,
+                verify_published=lambda path: _verify_published_object(root_path, module_id, path),
+            )
+            cleanup_items = list(recovery.items)
+            if recovery.deferred_writer is not None:
+                # Write-ahead writer records the child_stop did not report
+                # (for example a stop that raced a failed close append): the
+                # recovery kept everything, so report it as a surviving writer.
+                writer_may_survive = True
+                deferred = recovery.deferred_writer
+                suspected_writer = {
+                    "pgid": deferred.get("pgid"),
+                    "boot_id": deferred.get("boot_id"),
+                    "pid_namespace": deferred.get("pid_namespace"),
+                    "staging": deferred.get("staging"),
+                    "recorded_in": f"tmp/{operation_id}/{install_journal.JOURNAL_FILENAME}",
+                }
+                uncertainty.append(
+                    "a writer of this operation is not proven gone "
+                    f"({deferred.get('reason')}); its staging was retained and is named in "
+                    "staging_entries and suspected_writer"
+                )
+            if recovery.error is not None and recovery.error != "journal_missing":
+                cleanup_failures.append(f"journal recovery: {recovery.error}")
+            for item in recovery.items:
+                outcome = item.get("outcome")
+                target = str(item.get("destination") or item.get("path"))
+                if outcome in (
+                    install_journal.KEPT_IDENTITY_MISMATCH,
+                    install_journal.KEPT_REMOVE_FAILED,
+                    install_journal.KEPT_CONTAINS_KEPT_ITEM,
+                ):
+                    cleanup_failures.append(f"{target}: {outcome}")
+                elif outcome in (
+                    install_journal.PUBLISHED_VERIFIED,
+                    install_journal.PUBLISHED_FAILED,
+                    install_journal.PUBLISHED_UNVERIFIED,
+                ):
+                    published_not_registered.append(f"{target}: {outcome}")
+        except Exception as recovery_exc:
+            cleanup_failures.append(
+                f"journal recovery failed: {type(recovery_exc).__name__}: {recovery_exc}"
+            )
+
+    staging_entries: List[str] = []
+    op_tmp = root_path / "tmp" / operation_id
+    # The operation staging parent is operation-owned too; rmdir only succeeds
+    # when the journal cleanup emptied it. When a cancelled subprocess may
+    # have survived, keep the parent so its late writes stay inside staging.
+    if not writer_may_survive:
+        try:
+            op_tmp.rmdir()
+        except OSError:
+            pass
+    try:
+        if op_tmp.is_dir():
+            entries: List[str] = []
+            truncated = False
+            for entry in op_tmp.rglob("*"):
+                entries.append(str(entry.relative_to(root_path)))
+                if len(entries) > 100:
+                    truncated = True
+                    break
+            staging_entries = sorted(entries[:100])
+            if truncated:
+                staging_entries.append("<truncated after 100 entries>")
+    except OSError as list_exc:
+        uncertainty.append(f"staging inspection failed: {type(list_exc).__name__}: {list_exc}")
+
+    if exc.check_error:
+        uncertainty.append(f"a cancel check failed and was treated as a stop: {exc.check_error}")
+
+    module_status: Optional[Dict[str, Any]] = None
+    try:
+        status_doc = module_verify.verify_module(module_id, root=root_path)
+        module_status = {
+            "installation_state": status_doc.get("installation_state"),
+            "decided_by_rule": status_doc.get("decided_by_rule"),
+            "components": {
+                str(component.get("component_id")): component.get("class")
+                for component in (status_doc.get("components") or ())
+                if isinstance(component, Mapping)
+            },
+        }
+    except Exception as status_exc:
+        uncertainty.append(
+            f"module status verification failed: {type(status_exc).__name__}: {status_exc}"
+        )
+
+    # Owner decision d: a published but unreceipted component stays in place,
+    # untrusted, and is named. The journal names its own renames; the assets
+    # materialize through their own staged publication, so name any known
+    # destination that sits on disk without a committed passing registration.
+    # A retry re-verifies each before adopting it; none is trusted as-is.
+    if module_status is not None:
+        candidates: List[Tuple[str, Path]] = []
+        try:
+            candidates.append((
+                "managed_python",
+                runtime_manifest.published_directory(
+                    root_path, runtime_manifest.python_record("linux-x86_64")
+                ),
+            ))
+        except Exception:
+            pass
+        try:
+            candidates.append((
+                "module_venv",
+                module_registry.expected_module_venv_dir(root_path, module_id, "linux-x86_64", "cpu")[0],
+            ))
+        except Exception:
+            pass
+        try:
+            candidates.append((
+                "ffmpeg",
+                managed_ffmpeg.published_directory(root_path, managed_ffmpeg.load_pin("linux-x86_64")),
+            ))
+        except Exception:
+            pass
+        try:
+            candidates.append(("drumsep_assets", module_registry.expected_drumsep_assets_dir(root_path)))
+        except Exception:
+            pass
+        already_named = {entry.split(": ", 1)[0] for entry in published_not_registered}
+        for component_id, destination in candidates:
+            if module_status["components"].get(component_id) == module_verify.PRESENT_PASSING:
+                continue
+            if not os.path.lexists(destination):
+                continue
+            try:
+                label = str(destination.relative_to(root_path))
+            except ValueError:
+                label = str(destination)
+            if label not in already_named and str(destination) not in already_named:
+                published_not_registered.append(f"{label}: present_not_registered")
+
+    cancel_details = exc.details()
+    if prior_error is not None:
+        if isinstance(prior_error, S6InstallError):
+            cancel_details["prior_error"] = {
+                "phase": prior_error.phase,
+                "code": prior_error.code,
+                "detail": prior_error.message,
+                "action": prior_error.action,
+            }
+        else:
+            cancel_details["prior_error"] = {
+                "type": type(prior_error).__name__,
+                "detail": str(prior_error),
+            }
+
+    action = "Start a new operation to retry; verified downloads were kept for reuse."
+    doc: Dict[str, Any] = {
+        "kind": "stemwerk_module_install_error",
+        "schema_version": "1.0.0",
+        "operation": "install",
+        "operation_id": operation_id,
+        "module_id": module_id,
+        "phase": exc.phase,
+        "error": {
+            "code": install_cancel.CANCELLED,
+            "action": action,
+            "detail": str(exc),
+            "cancel": cancel_details,
+            "remains": {
+                "staging_entries": staging_entries,
+                "cleanup": cleanup_items,
+                "cleanup_failures": cleanup_failures,
+                "published_not_registered": published_not_registered,
+                "retained_downloads": dict(retained or {}),
+                "uncertainty": uncertainty,
+                "module_status": module_status,
+            },
+        },
+    }
+    if suspected_writer is not None:
+        # Only present when a writer could not be ruled out; the ordinary
+        # remains key set is unchanged.
+        doc["error"]["remains"]["suspected_writer"] = suspected_writer
+    if writer is not None and op_log_dir is not None:
+        try:
+            # Owner decision C (2026-11-08): the terminal EVENT is the existing
+            # v1 state ``failed`` with error_code ``cancelled`` — no new event
+            # state — so unmodified v1 readers parse the whole stream. The
+            # terminal outcome lives in result.json (error.code "cancelled").
+            writer.append("failed", exc.phase, error_code="cancelled", detail=str(exc), action=action)
+        except Exception:
+            pass
+        try:
+            if not (op_log_dir / install_events.RESULT_FILENAME).exists():
+                install_events.write_result(op_log_dir, operation_id, 2, doc)
+        except Exception:
+            pass
+    _cleanup_bootstrap_handover_file(root_path, operation_id)
+    return 2, doc
+
+
 def install_module(
     module_id: str,
     plan_fingerprint: str,
@@ -620,6 +986,7 @@ def install_module(
     ffmpeg_source_dir: Optional[Path] = None,
     ffmpeg_opener: Optional[Callable[..., Any]] = None,
     fault_hook: Optional[Callable[[str], None]] = None,
+    cancel_hook: Optional[Callable[[str], None]] = None,
 ) -> Tuple[int, Dict[str, Any]]:
     """Execute the S6 Linux-first Direct Kit CPU installation transaction.
 
@@ -627,8 +994,14 @@ def install_module(
     holds the verified S6 components but not the pair gets the pair added; its
     interpreter, environment and assets are not touched.
 
+    Cancellation (S8, design 7.4): the marker ``<root>/logs/<op>/cancel.request``
+    is probed with ``os.lstat`` at every safe point, long subprocesses run in an
+    operation-owned process group and downloads wait interruptibly. A honoured
+    cancel ends the operation with exit 2 and ``error.code == "cancelled"``;
+    once the success result is written a late marker has no effect.
+
     Returns ``(exit_code, document)`` where ``exit_code`` is ``0`` on success
-    and ``2`` on structured refusal or failure.
+    and ``2`` on structured refusal, failure or cancellation.
     """
     descriptor = module_descriptors.get_module_descriptor(module_id)
     op_id = _resolve_operation_id(operation_id)
@@ -666,50 +1039,105 @@ def install_module(
             None, None, op_id, module_id, "preflight", exc.code, str(exc)
         )
 
-    # 1. Preflight before lock
-    writer.append("active_indeterminate", "preflight", since_seconds=0)
-    try:
-        install_preflight.require_current_plan(
-            plan_fingerprint,
-            module_id,
-            root_path,
-            facts,
-            scope=install_preflight.SCOPE_S6_CPU,
-        )
-    except install_preflight.PreflightError as exc:
-        _cleanup_bootstrap_handover_file(root_path, op_id)
-        return _finalize_failure(
-            writer,
-            op_log_dir,
-            op_id,
-            module_id,
-            "preflight",
-            exc.code,
-            f"preflight refused installation before lock: {exc.code}",
-            details={"blockers": list(exc.blockers)} if exc.blockers else None,
-        )
+    guard = install_cancel.CancelGuard(op_log_dir, hook=cancel_hook)
+    guard.install_signal_handlers()
 
-    # 2. Acquire install lock (which also runs journal recovery and stale bootstrap cleanup)
-    writer.append("active_indeterminate", "lock", since_seconds=0)
+    def _retained_downloads() -> Dict[str, str]:
+        kept: Dict[str, str] = {}
+        if wheel_cache_dir is not None:
+            kept["wheel_cache"] = str(wheel_cache_dir)
+        if asset_source_dir is not None:
+            kept["asset_source"] = str(asset_source_dir)
+        if ffmpeg_source_dir is not None:
+            kept["ffmpeg_source"] = str(ffmpeg_source_dir)
+        for env_name, key in (
+            (managed_ffmpeg.ARCHIVE_CACHE_ENV, "ffmpeg_archive_cache_env"),
+            (ASSET_SOURCE_CACHE_ENV, "asset_source_cache_env"),
+        ):
+            value = os.environ.get(env_name, "").strip()
+            if value:
+                kept[key] = value
+        return kept
+
+    lock: Optional[install_lock.InstallLock] = None
     try:
-        lock = install_lock.acquire(
-            root_path,
-            op_id,
-            verify_published=lambda path: _verify_published_object(root_path, module_id, path),
-            before_recovery=lambda: _recover_s6_asset_materializations(root_path, op_id),
+        guard.check("preflight", "preflight_entry")
+
+        # 1. Preflight before lock
+        writer.append("active_indeterminate", "preflight", since_seconds=0)
+        try:
+            install_preflight.require_current_plan(
+                plan_fingerprint,
+                module_id,
+                root_path,
+                facts,
+                scope=install_preflight.SCOPE_S6_CPU,
+            )
+        except install_preflight.PreflightError as exc:
+            _cleanup_bootstrap_handover_file(root_path, op_id)
+            hit = guard.requested()
+            if hit is not None:
+                guard.restore_signal_handlers()
+                return _finalize_cancelled(
+                    writer, op_log_dir, root_path, op_id, module_id,
+                    install_cancel.cancel_from_hit("preflight", hit),
+                    lock_held=False, retained=_retained_downloads(), prior_error=exc,
+                )
+            return _finalize_failure(
+                writer,
+                op_log_dir,
+                op_id,
+                module_id,
+                "preflight",
+                exc.code,
+                f"preflight refused installation before lock: {exc.code}",
+                details={"blockers": list(exc.blockers)} if exc.blockers else None,
+            )
+
+        guard.check("lock", "before_lock")
+
+        # 2. Acquire install lock (which also runs journal recovery and stale bootstrap cleanup)
+        writer.append("active_indeterminate", "lock", since_seconds=0)
+        try:
+            lock = install_lock.acquire(
+                root_path,
+                op_id,
+                verify_published=lambda path: _verify_published_object(root_path, module_id, path),
+                before_recovery=lambda: _recover_s6_asset_materializations(root_path, op_id),
+            )
+        except install_lock.LockError as exc:
+            _cleanup_bootstrap_handover_file(root_path, op_id)
+            hit = guard.requested()
+            if hit is not None:
+                guard.restore_signal_handlers()
+                return _finalize_cancelled(
+                    writer, op_log_dir, root_path, op_id, module_id,
+                    install_cancel.cancel_from_hit("lock", hit),
+                    lock_held=False, retained=_retained_downloads(), prior_error=exc,
+                )
+            return _finalize_failure(
+                writer,
+                op_log_dir,
+                op_id,
+                module_id,
+                "lock",
+                exc.code,
+                str(exc),
+            )
+        # First safe point after acquisition, before any new install work; an
+        # active recovery step inside acquire() has completed safely by now.
+        guard.check("lock", "after_lock")
+        writer.append("done", "lock", verified=True)
+    except install_cancel.CancelRequested as exc:
+        guard.restore_signal_handlers()
+        # The after_lock safe point fires with the lock held: release it before
+        # the terminal outcome so a retry in this process is not refused.
+        if lock is not None:
+            lock.release()
+        return _finalize_cancelled(
+            writer, op_log_dir, root_path, op_id, module_id, exc,
+            lock_held=False, retained=_retained_downloads(),
         )
-    except install_lock.LockError as exc:
-        _cleanup_bootstrap_handover_file(root_path, op_id)
-        return _finalize_failure(
-            writer,
-            op_log_dir,
-            op_id,
-            module_id,
-            "lock",
-            exc.code,
-            str(exc),
-        )
-    writer.append("done", "lock", verified=True)
 
     journal: Optional[install_journal.Journal] = None
     try:
@@ -720,10 +1148,15 @@ def install_module(
             verify_published=lambda path: _verify_published_object(root_path, module_id, path),
         )
         # An empty journal never reached its first intent, so nothing was changed.
+        # A deferred operation (suspected writer not proven gone, S8) is kept
+        # whole and reported; it never blocks this operation, which builds in
+        # its own fresh staging.
         unresolved = [
             operation
             for operation in recovery_report.operations
-            if not operation.complete and operation.error != "journal_empty"
+            if not operation.complete
+            and operation.error != "journal_empty"
+            and operation.deferred_writer is None
         ]
         if unresolved:
             raise S6InstallError(
@@ -783,7 +1216,14 @@ def install_module(
             raise S6InstallError("preflight", exc.code, exc.message) from exc
 
         # 2e. Check if the components are already installed and verified (idempotent no-op)
-        pre_verify = module_verify.verify_module(module_id, root=root_path)
+        guard.check("create_environment", "before_pre_verify")
+        pre_verify = module_verify.verify_module(
+            module_id,
+            root=root_path,
+            ffmpeg_probe_run=lambda cmd, **kwargs: install_cancel.cancellable_run(
+                guard, "create_environment", cmd, **kwargs
+            ),
+        )
         pre_classes = {
             str(c.get("component_id")): c.get("class")
             for c in (pre_verify.get("components") or ())
@@ -840,6 +1280,7 @@ def install_module(
                 "recovery": recovery_report.to_json(),
                 "verification": pre_verify,
             }
+            guard.check("verify_module", "before_result")
             install_events.write_result(op_log_dir, op_id, 0, doc)
             return 0, doc
 
@@ -853,6 +1294,7 @@ def install_module(
             journal.rename(staged_receipt, target_receipt, publish=os.replace)
 
             trigger_fault("between_receipt_and_registry")
+            guard.check("publish", "between_receipt_and_registry")
 
             module_registry.write_registry_from_receipt(
                 root_path, module_id, receipt_payload, receipt_sha256
@@ -862,7 +1304,13 @@ def install_module(
 
             # Final verification and managed-Python invariance gate
             writer.append("active_indeterminate", "verify_module", since_seconds=0)
-            post_verify = module_verify.verify_module(module_id, root=root_path)
+            post_verify = module_verify.verify_module(
+                module_id,
+                root=root_path,
+                ffmpeg_probe_run=lambda cmd, **kwargs: install_cancel.cancellable_run(
+                    guard, "verify_module", cmd, **kwargs
+                ),
+            )
             post_classes = {
                 str(c.get("component_id")): c.get("class")
                 for c in (post_verify.get("components") or ())
@@ -913,26 +1361,32 @@ def install_module(
             # S6 is complete and receipted; only the pair is missing. Nothing but the
             # pair, the receipt and the registry entry is written.
             journal = install_journal.open_journal(root_path, op_id)
+            guard.writers = journal
             core_dir = journal.core_directory
             for phase in ("create_environment", "install_packages"):
                 writer.append("active_indeterminate", phase, since_seconds=0)
                 writer.append("done", phase, verified=True)
+            guard.check("fetch_ffmpeg", "fetch_ffmpeg_entry")
             ffmpeg_stage, ffmpeg_report, ffmpeg_ownership = _acquire_ffmpeg(
                 writer, journal, root_path, ffmpeg_pin,
                 source_dir=ffmpeg_source_dir, opener=ffmpeg_opener, trigger_fault=trigger_fault,
+                guard=guard,
             )
             for phase in ("fetch_assets", "verify_assets"):
                 writer.append("active_indeterminate", phase, since_seconds=0)
                 writer.append("done", phase, verified=True)
+            guard.check("publish", "publish_entry")
             writer.append("active_indeterminate", "publish", since_seconds=0)
             ensure_directories(root_path, ("state", "modules"))
             ffmpeg_dir = _publish_ffmpeg(journal, root_path, ffmpeg_pin, ffmpeg_stage)
             trigger_fault("after_ffmpeg_publish")
+            guard.check("publish", "after_ffmpeg_publish")
             published_report = _confirm_published_ffmpeg(ffmpeg_dir, ffmpeg_pin, ffmpeg_report)
             ffmpeg_entry = managed_ffmpeg.receipt_entry(
                 root_path, ffmpeg_dir, ffmpeg_pin, published_report, ffmpeg_ownership
             )
             trigger_fault("before_receipt")
+            guard.check("publish", "before_receipt")
             status, current_receipt, reason = module_registry.read_and_validate_module_record(root_path, module_id)
             if status != "valid" or current_receipt is None:
                 raise S6InstallError("publish", "registration_changed", f"the registration is {status}: {reason}")
@@ -959,11 +1413,13 @@ def install_module(
                 "recovery": recovery_report.to_json(),
                 "verification": post_verify,
             }
+            guard.check("verify_module", "before_result")
             install_events.write_result(op_log_dir, op_id, 0, doc)
             return 0, doc
 
         # 3. Open transaction journal and create staged environment
         journal = install_journal.open_journal(root_path, op_id)
+        guard.writers = journal
         core_dir = journal.core_directory
 
         venv_already_published = False
@@ -1014,6 +1470,7 @@ def install_module(
                 ) from exc
 
         venv_stage = core_dir / "venv-stage"
+        guard.check("create_environment", "create_environment_entry")
         if venv_already_published:
             writer.append("active_indeterminate", "create_environment", since_seconds=0)
             writer.append("done", "create_environment", verified=True)
@@ -1026,7 +1483,9 @@ def install_module(
             journal.create_directory(venv_stage)
             mp_python = managed_python.interpreter_path(mp_dir, "linux-x86_64")
             env = subprocess_policy.clean_pip_env()
-            completed = subprocess.run(
+            completed = install_cancel.cancellable_run(
+                guard,
+                "create_environment",
                 subprocess_policy.isolated_python_cmd(mp_python, "-m", "venv", str(venv_stage)),
                 capture_output=True,
                 text=True,
@@ -1043,6 +1502,7 @@ def install_module(
             writer.append("done", "create_environment", verified=True)
 
             # 4. Stage verified binary wheelhouse and install packages offline
+            guard.check("install_packages", "install_packages_entry")
             wheelhouse_dir = journal.create_directory(core_dir / "wheelhouse")
             total_wheels = lock_manifest.wheel_count + 1
             writer.append("active_determinate", "install_packages", done=0, total=total_wheels, unit="wheels")
@@ -1051,6 +1511,7 @@ def install_module(
             def _on_wheel(_rec: wheel_lock.WheelRecord) -> None:
                 nonlocal verified_count
                 verified_count += 1
+                guard.check("install_packages", "wheel_staged")
                 if verified_count in {1, total_wheels} or verified_count % 15 == 0:
                     writer.append(
                         "active_determinate",
@@ -1066,6 +1527,7 @@ def install_module(
                     wheelhouse_dir,
                     wheel_cache_dir=wheel_cache_dir,
                     on_wheel_verified=_on_wheel,
+                    cancel=lambda: guard.check("install_packages"),
                 )
             except wheel_lock.WheelLockError as exc:
                 raise S6InstallError("install_packages", exc.code, exc.message, details=exc.details) from exc
@@ -1086,7 +1548,9 @@ def install_module(
                 "-r",
                 str(req_path),
             )
-            dry_proc = subprocess.run(
+            dry_proc = install_cancel.cancellable_run(
+                guard,
+                "install_packages",
                 dry_run_cmd,
                 capture_output=True,
                 text=True,
@@ -1118,7 +1582,9 @@ def install_module(
                 "-r",
                 str(req_path),
             )
-            inst_proc = subprocess.run(
+            inst_proc = install_cancel.cancellable_run(
+                guard,
+                "install_packages",
                 install_cmd,
                 capture_output=True,
                 text=True,
@@ -1133,7 +1599,9 @@ def install_module(
                     f"offline binary-only pip install failed: {(inst_proc.stderr or inst_proc.stdout)[-800:]}",
                 )
 
-            check_proc = subprocess.run(
+            check_proc = install_cancel.cancellable_run(
+                guard,
+                "install_packages",
                 subprocess_policy.isolated_python_cmd(venv_python, "-m", "pip", "--isolated", "check"),
                 capture_output=True,
                 text=True,
@@ -1167,12 +1635,15 @@ def install_module(
             trigger_fault("after_venv_staging")
 
         # 5. Fetch, verify and probe the pinned FFmpeg pair (before the assets, design 7.2)
+        guard.check("fetch_ffmpeg", "fetch_ffmpeg_entry")
         ffmpeg_stage, ffmpeg_report, ffmpeg_ownership = _acquire_ffmpeg(
             writer, journal, root_path, ffmpeg_pin,
             source_dir=ffmpeg_source_dir, opener=ffmpeg_opener, trigger_fault=trigger_fault,
+            guard=guard,
         )
 
         # 5 & 6. Fetch and verify DrumSep model assets
+        guard.check("fetch_assets", "fetch_assets_entry")
         asset_comp_desc = next(c for c in descriptor.components if c.component_id == "drumsep_assets")
         existing_asset_verdict = (
             module_verify.verify_asset_component(
@@ -1208,7 +1679,7 @@ def install_module(
                 unit="bytes",
             )
             sources = _acquire_drumsep_sources_into(
-                sources_dir, asset_source_dir=asset_source_dir
+                sources_dir, asset_source_dir=asset_source_dir, guard=guard
             )
             writer.append(
                 "active_determinate",
@@ -1220,6 +1691,7 @@ def install_module(
             writer.append("done", "fetch_assets", verified=True)
 
             writer.append("active_indeterminate", "verify_assets", since_seconds=0)
+            guard.check("verify_assets", "verify_assets_entry")
             ensure_directories(root_path, ("assets",))
             try:
                 asset_preparation.prepare_drumsep_assets(
@@ -1238,8 +1710,10 @@ def install_module(
             writer.append("done", "verify_assets", verified=True)
 
         trigger_fault("after_asset_publish")
+        guard.check("verify_assets", "after_asset_publish")
 
         # 7. Publish module_venv, write receipt, and atomically update registry
+        guard.check("publish", "publish_entry")
         writer.append("active_indeterminate", "publish", since_seconds=0)
         ensure_directories(root_path, ("runtimes", module_id))
         ensure_directories(root_path, ("state", "modules"))
@@ -1265,12 +1739,15 @@ def install_module(
             except asset_materialization.MaterializationError as exc:
                 raise S6InstallError("publish", "runtime_conflict", str(exc)) from exc
             trigger_fault("after_venv_publish")
+            guard.check("publish", "after_venv_publish")
 
         ffmpeg_dir = _publish_ffmpeg(journal, root_path, ffmpeg_pin, ffmpeg_stage)
         trigger_fault("after_ffmpeg_publish")
+        guard.check("publish", "after_ffmpeg_publish")
 
         trigger_fault("before_receipt")
-        _probe_published_entry_points(venv_dir)
+        guard.check("publish", "before_receipt")
+        _probe_published_entry_points(venv_dir, guard=guard)
         # The receipt must pin exactly what was sealed before publication.
         if not module_registry.matches_publication_record(root_path, module_id, venv_dir):
             raise S6InstallError(
@@ -1366,12 +1843,33 @@ def install_module(
             "recovery": recovery_report.to_json(),
             "verification": post_verify,
         }
+        # Last safe point: once the success result is written, a late marker
+        # has no effect (owner decision d).
+        guard.check("verify_module", "before_result")
         install_events.write_result(op_log_dir, op_id, 0, result_doc)
         return 0, result_doc
 
+    except install_cancel.CancelRequested as exc:
+        if journal is not None:
+            journal.close()
+            journal = None
+        return _finalize_cancelled(
+            writer, op_log_dir, root_path, op_id, module_id, exc,
+            lock_held=True, retained=_retained_downloads(),
+        )
     except S6InstallError as exc:
         if journal is not None:
             journal.close()
+            journal = None
+        # A real error and the marker coincide: cancelled wins, the error is
+        # retained as a detail (owner decision e).
+        hit = guard.requested()
+        if hit is not None:
+            return _finalize_cancelled(
+                writer, op_log_dir, root_path, op_id, module_id,
+                install_cancel.cancel_from_hit(exc.phase, hit),
+                lock_held=True, retained=_retained_downloads(), prior_error=exc,
+            )
         return _finalize_failure(
             writer,
             op_log_dir,
@@ -1383,9 +1881,34 @@ def install_module(
             action=exc.action,
             details=exc.details,
         )
+    except install_cancel.WriterIntentError as exc:
+        # Write-ahead: the intent could not be recorded, so the process was
+        # never started. Nothing is writing; report it as the failure it is.
+        if journal is not None:
+            journal.close()
+            journal = None
+        hit = guard.requested()
+        if hit is not None:
+            return _finalize_cancelled(
+                writer, op_log_dir, root_path, op_id, module_id,
+                install_cancel.cancel_from_hit(exc.phase, hit),
+                lock_held=True, retained=_retained_downloads(), prior_error=exc,
+            )
+        return _finalize_failure(
+            writer, op_log_dir, op_id, module_id, exc.phase,
+            "writer_intent_unavailable", str(exc),
+        )
     except Exception as exc:
         if journal is not None:
             journal.close()
+            journal = None
+        hit = guard.requested()
+        if hit is not None:
+            return _finalize_cancelled(
+                writer, op_log_dir, root_path, op_id, module_id,
+                install_cancel.cancel_from_hit("install_packages", hit),
+                lock_held=True, retained=_retained_downloads(), prior_error=exc,
+            )
         return _finalize_failure(
             writer,
             op_log_dir,
@@ -1396,4 +1919,5 @@ def install_module(
             f"{type(exc).__name__}: {exc}",
         )
     finally:
+        guard.restore_signal_handlers()
         lock.release()

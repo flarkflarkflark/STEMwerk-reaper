@@ -649,7 +649,11 @@ def verify_s6_runtime_interpreter(python_path: Path) -> Tuple[bool, str]:
 
 
 def _verify_ffmpeg_with_receipt(
-    component: ComponentDescriptor, location: ComponentLocation, *, probe: bool
+    component: ComponentDescriptor,
+    location: ComponentLocation,
+    *,
+    probe: bool,
+    probe_run: Optional[Callable[..., Any]] = None,
 ) -> ComponentVerdict:
     """The installed pair against the pin AND the receipt, then (optionally) the probe.
 
@@ -697,8 +701,11 @@ def _verify_ffmpeg_with_receipt(
         "files": {path: dict(entry) for path, entry in sorted(report.files.items())},
     }
     if probe:
+        probe_kwargs: Dict[str, Any] = {}
+        if probe_run is not None:
+            probe_kwargs["run"] = probe_run
         try:
-            details["probe"] = managed_ffmpeg.probe_pair(directory, pin)
+            details["probe"] = managed_ffmpeg.probe_pair(directory, pin, **probe_kwargs)
         except managed_ffmpeg.FFmpegError as exc:
             return ComponentVerdict(PRESENT_FAILING, exc.code, {**base, "detail": exc.message})
         except OSError as exc:
@@ -843,11 +850,15 @@ def verify_descriptor(
     lookup: Optional[ComponentLookup] = None,
     verifiers: Optional[Mapping[str, Verifier]] = None,
     root: Optional[Path] = None,
+    ffmpeg_probe_run: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
     """Verify ``descriptor`` and return a ``stemwerk_module_verification`` document.
 
     ``verifiers`` adds to or replaces the default verifiers by component kind.
     ``root`` is where the install lock and registry are read; default ``managed_runtime_root()``.
+    ``ffmpeg_probe_run`` replaces ``subprocess.run`` in the FFmpeg probe (S8:
+    the installer passes its cancellable runner); it must not be combined with
+    a ``verifiers`` override for the FFmpeg kind.
     """
 
     if not isinstance(descriptor, ModuleDescriptor):
@@ -859,6 +870,18 @@ def verify_descriptor(
         else lookup
     )
     active_verifiers = {**DEFAULT_VERIFIERS, **(verifiers or {})}
+    if ffmpeg_probe_run is not None:
+        if module_descriptors.KIND_FFMPEG in (verifiers or {}):
+            raise ValueError("ffmpeg_probe_run cannot be combined with a custom FFmpeg verifier")
+
+        def _cancellable_ffmpeg_verifier(
+            component: ComponentDescriptor, location: ComponentLocation
+        ) -> ComponentVerdict:
+            if location.receipt_entry is None:
+                return ComponentVerdict(UNVERIFIABLE, REASON_VERIFIER_UNAVAILABLE)
+            return _verify_ffmpeg_with_receipt(component, location, probe=True, probe_run=ffmpeg_probe_run)
+
+        active_verifiers[module_descriptors.KIND_FFMPEG] = _cancellable_ffmpeg_verifier
     components: List[Dict[str, Any]] = [
         _classify(descriptor.module_id, component, active_lookup, active_verifiers)
         for component in descriptor.components
@@ -889,6 +912,7 @@ def verify_module(
     lookup: Optional[ComponentLookup] = None,
     verifiers: Optional[Mapping[str, Verifier]] = None,
     root: Optional[Path] = None,
+    ffmpeg_probe_run: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
     """Verify the module ``module_id``; ``ValueError`` for an unknown module."""
 
@@ -897,4 +921,5 @@ def verify_module(
         lookup=lookup,
         verifiers=verifiers,
         root=root,
+        ffmpeg_probe_run=ffmpeg_probe_run,
     )

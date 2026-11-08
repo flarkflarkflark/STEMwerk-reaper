@@ -176,7 +176,8 @@ version; this function is the deeper check Core applies.
 | --- | --- | --- |
 | `<root>/logs/<op>/events.ndjson` | outer layer, then Core | events (design 7.2); the outer layer appends at least every 5 s while it works, except during one blocking unpack step |
 | `<root>/tmp/<op>/bootstrap/` | outer layer only | download, unpack, owner record; removed by the outer layer after it published or failed |
-| `<root>/tmp/<op>/bootstrap/owner` | outer layer, first file in `bootstrap/` | one line: `stemwerk-bootstrap-owner/1<TAB><op><TAB><pid><LF>` |
+| `<root>/tmp/<op>/bootstrap/owner` | outer layer, first file in `bootstrap/` | one line: `stemwerk-bootstrap-owner/1<TAB><op><TAB><pid><LF>` (`/2` for the Linux writer-group outer layer, same fields) |
+| `<root>/tmp/<op>/bootstrap/group` | Linux outer layer, before it releases its writer group | one line: `stemwerk-bootstrap-group/1<TAB><op><TAB><staging><TAB><pgid><TAB><boot id><TAB><pid namespace or empty><LF>` |
 | `<root>/tmp/<op>/core/`, `journal.ndjson` | Core only | its own staging and journal ([lock and journal](Core_Install_Lock.md)) |
 
 `install_bootstrap.inspect_staging(root)` classifies every
@@ -190,7 +191,8 @@ version; this function is the deeper check Core applies.
   determined (`kept_owner_unknown`) or an owner record naming another
   operation (`kept_owner_other_operation`). Without a readable owner record
   (a crash before it was written, or a malformed one, reported in `detail`)
-  only the silence decides.
+  only the silence decides (on Linux such staging is kept instead; see
+  "Writer group and release gate" below).
 
 Other statuses: `kept_recent` (silent for less than the bound),
 `kept_current_operation`, `kept_ineligible` (the operation directory or
@@ -207,7 +209,67 @@ failed removal is retried at the next start. `install_lock.acquire` calls it
 right after journal recovery, under the lock; the report is
 `lock.bootstrap_cleanup`. Logs are never removed.
 
+Writer group and release gate (Linux, S8 fix3).
+
+The Linux outer layer (`STEMwerk_Managed_Python_Linux.sh`) is a controller
+plus one dedicated worker group. Every process that can independently write
+the staging (copy, curl or wget, `sha256sum`, `tar`, `find`, the publication
+helper) runs under that single process group, started with `setsid` from the
+same script in a worker mode, so no host Python is needed. The controller stays
+outside the group, so it can stop it without signalling itself.
+
+- **Release gate.** The controller creates `bootstrap/gate` (a FIFO), opens it
+  read-write and starts the group with only the read end as stdin. The group's
+  first action is to read one complete line `go <pgid>`. EOF (the controller
+  died or gave up), an incomplete line, any other text, or a `go` naming a
+  group the worker is not in ends the worker with no write. Children the
+  controller starts while the gate is open close it, and the controller closes
+  its end right after `go`, so nothing else can keep the pipe open.
+- **Record before release.** The controller reads the group's real id from
+  `/proc/<pid>/stat` (the launcher pid is not assumed to be the group id; the
+  group must differ from the controller's own), then writes `bootstrap/group`
+  (`stemwerk-bootstrap-group/1`, operation id, absolute staging path, PGID,
+  boot id, PID namespace; TAB-separated, one LF-terminated line) through
+  `group.tmp`, `sync`, a no-replace `ln` and `sync` again. Only then is `go`
+  sent. If the record cannot be made durable, the pipe is closed without
+  release and the group ends. Viewpoint (S8 fix4): before it starts anything
+  the controller requires `/proc` to number its own PID namespace (`NSpid` in
+  `/proc/self/status`, read by the shell itself, has exactly one entry, `$$`);
+  otherwise the group id it would read from `/proc` is a number in another
+  namespace and it fails with `bootstrap_prerequisite_unavailable` without
+  releasing anything. The namespace is recorded only in its exact form
+  `pid:[<inode>]`; otherwise the field stays empty.
+- **Owner protocol `/2`.** The owner record of this outer layer is
+  `stemwerk-bootstrap-owner/2`; it promises that no writer is released before
+  the group record is published. `/1` is the legacy PID-only record.
+- **Steps.** After `go` the worker serves one step request at a time through
+  small files in the staging (`step.req`, `step.done`), ends by itself when the
+  controller is gone (an in-flight step finishes first), and is stopped by the
+  controller at the end of every run.
+- **Stopping.** Cancellation (marker, HUP/INT/TERM) and failure stop the group
+  with TERM, at most 5 s grace, then KILL, at most 5 s more; the leader is
+  reaped and emptiness is shown by `kill -0 -- -PGID` answering "No such
+  process". Local budget from the marker: detection within 2 s, shutdown within
+  10 s (CI 5 s and 20 s). If emptiness cannot be shown the staging is retained,
+  `remains.staging_state` is `retained`, and `remains.uncertainty` says a writer
+  may be alive. The controller always writes the terminal pair (decision C).
+- **Stale cleanup (Core, under the lock, read-only before it).** On Linux an
+  otherwise stale staging directory is removed only with complete evidence: a
+  `/2` owner plus a group record whose boot id positively differs, or whose
+  group answers `ESRCH` to an observer whose PID namespace is positively the
+  recorded one on positively the same boot, with that observer's `/proc`
+  numbering its own namespace (S8 fix4; design section 7.4). A live group
+  (`kept_writer_group_alive`), a missing or unreadable boot id, a missing,
+  malformed or different namespace, a `/2` owner without a group record (the
+  controller's absence was judged by PID alone), a legacy `/1` owner, no
+  readable owner, a malformed, unreadable or mismatching group record
+  (`kept_writer_unproven`, reason in `detail`) keep the staging. The age
+  and ownership checks above still apply first.
+- **Limit.** A descendant that leaves the group with `setsid()` cannot be
+  reached by the group; this is accepted and documented, not guaranteed.
+
 Known limits:
+
 
 - An active bootstrap holds no lock (G1), so only the liveness signal
   protects it. A reused process id can keep stale staging longer, never
@@ -336,7 +398,9 @@ HUP handling depends on how the shell was started:
 - **HUP not ignored at launch, delivered to the shell directly or through its
   process group (for example a terminal hang-up).** The shell treats it like
   INT and TERM: it terminates and reaps an active downloader, writes the
-  `cancelled` event and result, removes its own staging and exits 2. The GNU
+  terminal event (the v1 `failed` state with `error_code="cancelled"`, owner
+  decision C) and result (`error.code` `cancelled`), removes its own staging
+  and exits 2. The GNU
   Wget child ignores HUP, because its own handler would otherwise keep
   downloading and move its log, including the signed URL, to `wget-log` in the
   working directory. If SIGHUP arrives before the cancellation trap is

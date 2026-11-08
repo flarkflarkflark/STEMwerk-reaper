@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -22,6 +23,15 @@ from stemwerk_core import install_journal, install_lock, module_install  # noqa:
 from stemwerk_core.process_identity import ProcessProbe  # noqa: E402
 
 pytestmark = pytest.mark.portable
+
+
+@pytest.fixture(autouse=True)
+def _baseline_without_the_linux_group_rule(monkeypatch):
+    """The tests of the S5a baseline (PID-only owner, silence) describe the rule
+    every platform keeps. The Linux writer-group evidence (S8 fix3) has its own
+    tests below, which pass ``group_rule=True`` or switch the default back on."""
+
+    monkeypatch.setattr(bootstrap, "_default_group_rule", lambda: False)
 
 OLD = 3600.0  # seconds of silence, beyond the default stale bound
 CLI_TIMEOUT = 60
@@ -84,7 +94,10 @@ def test_owner_record_round_trip():
     op = new_op()
     line = bootstrap.owner_line(op, 4242)
     assert line == f"stemwerk-bootstrap-owner/1\t{op}\t4242\n".encode("ascii")
-    assert bootstrap.parse_owner(line) == {"operation_id": op, "pid": 4242}
+    assert bootstrap.parse_owner(line) == {"operation_id": op, "pid": 4242, "version": 1}
+    v2 = bootstrap.owner_line(op, 4242, version=2)
+    assert v2 == f"stemwerk-bootstrap-owner/2\t{op}\t4242\n".encode("ascii")
+    assert bootstrap.parse_owner(v2) == {"operation_id": op, "pid": 4242, "version": 2}
 
 
 @pytest.mark.parametrize(
@@ -92,7 +105,7 @@ def test_owner_record_round_trip():
     [
         "stemwerk-bootstrap-owner/1\t{op}\t4242",
         "stemwerk-bootstrap-owner/1\t{op}\t4242\r\n",
-        "stemwerk-bootstrap-owner/2\t{op}\t4242\n",
+        "stemwerk-bootstrap-owner/3\t{op}\t4242\n",
         "stemwerk-bootstrap-owner/1\t{op}\t4242\textra\n",
         "stemwerk-bootstrap-owner/1\t{op}\t0\n",
         "stemwerk-bootstrap-owner/1\t{op}\t04242\n",
@@ -127,7 +140,7 @@ def test_silent_staging_of_a_dead_owner_is_stale(tmp_path):
     probe = probe_answer(False)
     entry = inspect(tmp_path, probe)[op]
     assert entry.status == bootstrap.STALE
-    assert entry.owner == {"operation_id": op, "pid": 4242}
+    assert entry.owner == {"operation_id": op, "pid": 4242, "version": 1}
     assert entry.owner_running is False
     assert entry.silent_seconds >= OLD - 5
     assert probe.calls == [4242]
@@ -490,3 +503,437 @@ def test_core_bootstrap_modules_import_only_the_standard_library(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == b"[]"
+
+
+# --- the Linux writer-group evidence (S8 fix3) ---------------------------------
+#
+# Core only reads ``bootstrap/owner`` (protocol /2) and ``bootstrap/group`` and
+# probes the recorded group; it writes nothing before the lock. A /2 owner
+# without a group record means no writer was ever released.
+
+from stemwerk_core import install_cancel  # noqa: E402
+
+POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="process groups")
+
+
+def make_group_staging(root, op, *, group_bytes=None, owner_version=2, owner_pid=4242):
+    staging = make_staging(root, op, owner_bytes=bootstrap.owner_line(op, owner_pid, version=owner_version))
+    if group_bytes is not None:
+        (staging / "group").write_bytes(group_bytes)
+    # make_staging aged only what it knew about; age the new file as well
+    age([staging, staging / "group"] if group_bytes is not None else [staging], OLD)
+    return staging
+
+
+def group_for(root, op, pgid, *, boot=None, namespace=None):
+    return bootstrap.group_line(
+        op, str(root / "tmp" / op / "bootstrap"), pgid,
+        boot if boot is not None else (install_cancel.current_boot_id() or "no-boot"),
+        namespace if namespace is not None else (install_cancel.current_pid_namespace() or ""),
+    )
+
+
+def _inspect(root, **kwargs):
+    report = bootstrap.inspect_staging(root, probe=probe_answer(False), group_rule=True, **kwargs)
+    return {entry.operation_id: entry for entry in report.entries}
+
+
+def _live_group():
+    process = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    return process
+
+
+def _end_group(process):
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait(timeout=5)
+
+
+def test_group_record_round_trips_and_rejects_malformed_lines(tmp_path):
+    op = new_op()
+    line = bootstrap.group_line(op, "/r/tmp/x/bootstrap", 4321, "boot-1", "pid:[1]")
+    assert line == f"stemwerk-bootstrap-group/1\t{op}\t/r/tmp/x/bootstrap\t4321\tboot-1\tpid:[1]\n".encode()
+    assert bootstrap.parse_group(line) == {
+        "operation_id": op, "staging": "/r/tmp/x/bootstrap", "pgid": 4321,
+        "boot_id": "boot-1", "pid_namespace": "pid:[1]",
+    }
+    assert bootstrap.parse_group(bootstrap.group_line(op, "/r/s", 4321, "b", ""))["pid_namespace"] is None
+    for bad in (line[:-1], line.replace(b"4321", b"1"), line.replace(b"4321", b"0123"),
+                line.replace(b"/r/tmp/x/bootstrap", b"relative"), line.replace(b"boot-1", b""),
+                line.replace(b"stemwerk-bootstrap-group/1", b"stemwerk-bootstrap-group/2"), line + b"x\n"):
+        assert bootstrap.parse_group(bad) is None, bad
+
+
+def test_legacy_pid_only_and_missing_owner_keep_the_staging_on_linux(tmp_path):
+    legacy, bare = new_op(), new_op()
+    make_group_staging(tmp_path, legacy, owner_version=1)
+    make_staging(tmp_path, bare)  # no owner record at all
+    entries = _inspect(tmp_path)
+    assert entries[legacy].status == bootstrap.KEPT_WRITER_UNPROVEN
+    assert entries[bare].status == bootstrap.KEPT_WRITER_UNPROVEN
+    report = bootstrap.remove_stale_staging(tmp_path, probe=probe_answer(False), group_rule=True)
+    assert all(entry.outcome is None for entry in report.entries)
+    assert (tmp_path / "tmp" / legacy / "bootstrap").is_dir() and (tmp_path / "tmp" / bare / "bootstrap").is_dir()
+
+
+def test_a_v2_owner_without_a_group_record_is_kept_because_its_absence_is_no_proof(tmp_path):
+    """fix4: no worker was released, but the controller writes the staging itself and was
+    judged gone by PID alone; the owner record names no PID namespace and no boot."""
+    op = new_op()
+    make_group_staging(tmp_path, op)
+    entry = _inspect(tmp_path)[op]
+    assert entry.status == bootstrap.KEPT_WRITER_UNPROVEN and "no group record" in entry.detail
+    report = bootstrap.remove_stale_staging(tmp_path, probe=probe_answer(False), group_rule=True)
+    assert [e.outcome for e in report.entries] == [None]
+    assert (tmp_path / "tmp" / op / "bootstrap" / "owner").is_file()
+
+
+@POSIX_ONLY
+def test_a_live_group_keeps_the_staging_and_a_gone_group_releases_it(tmp_path):
+    op = new_op()
+    writer = _live_group()
+    try:
+        make_group_staging(tmp_path, op, group_bytes=group_for(tmp_path, op, writer.pid))
+        entry = _inspect(tmp_path)[op]
+        assert entry.status == bootstrap.KEPT_WRITER_GROUP_ALIVE and "process_group_alive" in entry.detail
+        report = bootstrap.remove_stale_staging(tmp_path, probe=probe_answer(False), group_rule=True)
+        assert [e.outcome for e in report.entries] == [None]
+        assert (tmp_path / "tmp" / op / "bootstrap" / "group").is_file()
+        # The writer can still create a new file through the original pathname.
+        probe_file = tmp_path / "tmp" / op / "bootstrap" / "late-write"
+        subprocess.run(["sh", "-c", f"echo late > {probe_file}"], check=True)
+        assert probe_file.read_text() == "late\n"
+        age([probe_file, probe_file.parent], OLD)  # the late write counts as activity; let it go quiet again
+    finally:
+        _end_group(writer)
+    # Positive control: after the group is gone (reaped, ESRCH) the same staging is released.
+    report = bootstrap.remove_stale_staging(tmp_path, probe=probe_answer(False), group_rule=True)
+    assert [e.outcome for e in report.entries] == [bootstrap.REMOVED]
+    assert not (tmp_path / "tmp" / op / "bootstrap").exists()
+
+
+@POSIX_ONLY
+def test_a_different_boot_resolves_the_group_SIMULATED_BOOT_CHANGE(tmp_path):
+    """SIMULATED: the record carries another boot id, as after a reboot. The group
+    id now names an unrelated live process, which the boot id makes irrelevant."""
+
+    op = new_op()
+    unrelated = _live_group()
+    try:
+        make_group_staging(tmp_path, op, group_bytes=group_for(tmp_path, op, unrelated.pid, boot=str(uuid.uuid4())))  # SIMULATED previous boot
+        assert _inspect(tmp_path)[op].status == bootstrap.STALE
+    finally:
+        _end_group(unrelated)
+
+
+@POSIX_ONLY
+def test_an_unavailable_boot_id_is_not_evidence_of_a_reboot(tmp_path, monkeypatch):
+    op = new_op()
+    writer = _live_group()
+    try:
+        monkeypatch.setattr(install_cancel, "current_boot_id", lambda: None)
+        make_group_staging(tmp_path, op, group_bytes=group_for(tmp_path, op, writer.pid, boot=str(uuid.uuid4())))  # recorded boot from elsewhere
+        assert _inspect(tmp_path)[op].status == bootstrap.KEPT_WRITER_GROUP_ALIVE
+    finally:
+        _end_group(writer)
+    # fix4 rule: the group answers ESRCH, but without a positively identical boot that is
+    # no proof: the staging stays and the reason is reported.
+    entry = _inspect(tmp_path)[op]
+    assert entry.status == bootstrap.KEPT_WRITER_UNPROVEN and "boot_id_unavailable" in entry.detail
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda line, op: line[:-1],                                   # incomplete
+        lambda line, op: b"garbage\n",                                # malformed
+        lambda line, op: line.replace(op.encode(), new_op().encode()),  # another operation
+        lambda line, op: line.replace(b"/tmp/", b"/other/"),            # another staging path
+    ],
+)
+def test_malformed_or_mismatching_group_records_keep_the_staging(tmp_path, mutate):
+    op = new_op()
+    make_group_staging(tmp_path, op, group_bytes=mutate(group_for(tmp_path, op, 999999), op))
+    assert _inspect(tmp_path)[op].status == bootstrap.KEPT_WRITER_UNPROVEN
+
+
+def test_an_unreadable_group_record_keeps_the_staging(tmp_path):
+    op = new_op()
+    staging = make_group_staging(tmp_path, op, group_bytes=b"x")
+    (staging / "group").unlink()
+    (staging / "group").symlink_to(tmp_path / "elsewhere")
+    os.utime(staging / "group", (time.time() - OLD, time.time() - OLD), follow_symlinks=False)
+    age([staging], OLD)
+    assert _inspect(tmp_path)[op].status == bootstrap.KEPT_WRITER_UNPROVEN
+
+
+@POSIX_ONLY
+def test_the_lock_acquisition_honours_the_group_rule(tmp_path, monkeypatch):
+    """Under the real install lock; the 15 minutes of silence are SIMULATED with a clock offset."""
+
+    monkeypatch.setattr(bootstrap, "_default_group_rule", lambda: True)
+    op = new_op()
+    writer = _live_group()
+    try:
+        make_group_staging(tmp_path, op, group_bytes=group_for(tmp_path, op, writer.pid))
+        lock = install_lock.acquire(tmp_path, new_op(), clock=lambda: time.time() + 1000, probe=probe_answer(False))
+        try:
+            assert [e.status for e in lock.bootstrap_cleanup.entries] == [bootstrap.KEPT_WRITER_GROUP_ALIVE]
+        finally:
+            lock.release()
+        assert (tmp_path / "tmp" / op / "bootstrap").is_dir()
+    finally:
+        _end_group(writer)
+    lock = install_lock.acquire(tmp_path, new_op(), clock=lambda: time.time() + 1000, probe=probe_answer(False))
+    try:
+        assert [e.outcome for e in lock.bootstrap_cleanup.entries] == [bootstrap.REMOVED]
+    finally:
+        lock.release()
+
+
+# --- the PID-namespace rule for ESRCH (S8 fix4) ----------------------------------------
+#
+# ESRCH (an empty group) proves a writer gone only when the observer's /proc/self/ns/pid is
+# positively the namespace recorded with the PGID, on the same boot, and - for the owner's
+# absence judged through /proc - when /proc numbers the observer's own namespace. The
+# simulated variants say so; the "REAL" tests run the observer in a separate PID namespace
+# with unshare and skip only where user namespaces are not available.
+
+import json as _json  # noqa: E402
+
+PY = sys.executable
+SRC = str(CORE_SRC)
+
+
+def _reaped_group():
+    process = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait(timeout=5)
+    return process.pid
+
+
+def _stale_entry(root, op):
+    return _inspect(root)[op]
+
+
+def test_fix4_a_group_record_without_a_namespace_is_no_proof(tmp_path):
+    op = new_op()
+    make_group_staging(tmp_path, op, group_bytes=group_for(tmp_path, op, _reaped_group(), namespace=""))
+    entry = _stale_entry(tmp_path, op)
+    assert entry.status == bootstrap.KEPT_WRITER_UNPROVEN and "pid_namespace_unrecorded" in entry.detail
+    report = bootstrap.remove_stale_staging(tmp_path, probe=probe_answer(False), group_rule=True)
+    assert [e.outcome for e in report.entries] == [None]  # the reason is in this run's report; nothing removed
+
+
+@pytest.mark.parametrize("observer, reason", [
+    ("pid:[1]", "pid_namespace_differs"),       # SIMULATED other namespace
+    (None, "pid_namespace_unreadable"),         # SIMULATED unreadable /proc/self/ns/pid
+])
+def test_fix4_an_observer_in_another_or_unknown_namespace_is_no_proof(tmp_path, monkeypatch, observer, reason):
+    op = new_op()
+    make_group_staging(tmp_path, op, group_bytes=group_for(tmp_path, op, _reaped_group()))
+    if observer == install_cancel.current_pid_namespace():
+        observer = "pid:[2]"
+    monkeypatch.setattr(install_cancel, "current_pid_namespace", lambda: observer)
+    entry = _stale_entry(tmp_path, op)
+    assert entry.status == bootstrap.KEPT_WRITER_UNPROVEN and reason in entry.detail
+    monkeypatch.undo()
+    monkeypatch.setattr(bootstrap, "_default_group_rule", lambda: False)
+    # positive control: same namespace, same boot, the group really gone -> stale
+    assert _stale_entry(tmp_path, op).status == bootstrap.STALE
+
+
+def test_fix4_the_owners_absence_needs_a_proc_view_of_the_own_namespace(tmp_path, monkeypatch):
+    """SIMULATED foreign /proc view: the group answered ESRCH in the recorded namespace,
+    but the owner was judged 'not running' through a /proc that numbers another
+    namespace; that is no proof."""
+    op = new_op()
+    make_group_staging(tmp_path, op, group_bytes=group_for(tmp_path, op, _reaped_group()))
+    monkeypatch.setattr(install_cancel, "proc_view_is_own", lambda: False)
+    entry = _stale_entry(tmp_path, op)
+    assert entry.status == bootstrap.KEPT_WRITER_UNPROVEN and "/proc is not its own" in entry.detail
+
+
+def _unshare(*, mount_proc=True):
+    base = ["unshare", "--user", "--map-root-user", "--pid", "--fork"]
+    return base + ["--mount-proc"] if mount_proc else base
+
+
+def _foreign_namespaces_available():
+    if os.name == "nt" or shutil.which("unshare") is None:
+        return False
+    try:
+        return subprocess.run(_unshare() + ["true"], capture_output=True, timeout=20).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+REAL_FOREIGN_NS = pytest.mark.skipif(not _foreign_namespaces_available(),
+                                     reason="unprivileged user + PID namespaces are not available here")
+
+_WRITER = ("import pathlib,sys,time\n"
+           "stage,trig,st=map(pathlib.Path,sys.argv[1:])\n"
+           "while not trig.exists(): time.sleep(.02)\n"
+           "try:\n    (stage/'created-after-retry').write_text('created via original staging path'); st.write_text('created')\n"
+           "except OSError as e:\n    st.write_text(type(e).__name__+': '+str(e))\n"
+           "time.sleep(30)\n")
+
+
+def _run_in_foreign_ns(code, *args, mount_proc=True):
+    run = subprocess.run(_unshare(mount_proc=mount_proc) + [PY, "-I", "-c", code, SRC, *map(str, args)],
+                         capture_output=True, text=True, timeout=60)
+    assert run.returncode == 0, run.stderr[-2000:]
+    return _json.loads(run.stdout.strip().splitlines()[-1])
+
+
+def _late_write_by_original_path(root, stage, writer):
+    """Let the still-live writer create a NEW file through its original staging path and
+    read it from a separate process."""
+    (root / "trigger").touch()
+    deadline = time.monotonic() + 5
+    while not (root / "status").exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert writer.poll() is None
+    assert (root / "status").read_text() == "created"
+    read = subprocess.run(["cat", str(stage / "created-after-retry")], capture_output=True, text=True)
+    assert read.returncode == 0 and read.stdout == "created via original staging path"
+
+
+_CORE_RETRY = '''import json,sys,uuid
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from stemwerk_core import install_cancel, install_lock
+root=Path(sys.argv[2]); op=sys.argv[3]
+lock=install_lock.acquire(root,str(uuid.uuid4()))
+try: rec=[{"complete":o.complete,"deferred":o.deferred_writer} for o in lock.recovery.operations if o.operation_id==op]
+finally: lock.release()
+print(json.dumps({"observer":install_cancel.current_pid_namespace(),"recovery":rec}))
+'''
+
+
+@REAL_FOREIGN_NS
+@pytest.mark.parametrize("record_namespace", ["missing", "recorded"])
+def test_fix4_REAL_foreign_namespace_retry_keeps_a_live_writers_core_staging(tmp_path, record_namespace):
+    """Core route, real separate PID namespace: a host writer is alive; the retry takes the
+    real lock and runs recovery from another namespace, where the writer's group answers
+    ESRCH. 'missing' FAULT-INJECTS a record without a namespace (Sol's case)."""
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    op = new_op()
+    journal = install_journal.open_journal(root, op)
+    stage = journal.create_directory(journal.core_directory / "stage")
+    journal.create_file(stage / "sentinel", b"original pathname")
+    real = install_cancel.current_pid_namespace
+    if record_namespace == "missing":
+        install_journal.install_cancel.current_pid_namespace = lambda: None
+    writer = None
+    try:
+        token = journal.begin_writer(["live-writer"])
+        writer = subprocess.Popen([PY, "-c", _WRITER, str(stage), str(root / "trigger"), str(root / "status")], start_new_session=True)
+        journal.writer_spawned(token, writer.pid)
+    finally:
+        install_journal.install_cancel.current_pid_namespace = real
+    journal.close()
+    try:
+        out = _run_in_foreign_ns(_CORE_RETRY, root, op)
+        assert out["observer"] != real()
+        [rec] = out["recovery"]
+        expected = "pid_namespace_unrecorded" if record_namespace == "missing" else "pid_namespace_differs"
+        assert rec["complete"] is False and rec["deferred"]["reason"] == expected
+        assert (stage / "sentinel").read_bytes() == b"original pathname"
+        _late_write_by_original_path(root, stage, writer)
+    finally:
+        os.killpg(writer.pid, signal.SIGKILL)
+        writer.wait(timeout=5)
+    # positive control: same namespace, same boot, the group really gone -> ordinary cleanup
+    if record_namespace == "recorded":
+        lock = install_lock.acquire(root, new_op())
+        try:
+            [rec] = [o for o in lock.recovery.operations if o.operation_id == op]
+        finally:
+            lock.release()
+        assert rec.complete is True and not stage.exists()
+
+
+_BOOT_RETRY = '''import json,sys,time,uuid
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from stemwerk_core import install_cancel, install_lock
+root=Path(sys.argv[2]); op=sys.argv[3]
+lock=install_lock.acquire(root,str(uuid.uuid4()),clock=lambda:time.time()+1000)
+try: entries=[e.to_json() for e in lock.bootstrap_cleanup.entries if e.operation_id==op]
+finally: lock.release()
+print(json.dumps({"observer":install_cancel.current_pid_namespace(),"entries":entries}))
+'''
+
+
+@REAL_FOREIGN_NS
+@pytest.mark.parametrize("namespace_field", ["empty", "recorded"])
+def test_fix4_REAL_foreign_namespace_stale_cleanup_keeps_a_live_writers_bootstrap_staging(tmp_path, namespace_field):
+    """Bootstrap route, real separate PID namespace: /2 owner + group record of a live host
+    group ('empty' = readlink was unavailable, so the field is blank). Stale cleanup runs
+    under a real lock in another namespace (15 minutes of silence SIMULATED by a clock offset)."""
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    op = new_op()
+    stage = root / "tmp" / op / "bootstrap"
+    stage.mkdir(parents=True, mode=0o700)
+    (stage / "sentinel").write_text("same path")
+    writer = subprocess.Popen([PY, "-c", _WRITER, str(stage), str(root / "trigger"), str(root / "status")], start_new_session=True)
+    try:
+        (stage / "owner").write_bytes(bootstrap.owner_line(op, 999999999, version=2))
+        ns = "" if namespace_field == "empty" else install_cancel.current_pid_namespace()
+        (stage / "group").write_bytes(bootstrap.group_line(op, str(stage), writer.pid, install_cancel.current_boot_id(), ns))
+        out = _run_in_foreign_ns(_BOOT_RETRY, root, op)
+        [entry] = out["entries"]
+        expected = "pid_namespace_unrecorded" if namespace_field == "empty" else "pid_namespace_differs"
+        assert entry["status"] == bootstrap.KEPT_WRITER_UNPROVEN and expected in entry["detail"] and entry["outcome"] is None
+        assert (stage / "sentinel").read_text() == "same path"
+        _late_write_by_original_path(root, stage, writer)
+    finally:
+        os.killpg(writer.pid, signal.SIGKILL)
+        writer.wait(timeout=5)
+
+
+_PROC_VIEW = '''import json,os,signal,subprocess,sys,time,uuid
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from stemwerk_core import install_bootstrap as b, install_cancel as c
+root=Path(sys.argv[2]); op=str(uuid.uuid4()); stage=root/"tmp"/op/"bootstrap"; stage.mkdir(parents=True,mode=0o700)
+p=subprocess.Popen(["sleep","60"],start_new_session=True); os.killpg(p.pid,signal.SIGKILL); p.wait()
+(stage/"owner").write_bytes(b.owner_line(op,999999999,version=2))
+(stage/"group").write_bytes(b.group_line(op,str(stage),p.pid,c.current_boot_id(),c.current_pid_namespace() or ""))
+past=time.time()-3600
+for x in (stage,stage/"owner",stage/"group"): os.utime(x,(past,past))
+report=b.remove_stale_staging(root,probe=lambda pid:__import__("stemwerk_core.process_identity",fromlist=["x"]).ProcessProbe(False,None),group_rule=True)
+print(json.dumps({"proc_view_is_own":c.proc_view_is_own(),"entries":[e.to_json() for e in report.entries],"stage_exists":stage.exists()}))
+'''
+
+
+@REAL_FOREIGN_NS
+@pytest.mark.parametrize("mount_proc", [False, True])
+def test_fix4_REAL_proc_view_of_another_namespace_is_no_proof_of_the_owners_absence(tmp_path, mount_proc):
+    """Real namespace, record and group made from inside it (the group really gone). Without
+    --mount-proc, /proc numbers the OUTER namespace, so the owner's absence judged through
+    /proc proves nothing and the staging stays; with --mount-proc the same evidence is
+    complete and the staging is removed."""
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    out = _run_in_foreign_ns(_PROC_VIEW, root, mount_proc=mount_proc)
+    [entry] = out["entries"]
+    assert out["proc_view_is_own"] is mount_proc
+    if mount_proc:
+        assert entry["outcome"] == bootstrap.REMOVED and not out["stage_exists"]
+    else:
+        assert entry["status"] == bootstrap.KEPT_WRITER_UNPROVEN and "/proc is not its own" in entry["detail"]
+        assert out["stage_exists"]
+
+
+def test_fix4_a_legacy_owner_next_to_a_complete_group_record_is_still_kept(tmp_path):
+    """The legacy check still decides where the new rules would allow removal: a PID-only
+    /1 owner (which never promised to publish a group record before releasing writers)
+    next to a group record whose group is really gone, same namespace and boot."""
+    op = new_op()
+    make_group_staging(tmp_path, op, owner_version=1, group_bytes=group_for(tmp_path, op, _reaped_group()))
+    entry = _stale_entry(tmp_path, op)
+    assert entry.status == bootstrap.KEPT_WRITER_UNPROVEN and "legacy PID-only" in entry.detail

@@ -86,6 +86,15 @@ def test_shipped_pin_is_the_owner_decided_btbn_build_and_matches_preflight_const
     assert storage["s7_ffmpeg_archive_bytes"] == pin.archive_size
 
 
+def test_preflight_strings_cite_the_measured_allocated_bytes_not_the_calculation(tmp_path):
+    facts = install_preflight.HostFacts("linux-x86_64", "6.6.0", "2.39", 20 * install_preflight.GIB, None)
+    measured = f"{install_preflight.LINUX_FFMPEG_INSTALLED_ALLOCATED_BYTES:,}"
+    plan = install_preflight.plan("drum_kit", root=tmp_path / "root", facts=facts)
+    assert measured in plan["space"]["estimate_provenance"]["ffmpeg_static_pair_bytes"]
+    assert measured in plan["space"]["storage"]["final"]["coexistence"]
+    assert "280,768,512" not in json.dumps(plan)  # the superseded 4 KiB-block calculation
+
+
 @pytest.mark.native_publication
 def test_pin_is_core_only_and_the_shared_runtime_manifest_stays_python_only():
     manifest = (CORE_SRC / "stemwerk_core" / runtime_manifest.MANIFEST_FILENAME).read_text(encoding="ascii")
@@ -736,6 +745,24 @@ def test_probe_checks_the_pinned_build_and_refuses_gpl_or_nonfree_flags(tmp_path
 
 
 @POSIX_ONLY
+@pytest.mark.parametrize(
+    "reported",
+    [
+        f"{ffmpeg_fixture.VERSION}-unexpected",  # the pinned version is only a prefix of the report
+        f"pre-{ffmpeg_fixture.VERSION}",         # the pinned version is not at the start
+    ],
+)
+def test_probe_version_match_is_a_strict_prefix_with_a_trailing_space(tmp_path, reported):
+    pair, stage = _staged_tree(tmp_path)
+    for tool in ("ffmpeg", "ffprobe"):
+        stand_in = stage / "bin" / tool
+        stand_in.write_bytes(ffmpeg_fixture.tool_script(tool, version=reported))
+    with pytest.raises(managed_ffmpeg.FFmpegError) as mismatch:
+        managed_ffmpeg.probe_pair(stage, pair.pin)
+    assert mismatch.value.code == "probe_version_mismatch"
+
+
+@POSIX_ONLY
 def test_probe_is_bounded_in_time_and_never_scratches_inside_the_tree(tmp_path, monkeypatch):
     pair, stage = _staged_tree(tmp_path)
     slow = stage / "bin" / "ffprobe"
@@ -987,6 +1014,24 @@ def test_a_fault_around_the_pair_blesses_nothing_and_the_retry_recovers(tmp_path
     entry = json.loads(module_registry.receipt_path(root, "drum_kit").read_text(encoding="utf-8"))["components"]["ffmpeg"]
     assert entry["ownership"] == ("unknown" if fault == "after_ffmpeg_publish" else "core_managed")
     assert not opened  # the cache served it; an adopted directory needed no fetch at all
+
+
+@pytest.mark.native_publication
+def test_adopting_an_already_published_pair_re_probes_it_before_trusting_it(tmp_path, monkeypatch):
+    facts, root, _unrelated = _fresh(tmp_path, monkeypatch)
+    pin = managed_ffmpeg.load_pin()
+    published = root / "runtimes" / "ffmpeg" / pin.pin_id
+    monkeypatch.setenv("STEMWERK_TEST_S6_FAULT_PHASE", "after_ffmpeg_publish")
+    code, failed = _install(root, facts)
+    monkeypatch.delenv("STEMWERK_TEST_S6_FAULT_PHASE")
+    assert code == 2 and published.exists()  # published but not receipted: the retry adopts it
+
+    calls = []
+    ffmpeg_fixture.stub_probe(monkeypatch, calls)  # re-arm with a recording probe
+    code, adopted = _install(root, facts)
+    assert code == 0, adopted
+    # One probe when the adoption branch re-verifies the pair, one from the post-publication verify.
+    assert calls == [published, published]
 
 
 class _Killed(BaseException):

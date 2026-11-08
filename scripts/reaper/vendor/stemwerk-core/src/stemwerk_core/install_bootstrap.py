@@ -26,7 +26,29 @@ is stale only when both hold:
   silence decides.
 
 A reused process id can therefore only keep staging longer, never remove an
-active one. Core removes stale staging while it holds the install lock
+active one.
+
+Writer group (S8 fix3). The Linux outer layer runs every process that can
+write the staging in ONE dedicated process group, held behind a pipe release
+gate: the group starts with only the read end and writes nothing until the
+controller has durably published ``bootstrap/group`` (one line, six TAB-
+separated fields: ``stemwerk-bootstrap-group/1``, the operation id, the
+absolute staging path, the process group id, the Linux boot id, the PID
+namespace or empty) and then sent ``go``. The owner record of such an outer
+layer is protocol ``/2``; a ``/2`` owner without a group record therefore
+means no worker was ever released. On Linux a staging directory that is
+otherwise stale is removed only when its evidence is complete: a ``/2`` owner
+and a group record whose boot id positively differs from the current one, or
+whose group answers ``ESRCH`` to an observer in the recorded PID namespace on
+positively the same boot, with ``/proc`` numbering that namespace (S8 fix4).
+A live group, a missing or unreadable boot id, a missing, malformed or
+different PID namespace, a malformed or mismatching record, a ``/2`` owner
+without a group record (the controller's absence was judged by PID only), a
+legacy PID-only (``/1``) owner or no readable owner at all keeps the staging
+(``kept_writer_*``), with the reason in the entry's ``detail``. Core only
+reads these records and probes the group; it writes nothing before the lock.
+A writer that left the group with ``setsid()`` is not reachable by this rule
+(documented limit). Core removes stale staging while it holds the install lock
 (``install_lock.acquire`` calls :func:`remove_stale_staging` after journal
 recovery). It never follows a link: an operation directory or ``bootstrap/``
 that is a link or reparse point is reported and kept, and the identity found
@@ -42,14 +64,19 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import sys
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from . import install_events, process_identity
+from . import install_cancel, install_events, process_identity
 from ._install_paths import Identity, InstallPathError, check_existing_directories, lstat_inside
 
 
 OWNER_PROTOCOL = "stemwerk-bootstrap-owner/1"
+OWNER_PROTOCOL_V2 = "stemwerk-bootstrap-owner/2"  # writers are released only after the group record is published
+GROUP_PROTOCOL = "stemwerk-bootstrap-group/1"
+GROUP_FILENAME = "group"
+_GROUP_LIMIT = 1024
 BOOTSTRAP_DIRECTORY = "bootstrap"
 OWNER_FILENAME = "owner"
 TMP_DIRECTORY = "tmp"
@@ -66,6 +93,9 @@ OWNER_OTHER_OPERATION = "kept_owner_other_operation"
 CURRENT_OPERATION = "kept_current_operation"
 INELIGIBLE = "kept_ineligible"
 STALE = "stale"
+# Writer-group verdicts (Linux; see the module docstring): the staging stays.
+KEPT_WRITER_GROUP_ALIVE = "kept_writer_group_alive"
+KEPT_WRITER_UNPROVEN = "kept_writer_unproven"
 # Outcomes of a removal attempt.
 REMOVED = "removed"
 KEPT_IDENTITY_MISMATCH = "kept_identity_mismatch"
@@ -82,13 +112,56 @@ class BootstrapStagingError(Exception):
         self.code = code
 
 
-def owner_line(operation_id: str, pid: int) -> bytes:
-    """The exact owner record an outer layer writes (reference encoding)."""
+def owner_line(operation_id: str, pid: int, version: int = 1) -> bytes:
+    """The exact owner record an outer layer writes (reference encoding).
+
+    ``version`` 1 is the PID-only record (Windows, macOS, legacy Linux);
+    version 2 is the Linux writer-group record family (see the docstring)."""
 
     install_events._check_operation_id(operation_id, "invalid_owner")
     if not isinstance(pid, int) or isinstance(pid, bool) or not 0 < pid <= _PID_MAX:
         raise ValueError("pid must be a positive 31-bit integer")
-    return f"{OWNER_PROTOCOL}\t{operation_id}\t{pid}\n".encode("ascii")
+    protocol = {1: OWNER_PROTOCOL, 2: OWNER_PROTOCOL_V2}[version]
+    return f"{protocol}\t{operation_id}\t{pid}\n".encode("ascii")
+
+
+def group_line(
+    operation_id: str, staging: str, pgid: int, boot_id: str, pid_namespace: str = ""
+) -> bytes:
+    """The exact group record a Linux outer layer publishes before it releases
+    its writer group (reference encoding)."""
+
+    install_events._check_operation_id(operation_id, "invalid_group")
+    return (
+        f"{GROUP_PROTOCOL}\t{operation_id}\t{staging}\t{pgid}\t{boot_id}\t{pid_namespace}\n"
+    ).encode("utf-8")
+
+
+def parse_group(data: bytes) -> Optional[Dict[str, Any]]:
+    """The fields of a group record, or ``None`` when malformed."""
+
+    if len(data) > _GROUP_LIMIT or not data.endswith(b"\n") or b"\r" in data or b"\n" in data[:-1]:
+        return None
+    try:
+        fields = data[:-1].decode("utf-8").split("\t")
+    except UnicodeDecodeError:
+        return None
+    if len(fields) != 6 or fields[0] != GROUP_PROTOCOL:
+        return None
+    operation_id, staging, pgid_text, boot_id, pid_namespace = fields[1:]
+    try:
+        install_events._check_operation_id(operation_id, "invalid_group")
+    except install_events.InstallFileError:
+        return None
+    if not pgid_text.isdigit() or pgid_text.startswith("0") or len(pgid_text) > 10:
+        return None
+    pgid = int(pgid_text)
+    if pgid <= 1 or pgid > _PID_MAX or not boot_id or not staging.startswith("/"):
+        return None
+    return {
+        "operation_id": operation_id, "staging": staging, "pgid": pgid,
+        "boot_id": boot_id, "pid_namespace": pid_namespace or None,
+    }
 
 
 def parse_owner(data: bytes) -> Optional[Dict[str, Any]]:
@@ -100,7 +173,7 @@ def parse_owner(data: bytes) -> Optional[Dict[str, Any]]:
         fields = data[:-1].decode("ascii").split("\t")
     except UnicodeDecodeError:
         return None
-    if len(fields) != 3 or fields[0] != OWNER_PROTOCOL:
+    if len(fields) != 3 or fields[0] not in (OWNER_PROTOCOL, OWNER_PROTOCOL_V2):
         return None
     operation_id, pid_text = fields[1], fields[2]
     try:
@@ -112,7 +185,7 @@ def parse_owner(data: bytes) -> Optional[Dict[str, Any]]:
     pid = int(pid_text)
     if pid > _PID_MAX:
         return None
-    return {"operation_id": operation_id, "pid": pid}
+    return {"operation_id": operation_id, "pid": pid, "version": 2 if fields[0] == OWNER_PROTOCOL_V2 else 1}
 
 
 @dataclass
@@ -198,8 +271,83 @@ def _read_owner(staging: Path) -> Optional[bytes]:
         os.close(descriptor)
 
 
+def _default_group_rule() -> bool:
+    """The writer-group evidence applies where the Linux outer layer runs."""
+
+    return sys.platform.startswith("linux")
+
+
+def _read_group(staging: Path) -> "tuple[str, Optional[bytes]]":
+    """``("absent", None)``, ``("ok", bytes)`` or ``("unreadable", None)``."""
+
+    path = staging / GROUP_FILENAME
+    try:
+        group_stat = lstat_inside(path)
+    except InstallPathError:
+        return "unreadable", None
+    if group_stat is None:
+        return "absent", None
+    if not stat.S_ISREG(group_stat.st_mode) or group_stat.st_size > _GROUP_LIMIT:
+        return "unreadable", None
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return "unreadable", None
+    try:
+        return "ok", os.read(descriptor, _GROUP_LIMIT + 1)
+    except OSError:
+        return "unreadable", None
+    finally:
+        os.close(descriptor)
+
+
+def _writer_verdict(
+    root: Path, operation_id: str, staging: Path, owner: Optional[Dict[str, Any]]
+) -> "tuple[Optional[str], Optional[str]]":
+    """``(None, None)`` when the evidence allows removal, else ``(status, detail)``."""
+
+    if owner is None:
+        return KEPT_WRITER_UNPROVEN, "no readable owner record: writers cannot be ruled out"
+    if owner.get("version") != 2:
+        return KEPT_WRITER_UNPROVEN, "legacy PID-only owner record: writers cannot be ruled out"
+    kind, raw = _read_group(staging)
+    if kind == "absent":
+        # S8 fix4: a /2 outer layer releases no worker before it publishes the
+        # group record, but the controller itself writes the staging, and its
+        # absence was judged by PID alone: the owner record carries no PID
+        # namespace and no boot, so that absence is no proof.
+        return KEPT_WRITER_UNPROVEN, (
+            "no group record: the owner's absence is no proof (the owner record names "
+            "no PID namespace and no boot)"
+        )
+    if kind != "ok" or raw is None:
+        return KEPT_WRITER_UNPROVEN, "the group record is unreadable"
+    group = parse_group(raw)
+    if group is None:
+        return KEPT_WRITER_UNPROVEN, "the group record is malformed"
+    expected = os.path.realpath(staging)
+    if group["operation_id"] != operation_id or os.path.realpath(group["staging"]) != expected:
+        return KEPT_WRITER_UNPROVEN, "the group record names another operation or staging path"
+    state, reason = install_cancel.writer_state(group["pgid"], group["boot_id"], group["pid_namespace"])
+    if state == install_cancel.WRITER_GONE:
+        if reason != "boot_id_changed" and not install_cancel.proc_view_is_own():
+            # The group answered ESRCH in the recorded namespace, but the owner
+            # (the controller, also a staging writer) was judged "not running"
+            # through /proc, which here numbers another PID namespace.
+            return KEPT_WRITER_UNPROVEN, (
+                f"writer group {group['pgid']}: gone, but this process's /proc is not its own "
+                "PID namespace, so the owner's absence proves nothing"
+            )
+        return None, None
+    if state == install_cancel.WRITER_ALIVE:
+        return KEPT_WRITER_GROUP_ALIVE, f"writer group {group['pgid']}: {reason}"
+    return KEPT_WRITER_UNPROVEN, f"writer group {group['pgid']}: {reason}"
+
+
 def _classify(
-    root: Path, operation_id: str, *, stale_after: float, now: float, probe: Probe
+    root: Path, operation_id: str, *, stale_after: float, now: float, probe: Probe,
+    group_rule: bool = False,
 ) -> Optional[StagingEntry]:
     directory = root / TMP_DIRECTORY / operation_id
     staging = directory / BOOTSTRAP_DIRECTORY
@@ -239,6 +387,10 @@ def _classify(
             return entry
     if entry.silent_seconds < stale_after:
         entry.status = ACTIVE_RECENT
+    elif group_rule:
+        verdict, detail = _writer_verdict(root, operation_id, staging, owner)
+        if verdict is not None:
+            entry.status, entry.detail = verdict, detail
     return entry
 
 
@@ -249,9 +401,15 @@ def inspect_staging(
     stale_after: float = DEFAULT_STALE_AFTER,
     probe: Optional[Probe] = None,
     clock: Callable[[], float] = time.time,
+    group_rule: Optional[bool] = None,
 ) -> StagingReport:
-    """Classify every ``<root>/tmp/<op>/bootstrap`` read-only."""
+    """Classify every ``<root>/tmp/<op>/bootstrap`` read-only.
 
+    ``group_rule`` enables the Linux writer-group evidence (module docstring);
+    the default follows the platform. Tests set it explicitly."""
+
+    if group_rule is None:
+        group_rule = _default_group_rule()
     root = Path(root)
     probe = process_identity.probe_process if probe is None else probe
     report = StagingReport()
@@ -279,7 +437,7 @@ def inspect_staging(
             if present:
                 report.entries.append(StagingEntry(name, CURRENT_OPERATION))
             continue
-        entry = _classify(root, name, stale_after=stale_after, now=now, probe=probe)
+        entry = _classify(root, name, stale_after=stale_after, now=now, probe=probe, group_rule=group_rule)
         if entry is not None:
             report.entries.append(entry)
     return report
@@ -319,6 +477,7 @@ def remove_stale_staging(
     stale_after: float = DEFAULT_STALE_AFTER,
     probe: Optional[Probe] = None,
     clock: Callable[[], float] = time.time,
+    group_rule: Optional[bool] = None,
 ) -> StagingReport:
     """Remove stale bootstrap staging; call only while holding the install lock."""
 
@@ -329,6 +488,7 @@ def remove_stale_staging(
         stale_after=stale_after,
         probe=probe,
         clock=clock,
+        group_rule=group_rule,
     )
     for entry in report.entries:
         if entry.status == STALE:

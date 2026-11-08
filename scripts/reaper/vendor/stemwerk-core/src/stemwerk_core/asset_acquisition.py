@@ -24,7 +24,7 @@ from typing import Any, Callable, Sequence
 from urllib.parse import SplitResult, urljoin, urlsplit
 import uuid
 
-from . import model_assets
+from . import install_cancel, model_assets
 from ._cli_io import _flush_cli_streams, _write_cli_document
 from .asset_materialization import _is_link_or_reparse
 
@@ -98,9 +98,15 @@ class _AttemptFailure(Exception):
 
 @dataclass(frozen=True)
 class AcquisitionRequest:
-    """A new explicit directory in which verified local sources are created."""
+    """A new explicit directory in which verified local sources are created.
+
+    ``cancel`` is the S8 probe: it raises when cancellation is pending and is
+    called at entry, per downloaded chunk and after an interruptible read
+    wakes without data. ``None`` keeps the exact pre-S8 transfer behaviour.
+    """
 
     destination: Path
+    cancel: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -549,6 +555,7 @@ class _HttpsTransport:
         ssl_context: ssl.SSLContext | None = None,
         timer_factory: Callable[..., Any] = threading.Timer,
         resolver: Callable[..., Any] = socket.getaddrinfo,
+        cancel: Callable[[], None] | None = None,
     ) -> None:
         self._connection_factory = connection_factory
         self._clock = clock
@@ -556,6 +563,7 @@ class _HttpsTransport:
         self._ssl_context = ssl_context or ssl.create_default_context()
         self._timer_factory = timer_factory
         self._resolver = resolver
+        self._cancel = cancel
 
     def _connection(self, parsed: SplitResult, timeout: float, deadline: float):
         if self._connection_factory is not None:
@@ -715,6 +723,10 @@ class _HttpsTransport:
                 )
             except (_AttemptFailure, AcquisitionError):
                 raise
+            except install_cancel.CancelRequested:
+                # Never reclassify a cancel, not even when the watchdog fired
+                # in the same instant.
+                raise
             except (
                 ssl.CertificateError,
                 ssl.SSLError,
@@ -797,13 +809,19 @@ class _HttpsTransport:
                 raise AcquisitionError(
                     "write_failed", f"cannot reset owned partial target: {exc}"
                 ) from exc
+            idle_since = self._clock()
             while True:
                 remaining = _attempt_remaining(deadline, self._clock)
                 active_socket = getattr(connection, "sock", None)
                 if active_socket is None:
                     active_socket = _response_socket(response)
                 if active_socket is not None:
-                    active_socket.settimeout(min(READ_TIMEOUT_SECONDS, remaining))
+                    read_timeout = min(READ_TIMEOUT_SECONDS, remaining)
+                    if self._cancel is not None:
+                        # S8: a roughly one second interruptible wait, so the
+                        # marker is honoured even while the source is silent.
+                        read_timeout = min(install_cancel.READ_POLL_SECONDS, read_timeout)
+                    active_socket.settimeout(read_timeout)
                 amount = min(self._chunk_size, asset.size - received + 1)
                 try:
                     reader = getattr(response, "read1", response.read)
@@ -818,10 +836,26 @@ class _HttpsTransport:
                         "tls_failed",
                         f"TLS validation failed while reading {_redacted_url(current_url)}",
                     ) from None
+                except (socket.timeout, TimeoutError) as exc:
+                    if deadline_reached.is_set():
+                        raise _AttemptFailure(
+                            "transient",
+                            "source attempt exceeded its bounded deadline",
+                        ) from None
+                    if self._cancel is not None and (
+                        self._clock() - idle_since < READ_TIMEOUT_SECONDS
+                    ):
+                        # A silent source inside the previous per-read worst
+                        # case: probe the marker and keep waiting.
+                        self._cancel()
+                        continue
+                    raise _AttemptFailure(
+                        "transient",
+                        f"response read failed at {_redacted_url(current_url)}: "
+                        f"{type(exc).__name__}",
+                    ) from None
                 except (
                     http.client.IncompleteRead,
-                    socket.timeout,
-                    TimeoutError,
                     ConnectionError,
                     OSError,
                 ) as exc:
@@ -840,8 +874,11 @@ class _HttpsTransport:
                         "transient", "source attempt exceeded its bounded deadline"
                     )
                 _attempt_remaining(deadline, self._clock)
+                if self._cancel is not None:
+                    self._cancel()
                 if not chunk:
                     break
+                idle_since = self._clock()
                 received += len(chunk)
                 if received > asset.size:
                     raise AcquisitionError(
@@ -1262,8 +1299,10 @@ def _acquire_asset_set(
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     destination = _validate_request(request)
+    if request.cancel is not None:
+        request.cancel()
     if transport is None:
-        transport = _HttpsTransport(clock=clock)
+        transport = _HttpsTransport(clock=clock, cancel=request.cancel)
     owned_paths: list[_OwnedPath] = []
     assets_evidence: list[dict[str, Any]] = []
     final_sources: dict[str, str] = {}

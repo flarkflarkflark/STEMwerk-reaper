@@ -57,6 +57,64 @@ jobs:
           if outcomes:
               sys.exit(f"{name}: did not pass: {'; '.join(outcomes)}")
           print(f"{name}: ran once and passed")
+      - name: Require that the Linux bootstrap selection really ran
+        # pytest --collect-only -q tests/test_linux_managed_bootstrap.py gives
+        # this count; raise it when tests are added. A deselected or removed
+        # test must not pass silently. Skips are tolerated in the aggregate
+        # count only because the optional-dependency tests have their own
+        # named guards above or below.
+        shell: python
+        run: |
+          import sys
+          import xml.etree.ElementTree as ET
+
+          minimum = 63
+          report = "linux-managed-python-bootstrap-junit.xml"
+          bootstrap_file = "tests/test_linux_managed_bootstrap.py"
+          bootstrap_class = "tests.test_linux_managed_bootstrap"
+          required_names = (
+              "test_a_proc_view_of_another_pid_namespace_releases_nothing_under_dash",
+          )
+          try:
+              root = ET.parse(report).getroot()
+          except (OSError, ET.ParseError) as exc:
+              sys.exit(f"cannot read JUnit report {report}: {exc}")
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          if root.tag not in ("testsuite", "testsuites") or not suites:
+              sys.exit(f"cannot read JUnit report {report}: missing testsuite")
+          try:
+              totals = {
+                  key: sum(int(suite.get(key, 0)) for suite in suites)
+                  for key in ("tests", "errors", "failures")
+              }
+          except ValueError as exc:
+              sys.exit(f"cannot read JUnit report {report}: {exc}")
+          for name in required_names:
+              cases = [
+                  case
+                  for case in root.iter("testcase")
+                  if case.get("name") == name
+                  and case.get("file") in (None, bootstrap_file)
+                  and (
+                      case.get("classname") == bootstrap_class
+                      or (case.get("file") == bootstrap_file and not case.get("classname"))
+                  )
+              ]
+              if len(cases) != 1:
+                  sys.exit(
+                      f"{bootstrap_class}::{name}: expected exactly one testcase in {report}, found {len(cases)}"
+                  )
+              outcomes = [
+                  f"{child.tag}: {child.get('message', '')}"
+                  for child in cases[0]
+                  if child.tag in ("skipped", "error", "failure")
+              ]
+              if outcomes:
+                  sys.exit(f"{bootstrap_class}::{name}: did not pass: {'; '.join(outcomes)}")
+              print(f"{bootstrap_class}::{name}: ran once and passed")
+          print(totals, "minimum", minimum)
+          if totals["tests"] < minimum or totals["errors"] or totals["failures"]:
+              sys.exit("the Linux bootstrap selection did not all execute and pass")
       - name: Real entry-point smoke into a fresh runner-owned root
         shell: bash
         run: |
@@ -160,6 +218,7 @@ jobs:
         # hardware and stay runnable separately, outside portable CI.
         run: >-
           python -m pytest -q -rs -m portable
+          --junitxml=portable-junit.xml
           tests/test_stemwerk_runtime_diagnostics_harness.py
           tests/test_core_drumsep_runtime.py
           tests/test_core_readiness.py
@@ -181,8 +240,97 @@ jobs:
           tests/test_core_install_bootstrap.py
           tests/test_core_s6_linux_install.py
           tests/test_core_s7_linux_ffmpeg.py
+          tests/test_core_s8_cancel.py
           tests/test_core_catalog_sync.py
           tests/test_dependency_constraints.py::test_audio_separator_process_consumes_shared_managed_ffmpeg_candidates
+
+      - name: Require that the Core S8 cancellation cases really ran
+        # The portable selection above includes tests/test_core_s8_cancel.py
+        # and the six real foreign-namespace regressions in
+        # tests/test_core_install_bootstrap.py; if those cases were dropped or
+        # skipped the job would still pass.
+        # pytest --collect-only -q -m portable tests/test_core_s8_cancel.py
+        # gives the S8 file count; raise it when cancellation tests are added.
+        # This job runs on Linux only, so the POSIX cases do not skip here.
+        shell: python
+        run: |
+          import sys
+          import xml.etree.ElementTree as ET
+
+          minimum = 85
+          report = "portable-junit.xml"
+          s8_file = "tests/test_core_s8_cancel.py"
+          s8_class = "tests.test_core_s8_cancel"
+          bootstrap_file = "tests/test_core_install_bootstrap.py"
+          bootstrap_class = "tests.test_core_install_bootstrap"
+          required_foreign_ns_cases = (
+              "test_fix4_REAL_foreign_namespace_retry_keeps_a_live_writers_core_staging[missing]",
+              "test_fix4_REAL_foreign_namespace_retry_keeps_a_live_writers_core_staging[recorded]",
+              "test_fix4_REAL_foreign_namespace_stale_cleanup_keeps_a_live_writers_bootstrap_staging[empty]",
+              "test_fix4_REAL_foreign_namespace_stale_cleanup_keeps_a_live_writers_bootstrap_staging[recorded]",
+              "test_fix4_REAL_proc_view_of_another_namespace_is_no_proof_of_the_owners_absence[False]",
+              "test_fix4_REAL_proc_view_of_another_namespace_is_no_proof_of_the_owners_absence[True]",
+          )
+          try:
+              root = ET.parse(report).getroot()
+          except (OSError, ET.ParseError) as exc:
+              sys.exit(f"cannot read JUnit report {report}: {exc}")
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          if root.tag not in ("testsuite", "testsuites") or not suites:
+              sys.exit(f"cannot read JUnit report {report}: missing testsuite")
+          try:
+              totals = {
+                  key: sum(int(suite.get(key, 0)) for suite in suites)
+                  for key in ("tests", "skipped", "errors", "failures")
+              }
+          except ValueError as exc:
+              sys.exit(f"cannot read JUnit report {report}: {exc}")
+          for name in required_foreign_ns_cases:
+              matches = [
+                  case
+                  for case in root.iter("testcase")
+                  if case.get("name") == name
+                  and case.get("file") in (None, bootstrap_file)
+                  and (
+                      case.get("classname") == bootstrap_class
+                      or (case.get("file") == bootstrap_file and not case.get("classname"))
+                  )
+              ]
+              if len(matches) != 1:
+                  sys.exit(
+                      f"{bootstrap_class}::{name}: expected exactly one testcase in {report}, found {len(matches)}"
+                  )
+              outcomes = [
+                  f"{child.tag}: {child.get('message', '')}"
+                  for child in matches[0]
+                  if child.tag in ("skipped", "error", "failure")
+              ]
+              if outcomes:
+                  sys.exit(f"{bootstrap_class}::{name}: did not pass: {'; '.join(outcomes)}")
+          print(
+              f"{bootstrap_file}: {len(required_foreign_ns_cases)} required foreign-namespace cases ran once and passed"
+          )
+          cases = [
+              case
+              for case in root.iter("testcase")
+              if case.get("file") in (None, s8_file)
+              and (
+                  case.get("classname") == s8_class
+                  or (case.get("file") == s8_file and not case.get("classname"))
+              )
+          ]
+          problems = [
+              f"{case.get('name')}: {child.tag}"
+              for case in cases
+              for child in case
+              if child.tag in ("skipped", "error", "failure")
+          ]
+          print(f"{s8_file}: {len(cases)} cases ran, minimum {minimum}")
+          if len(cases) < minimum or problems or totals["errors"] or totals["failures"]:
+              sys.exit(
+                  f"the Core S8 cancellation selection did not all execute and pass"
+                  + (f": {'; '.join(problems)}" if problems else "")
+              )
 
       - name: Test i18n completeness
         run: |
@@ -204,7 +352,7 @@ jobs:
     name: Asset publication (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     env:
-      # Number of tests selected by -m native_publication in the fifteen files
+      # Number of tests selected by -m native_publication in the sixteen files
       # below: run pytest --collect-only with that marker and those files. Every
       # matrix entry selects the same set. Raise it when native publication
       # tests are added; the guard fails if fewer ran, so a deselected or removed
@@ -214,7 +362,9 @@ jobs:
       # hashing are native on each OS; the S6 route itself is Linux-only so far.
       # The S7 tests use a synthetic vendor archive and the same fakes; the stand-in
       # programs only run on POSIX, so tests that execute them are not marked native.
-      MIN_NATIVE_PUBLICATION_TESTS: "427"
+      # The S8 cancellation matrix uses the same fakes; POSIX-only process-group
+      # and signal tests are not marked native.
+      MIN_NATIVE_PUBLICATION_TESTS: "457"
     strategy:
       fail-fast: false
       matrix:
@@ -281,6 +431,7 @@ jobs:
           tests/test_core_install_bootstrap.py
           tests/test_core_s6_linux_install.py
           tests/test_core_s7_linux_ffmpeg.py
+          tests/test_core_s8_cancel.py
 
       - name: Require that native publication tests really ran
         # A skip must not look like a pass: fail unless at least the minimum

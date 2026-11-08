@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 import urllib.request
 import zipfile
 
+from . import install_cancel
+
 WHEEL_LOCK_FILENAME = "wheel-lock-linux-x86_64-cpu.v1.json"
 ALLOWED_WHEEL_HOSTS = frozenset(
     {
@@ -454,7 +456,12 @@ def verify_wheel_file(path: Path, record: WheelRecord) -> None:
         )
 
 
-def _download_wheel_https(record: WheelRecord, destination: Path, timeout: float = 120.0) -> None:
+def _download_wheel_https(
+    record: WheelRecord,
+    destination: Path,
+    timeout: float = 120.0,
+    cancel: Optional[Callable[[], None]] = None,
+) -> None:
     parsed = urlparse(record.url)
     if parsed.scheme != "https" or parsed.hostname not in ALLOWED_WHEEL_HOSTS:
         raise WheelLockError(
@@ -472,7 +479,21 @@ def _download_wheel_https(record: WheelRecord, destination: Path, timeout: float
             with part_path.open("wb") as out:
                 total = 0
                 while True:
-                    chunk = response.read(256 * 1024)
+                    if cancel is None:
+                        chunk = response.read(256 * 1024)
+                    else:
+                        chunk = install_cancel.read_download_chunk(
+                            response,
+                            256 * 1024,
+                            cancel,
+                            idle_deadline=install_cancel.idle_deadline_from_now(),
+                            idle_error=lambda: WheelLockError(
+                                "wheel_download_failed",
+                                f"download of {record.filename} sent no data for "
+                                f"{install_cancel.IDLE_TIMEOUT_SECONDS:.0f} seconds",
+                                filename=record.filename,
+                            ),
+                        )
                     if not chunk:
                         break
                     total += len(chunk)
@@ -485,6 +506,12 @@ def _download_wheel_https(record: WheelRecord, destination: Path, timeout: float
                     out.write(chunk)
         os.replace(part_path, destination)
     except WheelLockError:
+        try:
+            part_path.unlink()
+        except OSError:
+            pass
+        raise
+    except install_cancel.CancelRequested:
         try:
             part_path.unlink()
         except OSError:
@@ -524,10 +551,13 @@ def stage_and_verify_wheelhouse(
     core_package_dir: Optional[Path] = None,
     fetcher: Optional[Callable[[WheelRecord, Path], None]] = None,
     on_wheel_verified: Optional[Callable[[WheelRecord], None]] = None,
+    cancel: Optional[Callable[[], None]] = None,
 ) -> Tuple[Tuple[WheelRecord, ...], Path]:
     """Populate ``wheelhouse_dir`` with every locked wheel, verify exact byte
     sizes and SHA-256 digests before ``pip`` is invoked, synthesize the
     in-tree ``stemwerk-core`` wheel, and write ``requirements-locked.txt``.
+
+    ``cancel`` is the S8 probe, honoured per chunk during a download.
     """
     wheelhouse = Path(wheelhouse_dir)
     wheelhouse.mkdir(parents=True, exist_ok=True)
@@ -558,7 +588,7 @@ def stage_and_verify_wheelhouse(
             fetcher(record, target)
             verify_wheel_file(target, record)
         else:
-            _download_wheel_https(record, target)
+            _download_wheel_https(record, target, cancel=cancel)
             verify_wheel_file(target, record)
 
         staged_records.append(record)

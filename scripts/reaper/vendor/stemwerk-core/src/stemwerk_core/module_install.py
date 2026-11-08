@@ -38,8 +38,9 @@ ERROR_SCHEMA_VERSION = "1.0.0"
 DISTRIBUTION_NAME = "stemwerk-core"
 
 # Operations this Core can perform. A front end hides any it does not know
-# (design section 9); cancel is added by S8.
-OPERATIONS = ("plan", "verify", "install")
+# (design section 9). ``cancel`` is no subcommand: it advertises that a running
+# install honours the marker of design D6 (S8), so the front end may offer it.
+OPERATIONS = ("plan", "verify", "install", "cancel")
 # Platforms of the first route (design section 10.3).
 PLATFORMS = ("linux-x86_64", "darwin-arm64", "win-x86_64")
 

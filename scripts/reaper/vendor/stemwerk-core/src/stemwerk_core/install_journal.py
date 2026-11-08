@@ -20,6 +20,26 @@ it verifies through a caller-supplied hook and never deletes. It touches
 nothing that is not journaled; an operation directory without a journal (for
 example the outer layer's bootstrap staging) is never touched.
 
+Writers (S8 fix3, write-ahead). Before the operation starts any process that
+can write into its staging independently, it appends a ``writer_intent``
+record (writer id, exact staging path, Linux boot id, PID namespace), flushed
+and fsynced; if that append fails the process is not started. Right after the
+spawn it appends ``writer_pgid`` (the owned process group). It appends
+``writer_closed`` only after the direct child was reaped and the group
+answered ``ESRCH``; a failed close append leaves the intent open. Safety never
+depends on a last-minute record: an open intent with no recorded group keeps
+the staging on the same boot. Recovery keeps the whole operation, journal and
+staging, untouched for as long as :func:`install_cancel.writer_state` cannot
+prove every open writer gone (the boot id positively differs, or
+``killpg(pgid, 0)`` answers ``ESRCH`` to an observer in the PID namespace
+recorded with the group, on the same boot); a missing boot id is not evidence
+of a reboot, and a missing or different namespace is no proof. Each writer is judged on its own record, so closing one never releases
+another sharing the same staging. A cancelled operation that cannot rule out
+a surviving writer also appends a ``suspect`` record (process group, boot id,
+PID namespace) as a supplement. A reused group id can only make recovery keep
+the staging longer, never remove it early. Journals without any writer record
+(older ones) keep their ordinary recovery.
+
 This is a library. No operation writes a journal yet; the first writer comes
 with the runtime build (slice S6).
 """
@@ -32,9 +52,11 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from . import asset_materialization as materialization
+from . import install_cancel
 from . import install_events
 from ._install_paths import (
     DIRECTORY_MODE,
@@ -59,7 +81,11 @@ RENAME = "rename"
 REMOVE = "remove"
 ACTIONS = (CREATE_DIRECTORY, CREATE_FILE, RENAME, REMOVE)
 
-_RECORDS = ("open", "intent", "completion")
+SUSPECT_RECORD = "suspect"
+WRITER_INTENT = "writer_intent"
+WRITER_PGID = "writer_pgid"
+WRITER_CLOSED = "writer_closed"
+_RECORDS = ("open", "intent", "completion", SUSPECT_RECORD, WRITER_INTENT, WRITER_PGID, WRITER_CLOSED)
 
 # Outcomes per journaled item in a recovery report.
 REMOVED = "removed"
@@ -71,6 +97,7 @@ PUBLISHED_VERIFIED = "published_verified"
 PUBLISHED_FAILED = "published_failed"
 PUBLISHED_UNVERIFIED = "published_unverified"
 NOT_APPLICABLE = "not_applicable"
+KEPT_WRITER_MAY_BE_ALIVE = "kept_writer_may_be_alive"
 _KEPT = (KEPT_IDENTITY_MISMATCH, KEPT_REMOVE_FAILED, KEPT_CONTAINS_KEPT_ITEM)
 
 
@@ -143,6 +170,10 @@ class Journal:
         ).encode("utf-8")
         try:
             written = os.write(self._descriptor, data)
+        except OSError as exc:
+            self._seq -= 1  # nothing reached the file: keep the numbering gap-free
+            raise JournalError("journal_write_failed", f"cannot write the journal: {exc}") from exc
+        try:
             if written != len(data):
                 raise OSError("short write to the journal")
             os.fsync(self._descriptor)
@@ -242,6 +273,58 @@ class Journal:
             raise JournalError("journal_write_failed", f"cannot remove {path}: {exc}") from exc
         self.completion(seq, None)
 
+    # -- writer ledger (write-ahead, S8 fix3) ------------------------------
+
+    @property
+    def is_open(self) -> bool:
+        return self._descriptor is not None
+
+    def begin_writer(self, command: Optional[List[str]] = None) -> Optional[str]:
+        """Durably record the intent to start a process that can write into the
+        staging. Returns the writer id, or ``None`` when the journal is already
+        closed (the staging is no longer in use). Raises :class:`JournalError`
+        if the intent cannot be persisted; the caller must then not spawn.
+
+        The child does not exist yet. The PID namespace captured here is this
+        (Core) process's own, read from ``/proc/self/ns/pid``; the child will be
+        created in it and its group id will be observed from it."""
+
+        if self._descriptor is None:
+            return None
+        writer_id = uuid.uuid4().hex
+        self._append({
+            "record": WRITER_INTENT,
+            "writer_id": writer_id,
+            "staging": _relative(self.root, self.core_directory),
+            "boot_id": install_cancel.current_boot_id(),
+            "pid_namespace": install_cancel.current_pid_namespace(),
+            "command": [str(part)[:200] for part in (command or [])][:1],
+        })
+        return writer_id
+
+    def writer_spawned(self, writer_id: str, pgid: int) -> None:
+        """Record the owned process group right after the spawn.
+
+        ``pgid`` is the child's pid as this process sees it (``Popen.pid``), and
+        the child is created in this process's PID namespace; the namespace
+        recorded here is therefore the one in which that number means this
+        group. It is the same identity :meth:`begin_writer` captured before the
+        spawn (a process cannot change its own PID namespace), and recovery
+        accepts ``ESRCH`` only when both records and the observer agree."""
+
+        self._append({
+            "record": WRITER_PGID,
+            "writer_id": writer_id,
+            "pgid": int(pgid),
+            "pid_namespace": install_cancel.current_pid_namespace(),
+        })
+
+    def writer_closed(self, writer_id: str) -> None:
+        """Close one writer's record. Call only after the direct child was
+        reaped and its group answered ``ESRCH``."""
+
+        self._append({"record": WRITER_CLOSED, "writer_id": writer_id})
+
     def close(self) -> None:
         if self._descriptor is not None:
             descriptor, self._descriptor = self._descriptor, None
@@ -287,6 +370,141 @@ def open_journal(root: os.PathLike | str, operation_id: str) -> Journal:
     return journal
 
 
+def record_suspected_writer(
+    root: os.PathLike | str,
+    operation_id: str,
+    *,
+    pgid: Optional[int],
+    boot_id: Optional[str] = None,
+    pid_namespace: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Append a ``suspect`` record: this operation's staging may have a live writer.
+
+    Called by the cancelled operation itself while it still holds the install
+    lock. The record is flushed and fsynced like an intent. ``boot_id`` and
+    ``pid_namespace`` default to this host's current values. Raises
+    :class:`JournalError` when the journal cannot be extended; the caller must
+    then report that a later recovery may remove the staging.
+    """
+
+    root = Path(root)
+    path = operation_directory(root, operation_id) / JOURNAL_FILENAME
+    try:
+        if lstat_inside(path) is None:
+            raise JournalError("journal_invalid", "the operation has no journal")
+    except InstallPathError as exc:
+        raise _path_error(exc) from exc
+    flags = (
+        os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise JournalError("journal_write_failed", f"cannot open the journal: {exc}") from exc
+    try:
+        try:
+            with open(path, "rb") as reader:  # the install lock is held: nobody else appends
+                data = reader.read()
+        except OSError as exc:
+            raise JournalError("journal_write_failed", f"cannot read the journal: {exc}") from exc
+        if data and not data.endswith(b"\n"):
+            raise JournalError("journal_invalid", "the journal ends in an incomplete line")
+        records = parse_journal(data, operation_id)
+        if not records:
+            raise JournalError("journal_invalid", "the journal is empty")
+        record: Dict[str, Any] = {
+            "protocol": JOURNAL_PROTOCOL,
+            "operation_id": operation_id,
+            "seq": len(records) + 1,
+            "ts": install_events.utc_timestamp(),
+            "record": SUSPECT_RECORD,
+            "pgid": pgid if isinstance(pgid, int) and not isinstance(pgid, bool) else None,
+            "boot_id": boot_id if boot_id is not None else install_cancel.current_boot_id(),
+            "pid_namespace": (
+                pid_namespace if pid_namespace is not None else install_cancel.current_pid_namespace()
+            ),
+            "staging": _relative(root, operation_directory(root, operation_id) / CORE_DIRECTORY),
+        }
+        line = (
+            json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":"))
+            + "\n"
+        ).encode("utf-8")
+        try:
+            written = os.write(descriptor, line)
+            if written != len(line):
+                raise OSError("short write to the journal")
+            os.fsync(descriptor)
+        except OSError as exc:
+            raise JournalError("journal_write_failed", f"cannot write the journal: {exc}") from exc
+        return record
+    finally:
+        os.close(descriptor)
+
+
+def suspected_writer(records: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The first writer the records cannot prove gone, else ``None``.
+
+    Judged per writer: every ``writer_intent`` without a ``writer_closed``
+    (with the ``writer_pgid`` recorded for it, if any), and every ``suspect``
+    record. A writer is gone only when its recorded boot id positively differs
+    from the current one, or its recorded group answers ``ESRCH`` to an
+    observer whose PID namespace is positively the one recorded with the group
+    (on both the intent and the group record) on the same boot
+    (:func:`install_cancel.writer_state`); an intent with no recorded group is
+    not gone on the same boot, and a missing boot id is never a reboot. The returned dict is a report entry: the facts plus the
+    observed ``writer_state`` and its ``reason``.
+    """
+
+    closed = {r.get("writer_id") for r in records if r.get("record") == WRITER_CLOSED}
+    pgids: Dict[Any, Dict[str, Any]] = {}
+    for record in records:
+        if record.get("record") == WRITER_PGID:
+            pgids[record.get("writer_id")] = record
+    candidates: List[Dict[str, Any]] = []
+    for record in records:
+        kind = record.get("record")
+        if kind == WRITER_INTENT and record.get("writer_id") not in closed:
+            pgid_record = pgids.get(record.get("writer_id")) or {}
+            # The namespace in which the PGID number was observed must be on BOTH
+            # records and agree; anything else (an earlier candidate's record
+            # without it, a mismatch) is no proof.
+            intent_ns, pgid_ns = record.get("pid_namespace"), pgid_record.get("pid_namespace")
+            consistent = install_cancel.valid_pid_namespace(intent_ns) and intent_ns == pgid_ns
+            candidates.append({
+                "writer_id": record.get("writer_id"),
+                "pgid": pgid_record.get("pgid"),
+                "boot_id": record.get("boot_id"),
+                "pid_namespace": intent_ns if consistent else None,
+                "staging": record.get("staging"),
+                "source": WRITER_INTENT,
+                "_namespace_inconsistent": bool(
+                    pgid_record and install_cancel.valid_pid_namespace(intent_ns)
+                    and install_cancel.valid_pid_namespace(pgid_ns) and intent_ns != pgid_ns
+                ),
+            })
+        elif kind == SUSPECT_RECORD:
+            candidates.append({
+                "writer_id": None,
+                "pgid": record.get("pgid"),
+                "boot_id": record.get("boot_id"),
+                "pid_namespace": record.get("pid_namespace"),
+                "staging": record.get("staging"),
+                "source": SUSPECT_RECORD,
+                "_namespace_inconsistent": False,
+            })
+    for entry in candidates:
+        inconsistent = entry.pop("_namespace_inconsistent")
+        state, reason = install_cancel.writer_state(
+            entry["pgid"], entry["boot_id"], entry["pid_namespace"]
+        )
+        if state != install_cancel.WRITER_GONE:
+            if inconsistent and reason == "pid_namespace_unrecorded":
+                reason = "pid_namespace_inconsistent"
+            return {**entry, "writer_state": state, "reason": reason}
+    return None
+
+
 # --- reading -------------------------------------------------------------
 
 
@@ -323,6 +541,9 @@ class OperationRecovery:
     complete: bool
     error: Optional[str] = None
     items: List[Dict[str, Any]] = field(default_factory=list)
+    # Set when a suspected writer is not proven gone: nothing of this
+    # operation was touched. Not an error; the operation does not block.
+    deferred_writer: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -334,18 +555,18 @@ class RecoveryReport:
         return all(operation.complete for operation in self.operations)
 
     def to_json(self) -> Dict[str, Any]:
-        return {
-            "complete": self.complete,
-            "operations": [
-                {
-                    "operation_id": o.operation_id,
-                    "complete": o.complete,
-                    "error": o.error,
-                    "items": o.items,
-                }
-                for o in self.operations
-            ],
-        }
+        operations = []
+        for o in self.operations:
+            entry: Dict[str, Any] = {
+                "operation_id": o.operation_id,
+                "complete": o.complete,
+                "error": o.error,
+                "items": o.items,
+            }
+            if o.deferred_writer is not None:
+                entry["deferred_writer"] = o.deferred_writer
+            operations.append(entry)
+        return {"complete": self.complete, "operations": operations}
 
 
 PublishedVerifier = Callable[[Path], bool]
@@ -413,6 +634,24 @@ def _recover_operation(
         return result
     if not records:
         result.error = "journal_empty"
+        return result
+
+    # A cancelled operation that could not rule out a surviving writer keeps
+    # its staging until that writer is proven gone (S8, decisions c/f). Check
+    # before anything is removed, journaled or not.
+    suspect = suspected_writer(records)
+    if suspect is not None:
+        result.deferred_writer = suspect
+        result.items.append({
+            "action": "retain_staging",
+            "path": suspect.get("staging") or f"{TMP_DIRECTORY}/{operation_id}/{CORE_DIRECTORY}",
+            "outcome": KEPT_WRITER_MAY_BE_ALIVE,
+            "writer_state": suspect["writer_state"],
+            "reason": suspect["reason"],
+            "pgid": suspect["pgid"],
+            "writer_id": suspect.get("writer_id"),
+            "source": suspect.get("source"),
+        })
         return result
 
     core = directory / CORE_DIRECTORY

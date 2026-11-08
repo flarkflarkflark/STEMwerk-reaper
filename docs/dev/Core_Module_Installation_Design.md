@@ -1003,6 +1003,17 @@ DECIDED (D6): a cancel marker file is the single primary cancel mechanism
 on all platforms; Core checks it at safe points; POSIX signals are only an
 optional fast path; there is no dependency on `CTRL_BREAK_EVENT`.
 
+DECIDED (2026-11-08, owner decision C after the S8 independent review): the
+terminal EVENT of a cancelled operation is the existing v1 state `failed`
+with `error_code="cancelled"` — v1 gains no new event state, so every
+unmodified v1 reader parses the whole stream. The terminal OUTCOME lives in
+`result.json`: exit 2 with a write-once document whose `error.code` is
+`cancelled`, with factual `remains`, and with a coincident real error kept
+as `prior_error`. A future front end reads `result.json` before displaying a
+final outcome; events alone do not distinguish a cancellation from an
+ordinary failure. Future changes preserve this choice: no `cancelled` event
+state without an owner decision and a schema conversation.
+
 PROPOSED details:
 
 - **Marker.** The front end requests cancel by creating the empty file
@@ -1032,6 +1043,84 @@ PROPOSED details:
   (`docs/dev/Core_DrumSep_Asset_Materialization.md:138-140`); an interrupt
   retains its original exception type and carries phase, publication and
   cleanup facts (`docs/dev/Core_DrumSep_Asset_Preparation.md:133-135`).
+- **Staging of a writer that cannot be ruled out (S8, write-ahead).** Under the
+  install lock, before Core starts any process that can write into its
+  staging independently, it durably appends a `writer_intent` record to the
+  operation's journal: operation, exact staging path, writer id, Linux boot
+  id (`/proc/sys/kernel/random/boot_id`) and PID namespace. If that append
+  fails the process is not started and the operation fails with
+  `writer_intent_unavailable`. Right after the spawn it appends
+  `writer_pgid` (the owned process group); if that append fails, or Core
+  dies in the gap, the open intent alone protects the staging. It appends
+  `writer_closed` only after the direct child was reaped and the group
+  answered `ESRCH`, with every wait bounded; a failed close append leaves the
+  intent open. A cancelled operation that cannot rule out a survivor also
+  appends a `suspect` record, but safety never depends on it. Every later
+  cleanup (journal recovery after lock acquisition, the asset-materialization
+  recovery that runs before it, the operation's own cancellation cleanup)
+  judges each writer separately: it is gone only if the boot id positively
+  differs from the recorded one, or `killpg(pgid, 0)` answers `ESRCH` for
+  its recorded group under the PID-namespace rule below. An open intent with
+  no recorded group keeps the staging on the same boot; a missing or
+  unreadable boot id is not evidence of a reboot. Closing one writer never releases another that shares the
+  staging. A kept operation is reported (`kept_writer_may_be_alive`,
+  `remains.suspected_writer`), keeps its journal and staging untouched, and
+  never blocks a retry, which installs into its own fresh staging. A reused
+  process group id can only make Core keep the staging longer, never remove
+  it early. Journals with no writer record (older ones) keep their ordinary
+  recovery. A writer that left the group with `setsid()` is invisible to the
+  group probe: a documented limit, not a guarantee.
+- **`ESRCH` and PID namespaces (S8 fix4, owner rule).** A process group id
+  is a number in one PID namespace. `ESRCH`, or an empty group, proves that a
+  writer is gone only when the observer's PID namespace (read from
+  `/proc/self/ns/pid` of the observing process) is positively identical to
+  the namespace in which the writer's group id was observed and recorded,
+  and the boot is positively the same (both boot ids readable and equal).
+  Empty, malformed (anything but `pid:[<inode>]`) or unreadable identities
+  never match. A missing or different namespace on either side is no proof:
+  the staging is kept. `EPERM` or any other error than `ESRCH` means the
+  writer may exist: kept. Records from earlier candidates without a
+  namespace are no proof. A positively different boot id removes this
+  writer-liveness objection only; ownership, age and journal requirements
+  still apply. The rule can only keep staging longer, never delete it
+  earlier. Viewpoints: Core records its own namespace on `writer_intent`
+  before the spawn (the child does not exist yet; it is created in Core's
+  namespace) and again on `writer_pgid` with the child's id as Core sees it
+  (`Popen.pid`); recovery accepts `ESRCH` only when both records and the
+  observer agree. The Linux outer layer reads its worker's group id from
+  `/proc`, so before it starts anything it requires `/proc` to number its own
+  namespace (`NSpid` in `/proc/self/status` has exactly one entry, its own
+  pid); otherwise it releases nothing and fails with
+  `bootstrap_prerequisite_unavailable`. It records `readlink
+  /proc/self/ns/pid` only in its exact form, else leaves the field empty.
+  Judging a bootstrap owner (the controller, itself a staging writer) absent
+  through `/proc` likewise counts only when the observer's `/proc` numbers
+  the observer's own namespace; a `/2` owner without a group record names no
+  namespace and no boot, so its absence is no proof and that staging is
+  kept. Uses of `ESRCH` that decide nothing about deletion by another
+  observer (stopping one's own child group, a worker noticing its
+  controller is gone) are unchanged; the inventory is in the S8 fix4
+  evidence. A retention reason is reported through the current operation's
+  existing reporting path (its recovery report, the lock's bootstrap-cleanup
+  report); an earlier operation's write-once `result.json` is never amended.
+- **Terminal record when the log directory is unusable (S8).** The outer
+  layer owns `<root>/logs/<op>/` (it created it exclusively, G1). If that
+  directory has become unsearchable or unwritable and belongs to the same
+  user, the outer layer restores mode 700 on that one directory and writes
+  exactly one terminal `failed` event with `error_code="cancelled"` and one
+  `result.json`; the failed marker lookup (errno name and message) is a
+  detail field of the result (`error.cancel.cancel_check_error`). If the
+  directory cannot be restored (for example `<root>/logs` itself is denied),
+  no file can be written. The caller then observes the existing contract
+  unchanged: exit `2` and the error document on stderr, whose
+  `error.cancel.terminal_record` is `unwritable`. Front-end rule (bounded
+  wait): a front end never waits indefinitely for a result file. Once the
+  process it started has exited, it waits at most 10 seconds for
+  `result.json`; with no process handle, it treats an operation whose events
+  are unreadable or silent for longer than three heartbeats (15 seconds) and
+  whose recorded process is gone the same way. After that it reports
+  "stopped, no result recorded" (with the stderr document or exit status when
+  it has them) instead of showing progress.
 - **Retry and resume.** First route: retry is a new operation that starts
   from verification of what exists; there is no byte-range resume
   (EXISTING: "There is no resume support or persistent cache",
@@ -1142,7 +1231,10 @@ without it. Core takes the lock right after preflight.
   create, rename or remove). Recovery reads the journal: unpublished staging
   is removed under the existing identity checks; published results are
   verified, not deleted. Anything not recorded in a journal is never
-  touched (criterion C13). The outer layer's bootstrap staging has no
+  touched (criterion C13). Recovery of an operation that recorded a writer
+  that is not proven gone keeps the whole operation (section 7.4, write-ahead
+  writer records; `ESRCH` counts only from the recorded PID namespace on the
+  same boot); the next recovery re-judges it. The outer layer's bootstrap staging has no
   journal; S5a specifies its cleanup (O55): the outer layer writes only
   `<root>/tmp/<op>/bootstrap/` with an owner record, and Core removes such
   staging after journal recovery under the lock once it has been silent for
@@ -1348,7 +1440,7 @@ route.
 | C21 | The scheduled manifest-URL check job fails on a deliberately broken pin (F5) | DESCRIBED | None |
 | C22 | Bootstrap with a wrong pinned hash or a truncated archive: the outer layer writes a `failed` event and a result file in the Core format under `<root>/logs/<op>/`, publishes nothing, writes nothing outside the G1 carve-out; a second bootstrap reuses a verified runtime | DESCRIBED | None |
 | C23 | Below the G2 OS floor the install is refused with observed and required versions; REAPER older than 7.0 shows "not tested, please update" and proceeds; a missing required API ends in a clean, named failure | DESCRIBED | None |
-| C24 | A stale bootstrap staging directory left under `<root>/tmp/` by a crashed outer layer is removed on the next start of Core; the staging directory of an active bootstrap is never touched (O55) | DESCRIBED | Core side: S5a library tests of stale, active and linked staging and of cleanup at lock acquisition; outer layer and host runs in S5b |
+| C24 | A stale bootstrap staging directory left under `<root>/tmp/` by a crashed outer layer is removed on the next start of Core; the staging directory of an active bootstrap is never touched (O55) | DESCRIBED | Core side: S5a library tests of stale, active and linked staging and of cleanup at lock acquisition; outer layer and host runs in S5b; on Linux (S8 fix3) a stale directory is also kept while its recorded writer group is alive, and kept when the ownership evidence is legacy, missing or ambiguous (owner `/2` plus `bootstrap/group`) |
 
 Note on C11: host evidence exists only for the Windows dev machine; the host
 runs on other machines predate 9c410f9. The materialization CLI is not
@@ -1420,7 +1512,7 @@ revisions; resolved items move to section 12.3.
 | O47 | Scheduled manifest-URL CI check (F5) | Blocks first-route distribution; constructed in S5 (C21) |
 | O48 | Licence texts and source pointers shipped with every bundled or STEMwerk-hosted FFmpeg (F5) | Blocks publishing or sharing any STEMwerk-hosted or bundled FFmpeg (S7 release asset, bundled installers, external test builds). Does not block local construction |
 | O54 | How Core is started after the outer layer has published only the pinned Python (G1) | Open question: where Core's code comes from on a fresh account, and how the managed Python runs it under `-I` before any module venv exists. Constraints: 2.3 ships Core as plain files and makes it importable only by `pip install` into its venv (EXISTING: `scripts/reaper/STEMwerk_Bootstrap_Windows.ps1:3436-3444`, `scripts/reaper/STEMwerk_Bootstrap_Linux.sh:2576-2579`); `-I` ignores `PYTHON*` variables and the user site-packages, and `-m` then does not prepend the current directory (REPORTED, https://docs.python.org/3/using/cmdline.html); the ReaPack (`index.xml:125-131`), Inno (`installer/windows/STEMwerk_Windows_Payload.iss:69-75`, included at `installer/windows/STEMwerk.iss:146`) and `.pkg` (`installer/macos/payload-manifest.txt:132-138`) file lists name 7 of the 30 tracked files under `scripts/reaper/vendor/stemwerk-core`, while the Linux package copies the whole `scripts/reaper/` tree (`installer/linux/stage_payload.sh:10,29-32`); ReaPack and the macOS payload also ship a built wheel `stemwerk_core-0.1.1-py3-none-any.whl` under `vendor/wheels/darwin-arm64-cp312/` and `vendor/wheels/darwin-x86_64-cp312/` (`index.xml:135,138`; `installer/macos/payload-manifest.txt:141,144`), which at HEAD holds the same five `stemwerk_core` modules as those file lists and exists only for macOS (EXISTING: member list of the tracked wheel). Shipping a wheel built from the Core at HEAD this way is a candidate for S5, not a decision. Mechanism not decided; class and owner DECIDED 2026-10-30; S5 resolves it. Mechanism resolved in S5a: run the shipped `vendor/stemwerk-core/src` directory with `-I -B` (its `__main__.py` calls the module CLI); every front end must then ship that whole tree (S5b, S9) |
-| O55 | Cleanup after a crashed outer-layer bootstrap | Its staging `<root>/tmp/<op>/` has no journal, so journal recovery (section 8, C13) never removes it. PROPOSED direction: on start, Core removes outer-layer staging directories that belong to no active operation and are not referenced by any registry or receipt. An active bootstrap holds no lock (G1), so S5 must define a real liveness signal (for example a recent events-file heartbeat plus a recorded PID); PROPOSED, S5 decides. Class and owner DECIDED 2026-10-30; S5 specifies and tests it (C24). Specified and tested on the Core side in S5a: staging only in `<root>/tmp/<op>/bootstrap/` with an owner record (operation id, PID); stale after 15 minutes of silence of the events file and the staging and only if the PID is proven gone; removed after journal recovery under the lock. The outer layers that write it are S5b |
+| O55 | Cleanup after a crashed outer-layer bootstrap | Its staging `<root>/tmp/<op>/` has no journal, so journal recovery (section 8, C13) never removes it. PROPOSED direction: on start, Core removes outer-layer staging directories that belong to no active operation and are not referenced by any registry or receipt. An active bootstrap holds no lock (G1), so S5 must define a real liveness signal (for example a recent events-file heartbeat plus a recorded PID); PROPOSED, S5 decides. Class and owner DECIDED 2026-10-30; S5 specifies and tests it (C24). Specified and tested on the Core side in S5a: staging only in `<root>/tmp/<op>/bootstrap/` with an owner record (operation id, PID); stale after 15 minutes of silence of the events file and the staging and only if the PID is proven gone; removed after journal recovery under the lock. The outer layers that write it are S5b. S8 fix3 (owner-approved): the Linux outer layer starts every process that can write the staging in ONE dedicated process group behind a pipe release gate, publishes `bootstrap/group` (staging path, real PGID, boot id, PID namespace) durably before it sends `go`, and writes owner protocol `/2`; Core, which stays read-only before the lock (G1), keeps otherwise stale staging unless the boot id positively differs or that group answers `ESRCH` to an observer in the recorded PID namespace on the same boot (S8 fix4); a `/2` owner without a group record is kept, because the controller's absence was judged by PID alone. Missing, legacy PID-only, malformed or unreadable evidence preserves the staging. Descendants that leave the group with `setsid()` remain an accepted limit |
 
 ### 12.2 Parked
 

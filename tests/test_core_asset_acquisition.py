@@ -29,6 +29,7 @@ CORE_SRC = ROOT / "scripts/reaper/vendor/stemwerk-core/src"
 sys.path.insert(0, str(CORE_SRC))
 
 from stemwerk_core import asset_acquisition as acquisition  # noqa: E402
+from stemwerk_core import install_cancel  # noqa: E402
 from stemwerk_core import asset_materialization as materialization  # noqa: E402
 from stemwerk_core import model_assets  # noqa: E402
 from tests.asset_link_helpers import (  # noqa: E402
@@ -353,6 +354,7 @@ def test_production_policy_uses_core_pins_and_exact_investigated_sources():
     )
     assert tuple(inspect.signature(acquisition.AcquisitionRequest).parameters) == (
         "destination",
+        "cancel",  # S8: optional cancellation probe; None keeps pre-S8 behaviour
     )
 
 
@@ -3048,3 +3050,85 @@ def test_cli_child_argparse_output_with_a_closed_stream_keeps_its_status(
 
     assert result.returncode == status
     assert (result.stderr if closed == "stdout" else result.stdout) == b""
+
+
+# --- S8: the cancel probe inside the interruptible read (design D6, decision b) -
+
+
+class _StallingResponse(FakeResponse):
+    """Raises ``socket.timeout`` a fixed number of times before serving data."""
+
+    def __init__(self, stalls, stall_tick=0.0, **kwargs):
+        super().__init__(**kwargs)
+        self._stalls = stalls
+        self._stall_tick = stall_tick
+
+    def read(self, amount=-1):
+        if self._stalls:
+            self._stalls -= 1
+            if self.clock is not None:
+                self.clock.advance(self._stall_tick)
+            raise socket.timeout("source silent")
+        return super().read(amount)
+
+
+def test_a_stalled_source_that_resumes_completes_with_the_exact_bytes(tmp_path):
+    content = b"stall-then-resume-bytes"
+    clock = FakeClock()
+    factory = ConnectionFactory(
+        [_StallingResponse(3, body=content, headers={"Content-Length": str(len(content))}, clock=clock)]
+    )
+    probes = []
+    transport = acquisition._HttpsTransport(
+        connection_factory=factory, clock=clock, cancel=lambda: probes.append(1)
+    )
+    source, asset = transport_asset(content)
+    target = tmp_path / "asset.part"
+    target.touch()
+
+    transport.download(source, asset, target, deadline=clock() + 20)
+
+    assert target.read_bytes() == content
+    assert len(probes) >= 3  # one probe per silent read, one after the data chunk
+    # The roughly one second interruptible wait replaces the 60 s blocking read.
+    timeouts = factory.connections[0][4].sock.timeouts
+    assert timeouts and all(value <= install_cancel.READ_POLL_SECONDS for value in timeouts)
+
+
+def test_a_source_silent_beyond_the_idle_deadline_keeps_the_old_failure(tmp_path):
+    content = b"silent-forever"
+    clock = FakeClock()
+    factory = ConnectionFactory(
+        [_StallingResponse(2, stall_tick=31.0, body=content, headers={"Content-Length": str(len(content))}, clock=clock)]
+    )
+    transport = acquisition._HttpsTransport(connection_factory=factory, clock=clock, cancel=lambda: None)
+    source, asset = transport_asset(content)
+    target = tmp_path / "asset.part"
+    target.touch()
+
+    with pytest.raises(acquisition._AttemptFailure) as exc:
+        transport.download(source, asset, target, deadline=clock() + 500)
+
+    assert exc.value.kind == "transient"  # the pre-S8 worst case is unchanged
+
+
+def test_a_cancel_during_the_stream_is_never_reclassified(tmp_path):
+    content = b"cancel-mid-stream"
+    clock = FakeClock()
+    factory = ConnectionFactory(
+        [_StallingResponse(1, body=content, headers={"Content-Length": str(len(content))}, clock=clock)]
+    )
+    calls = []
+
+    def cancel():
+        calls.append(1)
+        if len(calls) >= 2:
+            raise install_cancel.CancelRequested("fetch_assets", "marker")
+
+    transport = acquisition._HttpsTransport(connection_factory=factory, clock=clock, cancel=cancel)
+    source, asset = transport_asset(content)
+    target = tmp_path / "asset.part"
+    target.touch()
+
+    with pytest.raises(install_cancel.CancelRequested):
+        transport.download(source, asset, target, deadline=clock() + 20)
