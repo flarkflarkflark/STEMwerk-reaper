@@ -723,6 +723,9 @@ def test_cancel_at_every_safe_point_leaves_a_honest_retriable_state(tmp_path, mo
     receipt = module_registry.receipt_path(root, "drum_kit")
     published = remains["published_not_registered"]
     status = remains["module_status"]["components"]
+    assert all("\\" not in entry for entry in published)
+    named_targets = [entry.split(": ", 1)[0] for entry in published]
+    assert len(named_targets) == len(set(named_targets))
     # Defect 8 (Sol): a physical managed-Python runtime left by the bootstrap
     # is named without being trusted. It sits there in every class until the
     # module is fully registered.
@@ -767,6 +770,90 @@ def test_cancel_at_every_safe_point_leaves_a_honest_retriable_state(tmp_path, mo
     final = module_verify.verify_module("drum_kit", root=root)
     assert {c["component_id"]: c["class"] for c in final["components"]} == PASSING
     assert unrelated.read_text(encoding="utf-8") == "do not delete"
+
+
+@pytest.mark.native_publication
+def test_cancel_remains_canonicalizes_posix_labels_and_deduplicates_journal_components(
+    tmp_path, monkeypatch
+):
+    """When cancellation occurs after journaled component publication (before_write_receipt),
+    module_venv and ffmpeg are both reported by journal recovery and present on disk during
+    disk inspection, while managed_python and drumsep_assets are present on disk without a
+    journal rename in this operation. Root-relative labels in remains.published_not_registered
+    must be canonicalized with .as_posix() before comparing or emitting so every label uses
+    forward slashes and components reported by both journal recovery and disk inspection
+    appear exactly once even when Path.relative_to().__str__() formats with backslashes."""
+    from pathlib import PureWindowsPath
+
+    facts, root, _unrelated, _seen = _prepare_fake_install(tmp_path, monkeypatch)
+    plan = _plan(root, facts)
+    destinations = plan["actions"]["destinations"]
+    runtime_rel = f"runtimes/python/{runtime_manifest.python_record('linux-x86_64').name}"
+    venv_rel = Path(destinations["module_venv"]).relative_to(root).as_posix()
+    ffmpeg_rel = (
+        managed_ffmpeg.published_directory(root, managed_ffmpeg.load_pin())
+        .relative_to(root)
+        .as_posix()
+    )
+    assets_rel = module_registry.expected_drumsep_assets_dir(root).relative_to(root).as_posix()
+
+    class _BackslashRelativeDestination(type(Path())):
+        def relative_to(self, *other):
+            rel = super().relative_to(*other)
+            return PureWindowsPath(*rel.parts)
+
+    real_py_dir = runtime_manifest.published_directory
+    real_venv_dir = module_registry.expected_module_venv_dir
+    real_ff_dir = managed_ffmpeg.published_directory
+    real_assets_dir = module_registry.expected_drumsep_assets_dir
+
+    op = str(uuid.uuid4())
+    op_dir = root / "logs" / op
+    hits = []
+
+    def hook(seen_point):
+        hits.append(seen_point)
+        if seen_point == "before_receipt":
+            monkeypatch.setattr(
+                runtime_manifest,
+                "published_directory",
+                lambda r, rec: _BackslashRelativeDestination(real_py_dir(r, rec)),
+            )
+            monkeypatch.setattr(
+                module_registry,
+                "expected_module_venv_dir",
+                lambda r, mid, plat, prof: (
+                    _BackslashRelativeDestination(real_venv_dir(r, mid, plat, prof)[0]),
+                    real_venv_dir(r, mid, plat, prof)[1],
+                ),
+            )
+            monkeypatch.setattr(
+                managed_ffmpeg,
+                "published_directory",
+                lambda r, pin: _BackslashRelativeDestination(real_ff_dir(r, pin)),
+            )
+            monkeypatch.setattr(
+                module_registry,
+                "expected_drumsep_assets_dir",
+                lambda r: _BackslashRelativeDestination(real_assets_dir(r)),
+            )
+            (op_dir / install_cancel.CANCEL_FILENAME).touch()
+
+    code, doc = module_installer.install_module(
+        "drum_kit", plan["fingerprint"], root=root, facts=facts, operation_id=op, cancel_hook=hook
+    )
+    assert "before_receipt" in hits
+    assert code == 2
+    published = doc["error"]["remains"]["published_not_registered"]
+    assert all("\\" not in entry for entry in published), published
+    assert published == [
+        f"{ffmpeg_rel}: published_verified",
+        f"{venv_rel}: published_verified",
+        f"{runtime_rel}: present_not_registered",
+        f"{assets_rel}: present_not_registered",
+    ]
+    named_targets = [entry.split(": ", 1)[0] for entry in published]
+    assert len(named_targets) == len(set(named_targets)) == 4
 
 
 @pytest.mark.native_publication

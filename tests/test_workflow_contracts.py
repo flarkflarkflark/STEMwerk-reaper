@@ -792,7 +792,7 @@ def _write_portable_junit(
     foreign_file: str | None = None,
     foreign_outcomes: dict[str, str] | None = None,
     duplicate_name: str | None = None,
-    s8_count: int = 85,
+    s8_count: int = 86,
     s8_outcome: str | None = None,
     include_s7_opt_in_skip: bool = True,
 ) -> None:
@@ -859,7 +859,7 @@ def test_ci_workflow_preserves_pytest_exit_status_and_native_zero_skip_guard():
     assert jobs["tests"]["strategy"]["matrix"]["python-version"] == ["3.11", "3.12"]
 
     native_job = jobs["asset-publication-native"]
-    assert native_job["env"]["MIN_NATIVE_PUBLICATION_TESTS"] == "457"
+    assert native_job["env"]["MIN_NATIVE_PUBLICATION_TESTS"] == "458"
     native_guard = _ci_step_run("asset-publication-native", "Require that native publication tests really ran")
     assert 'totals["skipped"]' in native_guard
 
@@ -945,13 +945,13 @@ def test_ci_portable_guard_accepts_passing_suite_and_rejects_skip_duplicate_erro
     guard = _ci_step_run("tests", "Require that the Core S8 cancellation cases really ran")
     report = tmp_path / "portable-junit.xml"
 
-    # Genuine green with all 6 foreign-namespace cases passing, 85 S8 cases passing,
+    # Genuine green with all 6 foreign-namespace cases passing, 86 S8 cases passing,
     # and the permitted opt-in S7 skip elsewhere in the portable suite.
     _write_portable_junit(report, include_s7_opt_in_skip=True)
     rc, out = _run_guard_code(guard, tmp_path)
     assert rc == 0, out
     assert "6 required foreign-namespace cases ran once and passed" in out
-    assert "tests/test_core_s8_cancel.py: 85 cases ran, minimum 85" in out
+    assert "tests/test_core_s8_cancel.py: 86 cases ran, minimum 86" in out
 
     # All 6 foreign-namespace cases deselected -> red.
     _write_portable_junit(report, foreign_names=())
@@ -994,8 +994,8 @@ def test_ci_portable_guard_accepts_passing_suite_and_rejects_skip_duplicate_erro
     rc, out = _run_guard_code(guard, tmp_path)
     assert rc != 0 and "expected exactly one testcase" in out
 
-    # S8 file count below 85 or skipped -> red.
-    _write_portable_junit(report, s8_count=84)
+    # S8 file count below 86 or skipped -> red.
+    _write_portable_junit(report, s8_count=85)
     rc, out = _run_guard_code(guard, tmp_path)
     assert rc != 0 and "the Core S8 cancellation selection did not all execute and pass" in out
 
@@ -1011,3 +1011,219 @@ def test_ci_portable_guard_accepts_passing_suite_and_rejects_skip_duplicate_erro
     report.write_text("not xml", encoding="utf-8")
     rc, out = _run_guard_code(guard, tmp_path)
     assert rc != 0 and "cannot read JUnit report" in out
+
+
+def test_ci_linux_bootstrap_prepares_and_verifies_ubuntu_24_04_docker_image_before_pytest(
+    tmp_path: Path,
+):
+    import os
+    import subprocess
+
+    steps = _ci_jobs()["linux-managed-python-bootstrap"]["steps"]
+    names = [step.get("name") for step in steps]
+    prep_name = "Prepare ubuntu:24.04 Docker image for dash namespace test"
+    pytest_name = "Run Linux outer-bootstrap contract tests"
+    assert prep_name in names and pytest_name in names
+    assert names.index(prep_name) < names.index(pytest_name)
+    prep_step = steps[names.index(prep_name)]
+    assert prep_step.get("shell") == "bash"
+    assert "if" not in prep_step and "continue-on-error" not in prep_step
+    script = prep_step["run"]
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_file = tmp_path / "docker.log"
+    state_file = tmp_path / "pulled"
+    mode_file = tmp_path / "mode"
+    docker_stub = bin_dir / "docker"
+    docker_stub.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s uid=%s\\n" "$*" "$(id -u)" >> "{log_file}"\n'
+        f'mode="$(cat "{mode_file}" 2>/dev/null || echo pull_then_pass)"\n'
+        'if [ "$1" = "image" ] && [ "$2" = "inspect" ] && [ "$3" = "ubuntu:24.04" ]; then\n'
+        '  if [ "$mode" = "already_present" ]; then exit 0; fi\n'
+        f'  if [ "$mode" = "pull_then_pass" ] && [ -f "{state_file}" ]; then exit 0; fi\n'
+        '  echo "Error: No such image: ubuntu:24.04" >&2\n'
+        '  exit 1\n'
+        'fi\n'
+        'if [ "$1" = "pull" ] && [ "$2" = "ubuntu:24.04" ]; then\n'
+        '  if [ "$mode" = "pull_fails" ]; then\n'
+        '    echo "pull error: registry unavailable" >&2\n'
+        '    exit 1\n'
+        '  fi\n'
+        f'  touch "{state_file}"\n'
+        '  exit 0\n'
+        'fi\n'
+        'exit 2\n',
+        encoding="utf-8",
+    )
+    docker_stub.chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin")
+
+    # 1. Image absent initially -> pulled and inspected under the same uid.
+    mode_file.write_text("pull_then_pass", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert "ubuntu:24.04 Docker image ready" in res.stdout
+    calls = log_file.read_text(encoding="utf-8").splitlines()
+    uid = os.getuid()
+    assert calls == [
+        f"image inspect ubuntu:24.04 uid={uid}",
+        f"pull ubuntu:24.04 uid={uid}",
+        f"image inspect ubuntu:24.04 uid={uid}",
+    ]
+
+    # 2. Image already cached -> inspected without pulling.
+    log_file.unlink()
+    mode_file.write_text("already_present", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert log_file.read_text(encoding="utf-8").splitlines() == [
+        f"image inspect ubuntu:24.04 uid={uid}",
+        f"image inspect ubuntu:24.04 uid={uid}",
+    ]
+
+    # 3. Pull fails -> step fails with diagnostic.
+    log_file.unlink()
+    state_file.unlink(missing_ok=True)
+    mode_file.write_text("pull_fails", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode != 0
+    assert "failed to pull ubuntu:24.04 Docker image" in res.stderr
+
+    # 4. Post-pull inspect fails -> step fails with diagnostic.
+    log_file.unlink()
+    mode_file.write_text("inspect_always_fails", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode != 0
+    assert "docker image inspect ubuntu:24.04 failed under pytest user" in res.stderr
+
+    # 5. docker missing on PATH -> step fails with diagnostic.
+    import shutil
+
+    docker_stub.unlink()
+    (bin_dir / "id").symlink_to(shutil.which("id"))
+    res = subprocess.run(
+        ["/bin/bash", "-e", "-c", script],
+        env=dict(os.environ, PATH=str(bin_dir)),
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode != 0
+    assert "docker CLI is not available on PATH" in res.stderr
+
+
+def test_ci_portable_jobs_probe_and_remedy_unprivileged_namespaces_before_pytest(
+    tmp_path: Path,
+):
+    import os
+    import subprocess
+    from tests import test_core_install_bootstrap
+
+    steps = _ci_jobs()["tests"]["steps"]
+    names = [step.get("name") for step in steps]
+    probe_name = "Ensure unprivileged user and PID namespaces for portable bootstrap tests"
+    pytest_name = "Run portable runtime diagnostics harness tests"
+    assert probe_name in names and pytest_name in names
+    assert names.index(probe_name) < names.index(pytest_name)
+    probe_step = steps[names.index(probe_name)]
+    assert probe_step.get("shell") == "bash"
+    assert "if" not in probe_step and "continue-on-error" not in probe_step
+    script = probe_step["run"]
+
+    expected_probe = " ".join(test_core_install_bootstrap._unshare() + ["true"])
+    assert f"probe=({expected_probe})" in script
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_file = tmp_path / "ns.log"
+    remedied_file = tmp_path / "remedied"
+    mode_file = tmp_path / "mode"
+
+    unshare_stub = bin_dir / "unshare"
+    unshare_stub.write_text(
+        "#!/bin/sh\n"
+        f'printf "unshare %s uid=%s\\n" "$*" "$(id -u)" >> "{log_file}"\n'
+        f'mode="$(cat "{mode_file}" 2>/dev/null || echo pass_first)"\n'
+        'if [ "$mode" = "pass_first" ]; then exit 0; fi\n'
+        f'if [ "$mode" = "pass_after_remedy" ] && [ -f "{remedied_file}" ]; then exit 0; fi\n'
+        'echo "unshare: unshare failed: Permission denied" >&2\n'
+        'exit 1\n',
+        encoding="utf-8",
+    )
+    unshare_stub.chmod(0o755)
+
+    sysctl_stub = bin_dir / "sysctl"
+    sysctl_stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-n" ] && [ "$2" = "kernel.apparmor_restrict_unprivileged_userns" ]; then\n'
+        f'  if [ -f "{remedied_file}" ]; then echo 0; else echo 1; fi\n'
+        '  exit 0\n'
+        'fi\n'
+        'if [ "$1" = "-n" ] && [ "$2" = "kernel.unprivileged_userns_clone" ]; then\n'
+        '  echo 1\n'
+        '  exit 0\n'
+        'fi\n'
+        'if [ "$1" = "-w" ] && [ "$2" = "kernel.apparmor_restrict_unprivileged_userns=0" ]; then\n'
+        f'  touch "{remedied_file}"\n'
+        '  exit 0\n'
+        'fi\n'
+        'exit 1\n',
+        encoding="utf-8",
+    )
+    sysctl_stub.chmod(0o755)
+
+    sudo_stub = bin_dir / "sudo"
+    sudo_stub.write_text(
+        "#!/bin/sh\n"
+        f'printf "sudo %s\\n" "$*" >> "{log_file}"\n'
+        'exec "$@"\n',
+        encoding="utf-8",
+    )
+    sudo_stub.chmod(0o755)
+
+    env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin")
+    uid = os.getuid()
+
+    # 1. Probe passes on first try -> no sudo remedy invoked.
+    mode_file.write_text("pass_first", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert log_file.read_text(encoding="utf-8").splitlines() == [
+        f"unshare --user --map-root-user --pid --fork --mount-proc true uid={uid}",
+    ]
+
+    # 2. First probe fails -> sysctl remedy runs -> second probe runs as same non-root uid and passes.
+    log_file.unlink()
+    remedied_file.unlink(missing_ok=True)
+    mode_file.write_text("pass_after_remedy", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert log_file.read_text(encoding="utf-8").splitlines() == [
+        f"unshare --user --map-root-user --pid --fork --mount-proc true uid={uid}",
+        "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+        f"unshare --user --map-root-user --pid --fork --mount-proc true uid={uid}",
+    ]
+
+    # 3. Probe still fails after remedy -> step fails and reports why.
+    log_file.unlink()
+    remedied_file.unlink(missing_ok=True)
+    mode_file.write_text("always_fail", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode != 0
+    assert "unprivileged namespace probe still failed" in res.stderr
+    assert "Permission denied" in res.stderr
+
+    # 4. unshare missing on PATH -> step fails and reports why.
+    import shutil
+
+    unshare_stub.unlink()
+    (bin_dir / "id").symlink_to(shutil.which("id"))
+    res = subprocess.run(
+        ["/bin/bash", "-e", "-c", script],
+        env=dict(os.environ, PATH=str(bin_dir)),
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode != 0
+    assert "unshare is not available on PATH" in res.stderr

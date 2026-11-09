@@ -30,6 +30,26 @@ jobs:
           printf '%s  %s\n' 'ce4f6d0a6cfdb3bed6e44c2f9affd85943c76a42e25ad3a259002f31d6fb8a20' "$archive" | sha256sum -c -
           test "$(wc -c < "$archive")" -eq 34505639
           echo "STEMWERK_TEST_PINNED_PYTHON_ARCHIVE=$archive" >> "$GITHUB_ENV"
+      - name: Prepare ubuntu:24.04 Docker image for dash namespace test
+        # test_a_proc_view_of_another_pid_namespace_releases_nothing_under_dash
+        # inspects a local ubuntu:24.04 image and never pulls implicitly.
+        shell: bash
+        run: |
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "docker CLI is not available on PATH for $(id -un) (uid=$(id -u))" >&2
+            exit 1
+          fi
+          if ! docker image inspect ubuntu:24.04 >/dev/null 2>&1; then
+            if ! docker pull ubuntu:24.04; then
+              echo "failed to pull ubuntu:24.04 Docker image as $(id -un) (uid=$(id -u))" >&2
+              exit 1
+            fi
+          fi
+          if ! err="$(docker image inspect ubuntu:24.04 2>&1 >/dev/null)"; then
+            echo "docker image inspect ubuntu:24.04 failed under pytest user $(id -un) (uid=$(id -u)): ${err}" >&2
+            exit 1
+          fi
+          echo "ubuntu:24.04 Docker image ready for $(id -un) (uid=$(id -u))"
       - name: Run Linux outer-bootstrap contract tests
         run: python -m pytest -q --junitxml=linux-managed-python-bootstrap-junit.xml tests/test_linux_managed_bootstrap.py
       - name: Require that the real GNU Wget hangup regression ran and passed
@@ -211,6 +231,38 @@ jobs:
             tests/test_linux_drumsep_rocm_fallback_chain.py \
             tests/i18n/test_languages.py
 
+      - name: Ensure unprivileged user and PID namespaces for portable bootstrap tests
+        # tests/test_core_install_bootstrap.py probes
+        # `unshare --user --map-root-user --pid --fork --mount-proc true` as the
+        # non-root pytest user. Ubuntu 24.04 hosted runners enable
+        # kernel.apparmor_restrict_unprivileged_userns=1 by default, blocking
+        # that unprivileged route unless relaxed for this ephemeral runner job.
+        shell: bash
+        run: |
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "refusing to run portable namespace probe as root (uid=0)" >&2
+            exit 1
+          fi
+          if ! command -v unshare >/dev/null 2>&1; then
+            echo "unshare is not available on PATH for $(id -un) (uid=$(id -u))" >&2
+            exit 1
+          fi
+          probe=(unshare --user --map-root-user --pid --fork --mount-proc true)
+          if ! err="$("${probe[@]}" 2>&1)"; then
+            echo "initial unprivileged namespace probe failed as $(id -un) (uid=$(id -u)): ${err}" >&2
+            if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ]; then
+              sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            fi
+            if [ "$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null)" = "0" ]; then
+              sudo sysctl -w kernel.unprivileged_userns_clone=1
+            fi
+            if ! err="$("${probe[@]}" 2>&1)"; then
+              echo "unprivileged namespace probe still failed as $(id -un) (uid=$(id -u)) after sysctl remedy: ${err}" >&2
+              exit 1
+            fi
+          fi
+          echo "unprivileged user + PID namespace probe passed as $(id -un) (uid=$(id -u))"
+
       - name: Run portable runtime diagnostics harness tests
         # Only the opt-in @pytest.mark.portable subset: fully controlled
         # inputs, no managed-runtime/hardware discovery. The real-* tests
@@ -257,7 +309,7 @@ jobs:
           import sys
           import xml.etree.ElementTree as ET
 
-          minimum = 85
+          minimum = 86
           report = "portable-junit.xml"
           s8_file = "tests/test_core_s8_cancel.py"
           s8_class = "tests.test_core_s8_cancel"
@@ -364,7 +416,7 @@ jobs:
       # programs only run on POSIX, so tests that execute them are not marked native.
       # The S8 cancellation matrix uses the same fakes; POSIX-only process-group
       # and signal tests are not marked native.
-      MIN_NATIVE_PUBLICATION_TESTS: "457"
+      MIN_NATIVE_PUBLICATION_TESTS: "458"
     strategy:
       fail-fast: false
       matrix:

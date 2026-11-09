@@ -907,11 +907,12 @@ def _finalize_cancelled(
             if not os.path.lexists(destination):
                 continue
             try:
-                label = str(destination.relative_to(root_path))
+                label = destination.relative_to(root_path).as_posix()
             except ValueError:
                 label = str(destination)
             if label not in already_named and str(destination) not in already_named:
                 published_not_registered.append(f"{label}: present_not_registered")
+                already_named.add(label)
 
     cancel_details = exc.details()
     if prior_error is not None:
