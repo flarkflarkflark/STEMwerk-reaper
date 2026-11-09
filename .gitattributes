@@ -17,3 +17,10 @@ installer/windows/fetch_runtime_assets.ps1 text eol=crlf
 
 # Predominantly CRLF already; same rationale as fetch_runtime_assets.ps1 above.
 installer/README.md text eol=crlf
+
+# The managed-runtime manifest is read byte-exactly by Core, Inno Setup and sh;
+# it must keep LF line endings on every checkout (design G4).
+scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/runtime-manifest.v1.tsv text eol=lf
+
+# The FFmpeg pin file is Core-only JSON; Core refuses it when a CRLF checkout changed it.
+scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/ffmpeg-pin.v1.json text eol=lf

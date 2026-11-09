@@ -1,0 +1,44 @@
+{
+  "platforms": {
+    "linux-x86_64": {
+      "archive": {
+        "member_bytes": 444067173,
+        "member_count": 73,
+        "sha256": "6046d6731b26f58887e953561551d254a6eec9fbca4100dfeab56e19af8328d5",
+        "size": 136027168,
+        "top_directory": "ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-lgpl-9.0",
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-lgpl-9.0.tar.xz"
+      },
+      "configuration": "--prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-ffbuild-linux-gnu- --arch=x86_64 --target-os=linux --enable-version3 --disable-debug --enable-iconv --enable-zlib --enable-libxml2 --enable-libsoxr --enable-openssl --enable-libvmaf --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-lcms2 --enable-vulkan --enable-libdav1d --enable-libvorbis --enable-librav1e --enable-librsvg --enable-libxcb --enable-xlib --enable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --disable-avisynth --enable-chromaprint --disable-libdavs2 --disable-libdvdread --disable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribb24 --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --disable-librubberband --disable-schannel --enable-sdl2 --enable-libsnappy --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --enable-libdrm --enable-vaapi --enable-vapoursynth --disable-libvidstab --enable-libvvenc --disable-whisper --disable-libx264 --disable-libx265 --disable-libxavs2 --disable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs='-lgomp -ldl' --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-ffbuild-linux-gnu-gcc --cxx=x86_64-ffbuild-linux-gnu-g++ --ar=x86_64-ffbuild-linux-gnu-gcc-ar --ranlib=x86_64-ffbuild-linux-gnu-gcc-ranlib --nm=x86_64-ffbuild-linux-gnu-gcc-nm --extra-version=20261031",
+      "files": {
+        "LICENSE.txt": {
+          "mode": "0644",
+          "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+          "size": 7651
+        },
+        "bin/ffmpeg": {
+          "mode": "0755",
+          "sha256": "d372f20463a8ffb9eef1675242cdbf9aae19b647503b073fc9b5b1f42b91c94a",
+          "size": 140488520
+        },
+        "bin/ffprobe": {
+          "mode": "0755",
+          "sha256": "9a7f735d3df4f56dd8406cd7a03a227686bec55b1edc496c25bd8b1867e44498",
+          "size": 140259080
+        }
+      },
+      "license": "GNU LGPL version 3 or later (static vendor build; no --enable-gpl, no --enable-nonfree)",
+      "pin_id": "btbn-n9.0.2-39-g7adfbe40dc-20261031-linux64-lgpl",
+      "release_tag": "autobuild-2026-10-31-12-59",
+      "sources": {
+        "ffmpeg_commit": "7adfbe40dcde598f93a6963d2f7b22cd75202ccc",
+        "ffmpeg_repository": "https://github.com/FFmpeg/FFmpeg",
+        "recipe_commit": "5031c6f1082414e53688d39e521849905071070d",
+        "recipe_repository": "https://github.com/BtbN/FFmpeg-Builds"
+      },
+      "vendor": "BtbN/FFmpeg-Builds",
+      "version": "n9.0.2-39-g7adfbe40dc-20261031"
+    }
+  },
+  "schema": "stemwerk-ffmpeg-pin/1"
+}

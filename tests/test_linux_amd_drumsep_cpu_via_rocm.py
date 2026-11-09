@@ -25,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIO_PROCESS = ROOT / "scripts" / "reaper" / "audio_separator_process.py"
+CORE_RUNTIME = ROOT / "scripts" / "reaper" / "vendor" / "stemwerk-core" / "src" / "stemwerk_core" / "drumsep_runtime.py"
 
 
 def _load_module(path: Path, name: str):
@@ -467,8 +468,8 @@ def test_explicit_cuda0_on_nvidia_machine_unchanged(tmp_path, monkeypatch):
 
 
 def test_rocm_namespace_disambiguation_is_scoped_to_linux_explicit_cuda_branch():
-    text = AUDIO_PROCESS.read_text(encoding="utf-8")
-    linux_idx = text.index('if explicit_cuda and sys.platform.startswith("linux"):')
+    text = CORE_RUNTIME.read_text(encoding="utf-8")
+    linux_idx = text.index('if explicit_cuda and _platform_name().startswith("linux"):')
     windows_idx = text.index("if _is_windows_runtime() and explicit_cuda:")
     linux_block = text[linux_idx : linux_idx + 3200]
     windows_block = text[windows_idx : windows_idx + 1600]

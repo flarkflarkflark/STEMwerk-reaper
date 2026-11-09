@@ -1,0 +1,1229 @@
+from __future__ import annotations
+
+import copy
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+try:
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
+    from referencing import Registry, Resource
+except ImportError:
+    Draft202012Validator = None
+    import fastjsonschema
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CORE_SRC = ROOT / "scripts" / "reaper" / "vendor" / "stemwerk-core" / "src"
+FIXTURES = ROOT / "tests" / "fixtures"
+
+if str(CORE_SRC) not in sys.path:
+    sys.path.insert(0, str(CORE_SRC))
+
+from stemwerk_core.workflow_contracts import (  # noqa: E402
+    ContractError,
+    load_json,
+    validate_bundle,
+    validate_catalogs,
+    validate_workflow_request,
+    validate_workflow_result,
+)
+
+
+GOLDENS = (
+    FIXTURES / "golden_2310" / "normal_stems_new_tracks.json",
+    FIXTURES / "golden_2310" / "normal_stems_in_place.json",
+)
+
+PARITY_CORPUS = FIXTURES / "workflow_result_validator_parity.v1.json"
+
+
+def _bundle() -> dict:
+    return load_json(GOLDENS[0])["contracts"]
+
+
+def _artifact_path(bundle: dict, path: str) -> None:
+    bundle["workflow_result"]["artifacts"][0]["relative_path"] = path
+
+
+def _reference_stage_output(bundle: dict, stage_id: str) -> None:
+    bundle["workflow_request"]["stages"][0]["input"] = {
+        "kind": "stage_output",
+        "stage_id": stage_id,
+        "port_id": "vocals",
+        "artifact_kind": "audio",
+    }
+
+
+def _add_future_stage(bundle: dict) -> None:
+    future = copy.deepcopy(bundle["workflow_request"]["stages"][0])
+    future.update(stage_id="separate_future_002", order=2)
+    bundle["workflow_request"]["stages"].append(future)
+
+
+def test_public_2310_goldens_validate_as_identical_contract_bundles():
+    for path in GOLDENS:
+        payload = load_json(path)
+        assert payload["characterizes_version"] == "2.3.1.0"
+        assert payload["manual_reaper_smoke"] == "NOT TESTED"
+        validate_bundle(payload["contracts"])
+
+
+def test_catalogs_cover_exactly_the_known_2_3_production_routes():
+    """Slice 2 completeness lock: growing the catalog requires updating this
+    test consciously, mirroring Slice 0's original minimality lock now that
+    the catalog covers every 2.3 production route relevant to resolution."""
+
+    catalog_dir = ROOT / "scripts" / "reaper" / "catalog"
+    catalogs = validate_catalogs(catalog_dir)
+
+    assert {entry["capability_id"] for entry in catalogs["capabilities"]} == {
+        "normal_stems_4",
+        "normal_stems_6",
+        "drum_kit_6",
+    }
+    assert {entry["model_id"] for entry in catalogs["models"]} == {
+        "htdemucs",
+        "htdemucs_ft",
+        "htdemucs_6s",
+        "hdemucs_mmi",
+        "drumsep_mdx23c",
+    }
+    assert {entry["workflow_id"] for entry in catalogs["workflows"]} == {
+        "normal_stems",
+        "drum_kit_direct",
+        "drum_kit_split",
+    }
+
+    by_workflow = {entry["workflow_id"]: entry for entry in catalogs["workflows"]}
+    normal_routes = {
+        route["capability_id"]: route["deliverable_ids"]
+        for route in by_workflow["normal_stems"]["deliverable_routes"]
+    }
+    assert normal_routes == {
+        "normal_stems_4": ["vocals", "drums", "bass", "other"],
+        "normal_stems_6": ["vocals", "drums", "bass", "other", "guitar", "piano"],
+    }
+    for workflow_id in ("drum_kit_direct", "drum_kit_split"):
+        assert by_workflow[workflow_id]["deliverable_routes"] == [
+            {
+                "capability_id": "drum_kit_6",
+                "deliverable_ids": ["kick", "snare", "toms", "hi-hat", "ride", "crash"],
+            }
+        ]
+    assert len(by_workflow["drum_kit_split"]["ordered_stages"]) == 2
+
+
+def test_model_catalog_role_field_marks_user_selectable_vs_internal():
+    catalog_dir = ROOT / "scripts" / "reaper" / "catalog"
+    catalogs = validate_catalogs(catalog_dir)
+    by_model = {entry["model_id"]: entry for entry in catalogs["models"]}
+
+    assert by_model["htdemucs"]["role"] == "user_selectable"
+    assert by_model["htdemucs_ft"]["role"] == "user_selectable"
+    assert by_model["htdemucs_6s"]["role"] == "user_selectable"
+    assert by_model["hdemucs_mmi"]["role"] == "internal"
+    assert by_model["drumsep_mdx23c"]["role"] == "internal"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda b: b["workflow_request"].update(schema_version="2.0.0"), "schema_version"),
+        (
+            lambda b: b["workflow_request"]["source_plan"]["sources"].append(
+                copy.deepcopy(b["workflow_request"]["source_plan"]["sources"][0])
+            ),
+            "duplicate source_id",
+        ),
+        (
+            lambda b: b["workflow_request"]["stages"][0]["outputs"].append(
+                copy.deepcopy(b["workflow_request"]["stages"][0]["outputs"][0])
+            ),
+            "duplicate output port_id",
+        ),
+        (
+            lambda b: b["workflow_request"]["stages"][0]["input"].update(
+                source_id="source_missing"
+            ),
+            "missing source",
+        ),
+        (
+            lambda b: b["workflow_result"]["deliverables"][0].update(
+                semantic_id="guitar"
+            ),
+            "undeclared deliverable",
+        ),
+        (
+            lambda b: b["workflow_result"].update(request_id="request_other"),
+            "request identity mismatch",
+        ),
+        (
+            lambda b: b["workflow_result"].update(state="maybe_finished"),
+            "invalid processing state",
+        ),
+        (
+            lambda b: b["workflow_result"]["artifacts"][0]["producer"].update(
+                stage_id="stage_missing"
+            ),
+            "missing producer stage",
+        ),
+        (
+            lambda b: b["import_plan"]["imports"][0].update(
+                artifact_id="artifact_missing"
+            ),
+            "invalid artifact reference",
+        ),
+        (
+            lambda b: b["workflow_request"].update(
+                reaproject_pointer="ReaProject* 0x1234"
+            ),
+            "serialized REAPER pointer",
+        ),
+        (
+            lambda b: b["workflow_request"].update(deliverable_ids=["Vocals"]),
+            "stable semantic id",
+        ),
+        (
+            lambda b: b["workflow_request"]["stages"][0].update(predicate="always"),
+            "unsupported field",
+        ),
+    ],
+)
+def test_invalid_contract_bundles_fail_closed(mutate, message):
+    bundle = copy.deepcopy(_bundle())
+    mutate(bundle)
+
+    with pytest.raises(ContractError, match=message):
+        validate_bundle(bundle)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "..",
+        ".",
+        "outputs/../x.wav",
+        "outputs/./x.wav",
+        "outputs//x.wav",
+        "outputs/x.wav/",
+        "../outputs/x.wav",
+        "./outputs/x.wav",
+        "/tmp/x.wav",
+    ],
+)
+def test_artifact_paths_reject_raw_invalid_segments(path: str):
+    bundle = copy.deepcopy(_bundle())
+    _artifact_path(bundle, path)
+
+    with pytest.raises(ContractError, match="relative_path"):
+        validate_bundle(bundle)
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["outputs/vocals.wav", "stages/01-normal/vocals.wav"],
+)
+def test_artifact_paths_accept_normal_workspace_relative_paths(path: str):
+    bundle = copy.deepcopy(_bundle())
+    _artifact_path(bundle, path)
+
+    validate_bundle(bundle)
+
+
+def test_forward_stage_reference_is_rejected():
+    bundle = copy.deepcopy(_bundle())
+    _add_future_stage(bundle)
+    _reference_stage_output(bundle, "separate_future_002")
+
+    with pytest.raises(ContractError, match="non-earlier producer stage"):
+        validate_bundle(bundle)
+
+
+def test_self_cycle_stage_reference_is_rejected():
+    bundle = copy.deepcopy(_bundle())
+    _reference_stage_output(bundle, "separate_normal_001")
+
+    with pytest.raises(ContractError, match="non-earlier producer stage"):
+        validate_bundle(bundle)
+
+
+def test_json_reader_rejects_duplicate_object_keys(tmp_path: Path):
+    path = tmp_path / "duplicate.json"
+    path.write_text('{"schema_version":"1.0.0","schema_version":"1.0.0"}', encoding="utf-8")
+
+    with pytest.raises(ContractError, match="duplicate JSON key"):
+        load_json(path)
+
+
+def _real_catalog_documents() -> dict[str, dict]:
+    catalog_dir = ROOT / "scripts" / "reaper" / "catalog"
+    return {
+        "capabilities": load_json(catalog_dir / "capabilities.v1.json"),
+        "models": load_json(catalog_dir / "models.v1.json"),
+        "workflows": load_json(catalog_dir / "workflows.v1.json"),
+    }
+
+
+def _write_catalog_dir(tmp_path: Path, documents: dict[str, dict]) -> Path:
+    for name, document in documents.items():
+        (tmp_path / f"{name}.v1.json").write_text(json.dumps(document), encoding="utf-8")
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda docs: docs["workflows"]["workflows"][2]["ordered_stages"][1].update(
+                input_stage_id="stage_does_not_exist"
+            ),
+            "must reference an earlier",
+        ),
+        (
+            lambda docs: docs["workflows"]["workflows"][2]["ordered_stages"][1].update(
+                input_port_id="kick"
+            ),
+            "is not produced by stage",
+        ),
+        (
+            lambda docs: docs["models"]["models"][0].update(capability_id="no_such_capability"),
+            "references unknown capability",
+        ),
+        (
+            lambda docs: docs["workflows"]["workflows"][0]["ordered_stages"][0].update(
+                capability_ids=["no_such_capability"]
+            ),
+            "references unknown capability",
+        ),
+        (
+            lambda docs: docs["capabilities"]["capabilities"][0].pop("permitted_backends"),
+            "permitted_backends",
+        ),
+        (
+            lambda docs: docs["models"]["models"][0].pop("role"),
+            "role",
+        ),
+        (
+            lambda docs: docs["models"]["models"][0].update(
+                output_semantic_ids=["vocals", "drums", "bass", "other", "extra"]
+            ),
+            "output_semantic_ids must match capability",
+        ),
+        (
+            lambda docs: docs["capabilities"]["capabilities"][0]["permitted_backends"].append("tpu"),
+            "unknown backend kind",
+        ),
+        (
+            lambda docs: docs["workflows"]["workflows"][0]["deliverable_routes"][1][
+                "deliverable_ids"
+            ].remove("piano"),
+            "must exactly match capability",
+        ),
+        (
+            lambda docs: docs["workflows"]["workflows"][0]["deliverable_routes"][0][
+                "deliverable_ids"
+            ].append("guitar"),
+            "must exactly match capability",
+        ),
+        (
+            lambda docs: docs["workflows"]["workflows"][0]["deliverable_routes"].append(
+                copy.deepcopy(docs["workflows"]["workflows"][0]["deliverable_routes"][0])
+            ),
+            "exactly one deliverable route",
+        ),
+        (
+            lambda docs: docs["workflows"]["workflows"][0]["deliverable_routes"].pop(),
+            "exactly one deliverable route",
+        ),
+    ],
+)
+def test_catalog_cross_references_fail_closed(tmp_path: Path, mutate, message):
+    documents = copy.deepcopy(_real_catalog_documents())
+    mutate(documents)
+    catalog_dir = _write_catalog_dir(tmp_path, documents)
+
+    with pytest.raises(ContractError, match=message):
+        validate_catalogs(catalog_dir)
+
+
+def test_missing_workflow_referenced_by_nothing_still_requires_known_set(tmp_path: Path):
+    documents = copy.deepcopy(_real_catalog_documents())
+    documents["workflows"]["workflows"].pop()
+    catalog_dir = _write_catalog_dir(tmp_path, documents)
+
+    with pytest.raises(ContractError, match="workflow catalog must contain exactly"):
+        validate_catalogs(catalog_dir)
+
+
+def _catalog_copy(tmp_path: Path, **overrides) -> Path:
+    """Write a mutable copy of the real v1 catalog dir, applying overrides.
+
+    Each keyword is one of "capabilities" | "models" | "workflows" mapped to
+    a callable that mutates the parsed document in place.
+    """
+
+    catalog_dir = ROOT / "scripts" / "reaper" / "catalog"
+    dest = tmp_path / "catalog"
+    dest.mkdir()
+    for name in ("capabilities", "models", "workflows"):
+        doc = json.loads((catalog_dir / f"{name}.v1.json").read_text(encoding="utf-8"))
+        if name in overrides:
+            overrides[name](doc)
+        (dest / f"{name}.v1.json").write_text(json.dumps(doc), encoding="utf-8")
+    return dest
+
+
+# ---------------------------------------------------------------------------
+# Astra Slice-0 hardening regressions
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_rejects_model_referencing_unknown_capability_id(tmp_path):
+    catalog_dir = _catalog_copy(
+        tmp_path, models=lambda doc: doc["models"][0].__setitem__("capability_id", "no_such_capability")
+    )
+    # s2 wording: "models.<id>.capability_id references unknown capability: ..."
+    with pytest.raises(ContractError, match="references unknown capability"):
+        validate_catalogs(catalog_dir)
+
+
+def test_catalog_rejects_model_output_semantic_ids_disagreeing_with_capability(tmp_path):
+    catalog_dir = _catalog_copy(
+        tmp_path, models=lambda doc: doc["models"][0].__setitem__("output_semantic_ids", ["vocals"])
+    )
+    # s2 wording: "models.<id>.output_semantic_ids must match capability ..."
+    with pytest.raises(ContractError, match="output_semantic_ids must match capability"):
+        validate_catalogs(catalog_dir)
+
+
+def test_catalog_rejects_workflow_with_zero_ordered_stages(tmp_path):
+    catalog_dir = _catalog_copy(
+        tmp_path, workflows=lambda doc: doc["workflows"][0].__setitem__("ordered_stages", [])
+    )
+    with pytest.raises(ContractError, match="ordered_stages must not be empty"):
+        validate_catalogs(catalog_dir)
+
+
+def test_catalog_rejects_workflow_stage_referencing_unknown_capability_id(tmp_path):
+    # s2 workflow-stage schema uses capability_ids (a list of stable ids).
+    catalog_dir = _catalog_copy(
+        tmp_path,
+        workflows=lambda doc: doc["workflows"][0]["ordered_stages"][0].__setitem__(
+            "capability_ids", ["no_such_capability"]
+        ),
+    )
+    with pytest.raises(ContractError, match="references unknown capability"):
+        validate_catalogs(catalog_dir)
+
+
+def test_bundle_accepts_golden_fixture_against_real_catalog_relational_closure():
+    catalog_dir = ROOT / "scripts" / "reaper" / "catalog"
+    catalogs = validate_catalogs(catalog_dir)
+    for path in GOLDENS:
+        payload = load_json(path)
+        validate_bundle(payload["contracts"], catalogs=catalogs)
+
+
+def test_bundle_rejects_stage_unknown_model_id_when_catalogs_supplied():
+    catalogs = validate_catalogs(ROOT / "scripts" / "reaper" / "catalog")
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_request"]["stages"][0]["model_id"] = "totally_unknown_model"
+    with pytest.raises(ContractError, match="unknown model_id"):
+        validate_bundle(bundle, catalogs=catalogs)
+
+
+def test_bundle_rejects_stage_unknown_capability_id_when_catalogs_supplied():
+    catalogs = validate_catalogs(ROOT / "scripts" / "reaper" / "catalog")
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_request"]["stages"][0]["capability_id"] = "totally_unknown_capability"
+    with pytest.raises(ContractError, match="unknown capability_id"):
+        validate_bundle(bundle, catalogs=catalogs)
+
+
+def test_bundle_allows_ordered_selective_deliverables_supported_by_selected_route():
+    catalogs = validate_catalogs(ROOT / "scripts" / "reaper" / "catalog")
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_request"]["deliverable_ids"] = ["vocals"]
+    bundle["workflow_result"]["artifacts"] = bundle["workflow_result"]["artifacts"][:1]
+    bundle["workflow_result"]["deliverables"] = bundle["workflow_result"]["deliverables"][:1]
+    bundle["import_plan"]["imports"] = bundle["import_plan"]["imports"][:1]
+
+    validate_bundle(bundle, catalogs=catalogs)
+
+
+def test_bundle_rejects_deliverable_unsupported_by_selected_route():
+    catalogs = validate_catalogs(ROOT / "scripts" / "reaper" / "catalog")
+    bundle = copy.deepcopy(_bundle())
+    stage = bundle["workflow_request"]["stages"][0]
+    stage["outputs"] = [{"port_id": "guitar", "semantic_id": "guitar", "kind": "audio"}]
+    bundle["workflow_request"]["deliverable_ids"] = ["guitar"]
+
+    artifact = copy.deepcopy(bundle["workflow_result"]["artifacts"][0])
+    artifact.update(artifact_id="artifact_guitar_001", semantic_id="guitar", relative_path="outputs/guitar.wav")
+    artifact["producer"]["port_id"] = "guitar"
+    bundle["workflow_result"]["artifacts"] = [artifact]
+    bundle["workflow_result"]["deliverables"] = [
+        {"semantic_id": "guitar", "artifact_id": "artifact_guitar_001"}
+    ]
+
+    imported = copy.deepcopy(bundle["import_plan"]["imports"][0])
+    imported.update(semantic_id="guitar", artifact_id="artifact_guitar_001")
+    bundle["import_plan"]["imports"] = [imported]
+
+    with pytest.raises(ContractError, match="unsupported deliverable"):
+        validate_bundle(bundle, catalogs=catalogs)
+
+
+def test_bundle_without_catalogs_stays_structural_only_for_stage_ids():
+    # Documents the current, deliberate legacy behavior: relational closure is
+    # opt-in via the `catalogs=` parameter so bundle validation stays pure and
+    # catalog-agnostic when a caller has none available.
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_request"]["stages"][0]["model_id"] = "totally_unknown_model"
+    validate_bundle(bundle)
+
+
+def test_bundle_rejects_actual_runtime_model_disagreement_without_fallback():
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_result"]["actual_runtime"]["model_id"] = "htdemucs_ft"
+    with pytest.raises(ContractError, match="actual_runtime.model_id disagrees"):
+        validate_bundle(bundle)
+
+
+def test_bundle_allows_actual_runtime_model_disagreement_with_fallback_applied():
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_result"]["actual_runtime"]["model_id"] = "htdemucs_ft"
+    bundle["workflow_result"]["actual_runtime"]["fallback_applied"] = True
+    validate_bundle(bundle)
+
+
+@pytest.mark.parametrize("state", ["failed", "cancelled", "running", "queued", "blocked"])
+def test_bundle_rejects_non_succeeded_state_with_nonempty_import_plan(state):
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_result"]["state"] = state
+    with pytest.raises(ContractError, match="deliverables must be empty|imports must be empty"):
+        validate_bundle(bundle)
+
+
+@pytest.mark.parametrize("state", ["failed", "cancelled", "running", "queued", "blocked"])
+def test_non_succeeded_result_is_representable_without_fabricated_runtime_or_outputs(state):
+    """Core invariant: only a completed, successful result may authorize
+    import, but every other state must remain representable without
+    fabricating execution/runtime evidence that never existed."""
+
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_result"]["state"] = state
+    del bundle["workflow_result"]["actual_runtime"]
+    bundle["workflow_result"]["deliverables"] = []
+    bundle["workflow_result"]["artifacts"] = []
+    bundle["import_plan"]["imports"] = []
+    validate_bundle(bundle)
+
+
+def test_succeeded_result_still_requires_actual_runtime():
+    bundle = copy.deepcopy(_bundle())
+    del bundle["workflow_result"]["actual_runtime"]
+    with pytest.raises(ContractError, match="actual_runtime"):
+        validate_bundle(bundle)
+
+
+def test_workflow_request_rejects_empty_deliverable_ids():
+    bundle = copy.deepcopy(_bundle())
+    bundle["workflow_request"]["deliverable_ids"] = []
+    with pytest.raises(ContractError, match="deliverable_ids must not be empty"):
+        validate_workflow_request(bundle["workflow_request"])
+
+
+def test_source_plan_rejects_more_than_one_source():
+    bundle = copy.deepcopy(_bundle())
+    second = copy.deepcopy(bundle["workflow_request"]["source_plan"]["sources"][0])
+    second["source_id"] = "source_002"
+    second["order"] = 2
+    second["item_identity"] = "source_item_002"
+    bundle["workflow_request"]["source_plan"]["sources"].append(second)
+    with pytest.raises(ContractError, match="exactly one source"):
+        validate_bundle(bundle)
+
+
+def test_import_plan_rejects_order_field_disagreeing_with_array_position():
+    bundle = copy.deepcopy(_bundle())
+    imports = bundle["import_plan"]["imports"]
+    imports[0]["order"], imports[1]["order"] = imports[1]["order"], imports[0]["order"]
+    with pytest.raises(ContractError, match="import order must match array position"):
+        validate_bundle(bundle)
+
+
+def test_schemas_are_valid_json_and_cover_exactly_six_contracts():
+    schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
+    names = sorted(path.name for path in schema_dir.glob("*.schema.json"))
+    assert names == [
+        "artifact.v1.schema.json",
+        "import-plan.v1.schema.json",
+        "source-plan.v1.schema.json",
+        "stage-spec.v1.schema.json",
+        "workflow-request.v1.schema.json",
+        "workflow-result.v1.schema.json",
+    ]
+    for path in schema_dir.glob("*.schema.json"):
+        schema = json.loads(path.read_text(encoding="utf-8"))
+        assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+        assert schema["properties"]["schema_version"]["const"] == "1.0.0"
+
+
+# Field vocabularies the hand validators accept via their `_only_keys(...)`
+# calls in workflow_contracts.py. Kept here as an explicit cross-check so a
+# field added to one representation but not the other is caught, closing the
+# gap where "schemas are valid JSON" was previously the only schema test.
+_VALIDATOR_FIELDS = {
+    "source-plan.v1.schema.json": {"schema_version", "source_plan_id", "sources"},
+    "stage-spec.v1.schema.json": {"schema_version", "stage_id", "order", "capability_id", "model_id", "input", "outputs"},
+    "artifact.v1.schema.json": {"schema_version", "artifact_id", "kind", "semantic_id", "relative_path", "producer"},
+    "workflow-request.v1.schema.json": {"schema_version", "request_id", "workflow_id", "source_plan", "stages", "deliverable_ids", "requested_runtime"},
+    "workflow-result.v1.schema.json": {"schema_version", "request_id", "workflow_id", "state", "actual_runtime", "artifacts", "deliverables"},
+    "import-plan.v1.schema.json": {"schema_version", "request_id", "workflow_id", "destination", "grouping", "create_folder", "source_after", "origin_project_policy", "imports"},
+}
+
+_CONDITIONALLY_REQUIRED_FIELDS = {
+    "workflow-result.v1.schema.json": {"actual_runtime"},
+}
+
+
+def test_schema_field_vocabulary_matches_hand_validators():
+    schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
+    for filename, expected_fields in _VALIDATOR_FIELDS.items():
+        schema = json.loads((schema_dir / filename).read_text(encoding="utf-8"))
+        schema_fields = set(schema["properties"])
+        assert schema_fields == expected_fields, f"{filename}: schema properties {schema_fields} != validator fields {expected_fields}"
+        conditional = _CONDITIONALLY_REQUIRED_FIELDS.get(filename, set())
+        assert set(schema["required"]) == expected_fields - conditional, f"{filename}: required fields drifted"
+        assert schema["additionalProperties"] is False, f"{filename}: must reject unknown fields like the hand validators do"
+
+
+def test_workflow_request_schema_composes_nested_contract_schemas():
+    schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
+    request_schema = json.loads((schema_dir / "workflow-request.v1.schema.json").read_text(encoding="utf-8"))
+    assert request_schema["properties"]["source_plan"]["$ref"] == "source-plan.v1.schema.json"
+    assert request_schema["properties"]["stages"]["items"]["$ref"] == "stage-spec.v1.schema.json"
+
+    result_schema = json.loads((schema_dir / "workflow-result.v1.schema.json").read_text(encoding="utf-8"))
+    assert result_schema["properties"]["artifacts"]["items"]["$ref"] == "artifact.v1.schema.json"
+
+
+def test_workflow_request_schema_types_selected_deliverable_ids():
+    schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
+    schema = json.loads((schema_dir / "workflow-request.v1.schema.json").read_text(encoding="utf-8"))
+    deliverables = schema["properties"]["deliverable_ids"]
+
+    assert deliverables["items"] == {"type": "string"}
+    assert "selected subset" in deliverables["description"]
+
+
+def test_source_plan_schema_matches_slice0_single_source_restriction():
+    schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
+    schema = json.loads((schema_dir / "source-plan.v1.schema.json").read_text(encoding="utf-8"))
+    assert schema["properties"]["sources"]["maxItems"] == 1
+
+
+def _shared_parity_document(case: dict) -> dict:
+    if "document" in case:
+        return case["document"]
+    payload = load_json(FIXTURES / case["fixture"])
+    for key in case["document_path"]:
+        payload = payload[key]
+    return payload
+
+
+def _workflow_result_schema_validator():
+    schema_dir = ROOT / "scripts" / "reaper" / "catalog" / "schemas"
+    schema = json.loads((schema_dir / "workflow-result.v1.schema.json").read_text(encoding="utf-8"))
+
+    if Draft202012Validator is not None:
+        resources = []
+        for path in schema_dir.glob("*.schema.json"):
+            document = json.loads(path.read_text(encoding="utf-8"))
+            resources.append((document["$id"], Resource.from_contents(document)))
+        validator = Draft202012Validator(schema, registry=Registry().with_resources(resources))
+        return validator.validate, JsonSchemaValidationError
+
+    def load_schema(uri: str) -> dict:
+        return json.loads((schema_dir / uri.rsplit("/", 1)[-1]).read_text(encoding="utf-8"))
+
+    return (
+        fastjsonschema.compile(schema, handlers={"https": load_schema}),
+        fastjsonschema.JsonSchemaException,
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    load_json(PARITY_CORPUS)["cases"],
+    ids=lambda case: case["id"],
+)
+def test_shared_workflow_result_corpus_matches_python_and_json_schema(case):
+    document = _shared_parity_document(case)
+
+    try:
+        validate_workflow_result(document)
+        python_accepted = True
+    except ContractError:
+        python_accepted = False
+
+    schema_validator, schema_error = _workflow_result_schema_validator()
+    try:
+        schema_validator(document)
+        schema_accepted = True
+    except schema_error:
+        schema_accepted = False
+
+    assert python_accepted is case["expected"]["python"]
+    assert schema_accepted is case["expected"]["schema"]
+
+
+# ---------------------------------------------------------------------------
+# CI workflow JUnit guard contracts (S8 fix4 delta)
+# ---------------------------------------------------------------------------
+
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci-full.yml"
+BOOTSTRAP_DASH_CASE = "test_a_proc_view_of_another_pid_namespace_releases_nothing_under_dash"
+PORTABLE_FOREIGN_NS_CASES = (
+    "test_fix4_REAL_foreign_namespace_retry_keeps_a_live_writers_core_staging[missing]",
+    "test_fix4_REAL_foreign_namespace_retry_keeps_a_live_writers_core_staging[recorded]",
+    "test_fix4_REAL_foreign_namespace_stale_cleanup_keeps_a_live_writers_bootstrap_staging[empty]",
+    "test_fix4_REAL_foreign_namespace_stale_cleanup_keeps_a_live_writers_bootstrap_staging[recorded]",
+    "test_fix4_REAL_proc_view_of_another_namespace_is_no_proof_of_the_owners_absence[False]",
+    "test_fix4_REAL_proc_view_of_another_namespace_is_no_proof_of_the_owners_absence[True]",
+)
+
+
+def _ci_jobs() -> dict:
+    import yaml
+
+    return yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+
+
+def _ci_step_run(job_id: str, step_name: str) -> str:
+    steps = _ci_jobs()[job_id]["steps"]
+    matches = [step for step in steps if step.get("name") == step_name]
+    assert len(matches) == 1, f"{job_id}: expected one step {step_name!r}, found {len(matches)}"
+    step = matches[0]
+    assert step.get("shell") == "python"
+    assert "if" not in step and "continue-on-error" not in step
+    return step["run"]
+
+
+def _run_guard_code(code: str, cwd: Path) -> tuple[int, str]:
+    import contextlib
+    import io
+    import os
+
+    buf = io.StringIO()
+    old_cwd = Path.cwd()
+    os.chdir(cwd)
+    try:
+        with contextlib.redirect_stdout(buf):
+            exec(compile(code, str(CI_WORKFLOW), "exec"), {"__name__": "__main__"})
+        return 0, buf.getvalue()
+    except SystemExit as exc:
+        if isinstance(exc.code, int):
+            return exc.code, buf.getvalue()
+        return 1, (buf.getvalue() + "\n" + str(exc.code)).strip()
+    finally:
+        os.chdir(old_cwd)
+
+
+def _write_bootstrap_junit(
+    path: Path,
+    *,
+    dash_count: int = 1,
+    dash_classname: str = "tests.test_linux_managed_bootstrap",
+    dash_file: str | None = None,
+    dash_name: str = BOOTSTRAP_DASH_CASE,
+    dash_outcome: str | None = None,
+    filler_count: int = 62,
+    suite_tests: int | None = None,
+    suite_errors: int = 0,
+    suite_failures: int = 0,
+) -> None:
+    import xml.etree.ElementTree as ET
+
+    cases: list[ET.Element] = []
+    for _ in range(dash_count):
+        attrib = {"classname": dash_classname, "name": dash_name}
+        if dash_file is not None:
+            attrib["file"] = dash_file
+        tc = ET.Element("testcase", attrib)
+        if dash_outcome is not None:
+            ET.SubElement(tc, dash_outcome, {"message": f"forced {dash_outcome}"})
+        cases.append(tc)
+    for idx in range(filler_count):
+        cases.append(
+            ET.Element(
+                "testcase",
+                {"classname": "tests.test_linux_managed_bootstrap", "name": f"test_bootstrap_filler_{idx}"},
+            )
+        )
+    total = len(cases) if suite_tests is None else suite_tests
+    skipped = 1 if dash_outcome == "skipped" else 0
+    errors = suite_errors + (1 if dash_outcome == "error" else 0)
+    failures = suite_failures + (1 if dash_outcome == "failure" else 0)
+    suite = ET.Element(
+        "testsuite",
+        {
+            "name": "pytest",
+            "tests": str(total),
+            "skipped": str(skipped),
+            "errors": str(errors),
+            "failures": str(failures),
+        },
+    )
+    suite.extend(cases)
+    ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _write_portable_junit(
+    path: Path,
+    *,
+    foreign_names: tuple[str, ...] = PORTABLE_FOREIGN_NS_CASES,
+    foreign_classname: str = "tests.test_core_install_bootstrap",
+    foreign_file: str | None = None,
+    foreign_outcomes: dict[str, str] | None = None,
+    duplicate_name: str | None = None,
+    s8_count: int = 86,
+    s8_outcome: str | None = None,
+    include_s7_opt_in_skip: bool = True,
+) -> None:
+    import xml.etree.ElementTree as ET
+
+    outcomes = foreign_outcomes or {}
+    cases: list[ET.Element] = []
+    for name in foreign_names:
+        copies = 2 if name == duplicate_name else 1
+        for _ in range(copies):
+            attrib = {"classname": foreign_classname, "name": name}
+            if foreign_file is not None:
+                attrib["file"] = foreign_file
+            tc = ET.Element("testcase", attrib)
+            if name in outcomes:
+                ET.SubElement(tc, outcomes[name], {"message": f"forced {outcomes[name]}"})
+            cases.append(tc)
+    for idx in range(s8_count):
+        tc = ET.Element(
+            "testcase",
+            {"classname": "tests.test_core_s8_cancel", "name": f"test_s8_case_{idx}"},
+        )
+        if idx == 0 and s8_outcome is not None:
+            ET.SubElement(tc, s8_outcome, {"message": f"forced {s8_outcome}"})
+        cases.append(tc)
+    if include_s7_opt_in_skip:
+        s7_tc = ET.Element(
+            "testcase",
+            {
+                "classname": "tests.test_core_s7_linux_ffmpeg",
+                "name": "test_real_pinned_linux_archive_installs_and_verifies_when_supplied",
+            },
+        )
+        ET.SubElement(s7_tc, "skipped", {"message": "opt-in real archive test"})
+        cases.append(s7_tc)
+    skipped = sum(1 for c in cases for child in c if child.tag == "skipped")
+    errors = sum(1 for c in cases for child in c if child.tag == "error")
+    failures = sum(1 for c in cases for child in c if child.tag == "failure")
+    suite = ET.Element(
+        "testsuite",
+        {
+            "name": "pytest",
+            "tests": str(len(cases)),
+            "skipped": str(skipped),
+            "errors": str(errors),
+            "failures": str(failures),
+        },
+    )
+    suite.extend(cases)
+    ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def test_ci_workflow_preserves_pytest_exit_status_and_native_zero_skip_guard():
+    jobs = _ci_jobs()
+    boot_steps = {s.get("name"): s for s in jobs["linux-managed-python-bootstrap"]["steps"]}
+    boot_pytest = boot_steps["Run Linux outer-bootstrap contract tests"]["run"]
+    assert "--junitxml=linux-managed-python-bootstrap-junit.xml" in boot_pytest
+    assert "||" not in boot_pytest and "|" not in boot_pytest
+
+    portable_steps = {s.get("name"): s for s in jobs["tests"]["steps"]}
+    portable_pytest = portable_steps["Run portable runtime diagnostics harness tests"]["run"]
+    assert "--junitxml=portable-junit.xml" in portable_pytest
+    assert "||" not in portable_pytest and "|" not in portable_pytest
+    assert jobs["tests"]["strategy"]["matrix"]["python-version"] == ["3.11", "3.12"]
+
+    native_job = jobs["asset-publication-native"]
+    assert native_job["env"]["MIN_NATIVE_PUBLICATION_TESTS"] == "458"
+    native_guard = _ci_step_run("asset-publication-native", "Require that native publication tests really ran")
+    assert 'totals["skipped"]' in native_guard
+
+
+def test_ci_linux_bootstrap_guard_requires_dash_namespace_case_and_aggregate_count(tmp_path: Path):
+    guard = _ci_step_run(
+        "linux-managed-python-bootstrap",
+        "Require that the Linux bootstrap selection really ran",
+    )
+    report = tmp_path / "linux-managed-python-bootstrap-junit.xml"
+
+    # Genuine green: 63 passing tests including the required dash namespace test.
+    _write_bootstrap_junit(report)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc == 0, out
+    assert f"tests.test_linux_managed_bootstrap::{BOOTSTRAP_DASH_CASE}: ran once and passed" in out
+
+    # Deselected (62 tests) -> red.
+    _write_bootstrap_junit(report, dash_count=0, filler_count=62)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    # Absent even if aggregate count stays 63 -> red.
+    _write_bootstrap_junit(report, dash_count=0, filler_count=63)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    # Duplicate record -> red.
+    _write_bootstrap_junit(report, dash_count=2, filler_count=61)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "found 2" in out
+
+    # Skipped, error, or failure record -> red.
+    for outcome in ("skipped", "error", "failure"):
+        _write_bootstrap_junit(report, dash_outcome=outcome)
+        rc, out = _run_guard_code(guard, tmp_path)
+        assert rc != 0 and f"did not pass: {outcome}:" in out
+
+    # Wrong class or file identity -> red.
+    _write_bootstrap_junit(report, dash_classname="tests.test_other")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    _write_bootstrap_junit(report, dash_file="tests/test_other.py")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    # Aggregate count below 63 even when named dash case passes -> red.
+    _write_bootstrap_junit(report, dash_count=1, filler_count=61)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "the Linux bootstrap selection did not all execute and pass" in out
+
+    # Missing or malformed report -> red.
+    report.unlink()
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "cannot read JUnit report" in out
+
+    report.write_text("<not-closed", encoding="utf-8")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "cannot read JUnit report" in out
+
+    report.write_text("<root/>", encoding="utf-8")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "cannot read JUnit report" in out
+
+
+@pytest.mark.parametrize("dropped_case", PORTABLE_FOREIGN_NS_CASES)
+def test_ci_portable_guard_rejects_dropping_any_single_foreign_namespace_case(
+    tmp_path: Path, dropped_case: str
+):
+    guard = _ci_step_run("tests", "Require that the Core S8 cancellation cases really ran")
+    report = tmp_path / "portable-junit.xml"
+    remaining = tuple(name for name in PORTABLE_FOREIGN_NS_CASES if name != dropped_case)
+    _write_portable_junit(report, foreign_names=remaining)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0
+    assert f"tests.test_core_install_bootstrap::{dropped_case}: expected exactly one testcase" in out
+
+
+def test_ci_portable_guard_accepts_passing_suite_and_rejects_skip_duplicate_error_failure(
+    tmp_path: Path,
+):
+    guard = _ci_step_run("tests", "Require that the Core S8 cancellation cases really ran")
+    report = tmp_path / "portable-junit.xml"
+
+    # Genuine green with all 6 foreign-namespace cases passing, 86 S8 cases passing,
+    # and the permitted opt-in S7 skip elsewhere in the portable suite.
+    _write_portable_junit(report, include_s7_opt_in_skip=True)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc == 0, out
+    assert "6 required foreign-namespace cases ran once and passed" in out
+    assert "tests/test_core_s8_cancel.py: 86 cases ran, minimum 86" in out
+
+    # All 6 foreign-namespace cases deselected -> red.
+    _write_portable_junit(report, foreign_names=())
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    # All 6 foreign-namespace cases skipped -> red.
+    _write_portable_junit(
+        report,
+        foreign_outcomes={name: "skipped" for name in PORTABLE_FOREIGN_NS_CASES},
+    )
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "did not pass: skipped:" in out
+
+    # Single required case skipped, errored, failed, or duplicated -> red.
+    target = PORTABLE_FOREIGN_NS_CASES[0]
+    for outcome in ("skipped", "error", "failure"):
+        _write_portable_junit(report, foreign_outcomes={target: outcome})
+        rc, out = _run_guard_code(guard, tmp_path)
+        assert rc != 0 and f"tests.test_core_install_bootstrap::{target}: did not pass: {outcome}:" in out
+
+    _write_portable_junit(report, duplicate_name=target)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and f"tests.test_core_install_bootstrap::{target}: expected exactly one testcase" in out
+
+    # Wrong class/file identity or wrong parameter ID -> red.
+    _write_portable_junit(report, foreign_classname="tests.test_core_s8_cancel")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    _write_portable_junit(report, foreign_file="tests/test_core_s8_cancel.py")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    wrong_param = (
+        "test_fix4_REAL_foreign_namespace_retry_keeps_a_live_writers_core_staging[other]",
+        *PORTABLE_FOREIGN_NS_CASES[1:],
+    )
+    _write_portable_junit(report, foreign_names=wrong_param)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "expected exactly one testcase" in out
+
+    # S8 file count below 86 or skipped -> red.
+    _write_portable_junit(report, s8_count=85)
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "the Core S8 cancellation selection did not all execute and pass" in out
+
+    _write_portable_junit(report, s8_outcome="skipped")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "the Core S8 cancellation selection did not all execute and pass" in out
+
+    # Missing or malformed report -> red.
+    report.unlink()
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "cannot read JUnit report" in out
+
+    report.write_text("not xml", encoding="utf-8")
+    rc, out = _run_guard_code(guard, tmp_path)
+    assert rc != 0 and "cannot read JUnit report" in out
+
+
+def test_ci_linux_bootstrap_prepares_and_verifies_ubuntu_24_04_docker_image_before_pytest(
+    tmp_path: Path,
+):
+    import os
+    import subprocess
+
+    steps = _ci_jobs()["linux-managed-python-bootstrap"]["steps"]
+    names = [step.get("name") for step in steps]
+    prep_name = "Prepare ubuntu:24.04 Docker image for dash namespace test"
+    pytest_name = "Run Linux outer-bootstrap contract tests"
+    assert prep_name in names and pytest_name in names
+    assert names.index(prep_name) < names.index(pytest_name)
+    prep_step = steps[names.index(prep_name)]
+    assert prep_step.get("shell") == "bash"
+    assert "if" not in prep_step and "continue-on-error" not in prep_step
+    script = prep_step["run"]
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_file = tmp_path / "docker.log"
+    state_file = tmp_path / "pulled"
+    mode_file = tmp_path / "mode"
+    docker_stub = bin_dir / "docker"
+    docker_stub.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s uid=%s\\n" "$*" "$(id -u)" >> "{log_file}"\n'
+        f'mode="$(cat "{mode_file}" 2>/dev/null || echo pull_then_pass)"\n'
+        'if [ "$1" = "image" ] && [ "$2" = "inspect" ] && [ "$3" = "ubuntu:24.04" ]; then\n'
+        '  if [ "$mode" = "already_present" ]; then exit 0; fi\n'
+        f'  if [ "$mode" = "pull_then_pass" ] && [ -f "{state_file}" ]; then exit 0; fi\n'
+        '  echo "Error: No such image: ubuntu:24.04" >&2\n'
+        '  exit 1\n'
+        'fi\n'
+        'if [ "$1" = "pull" ] && [ "$2" = "ubuntu:24.04" ]; then\n'
+        '  if [ "$mode" = "pull_fails" ]; then\n'
+        '    echo "pull error: registry unavailable" >&2\n'
+        '    exit 1\n'
+        '  fi\n'
+        f'  touch "{state_file}"\n'
+        '  exit 0\n'
+        'fi\n'
+        'exit 2\n',
+        encoding="utf-8",
+    )
+    docker_stub.chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin")
+
+    # 1. Image absent initially -> pulled and inspected under the same uid.
+    mode_file.write_text("pull_then_pass", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert "ubuntu:24.04 Docker image ready" in res.stdout
+    calls = log_file.read_text(encoding="utf-8").splitlines()
+    uid = os.getuid()
+    assert calls == [
+        f"image inspect ubuntu:24.04 uid={uid}",
+        f"pull ubuntu:24.04 uid={uid}",
+        f"image inspect ubuntu:24.04 uid={uid}",
+    ]
+
+    # 2. Image already cached -> inspected without pulling.
+    log_file.unlink()
+    mode_file.write_text("already_present", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert log_file.read_text(encoding="utf-8").splitlines() == [
+        f"image inspect ubuntu:24.04 uid={uid}",
+        f"image inspect ubuntu:24.04 uid={uid}",
+    ]
+
+    # 3. Pull fails -> step fails with diagnostic.
+    log_file.unlink()
+    state_file.unlink(missing_ok=True)
+    mode_file.write_text("pull_fails", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode != 0
+    assert "failed to pull ubuntu:24.04 Docker image" in res.stderr
+
+    # 4. Post-pull inspect fails -> step fails with diagnostic.
+    log_file.unlink()
+    mode_file.write_text("inspect_always_fails", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode != 0
+    assert "docker image inspect ubuntu:24.04 failed under pytest user" in res.stderr
+
+    # 5. docker missing on PATH -> step fails with diagnostic.
+    import shutil
+
+    docker_stub.unlink()
+    (bin_dir / "id").symlink_to(shutil.which("id"))
+    res = subprocess.run(
+        ["/bin/bash", "-e", "-c", script],
+        env=dict(os.environ, PATH=str(bin_dir)),
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode != 0
+    assert "docker CLI is not available on PATH" in res.stderr
+
+
+def test_ci_portable_jobs_probe_and_remedy_unprivileged_namespaces_before_pytest(
+    tmp_path: Path,
+):
+    import os
+    import subprocess
+    from tests import test_core_install_bootstrap
+
+    steps = _ci_jobs()["tests"]["steps"]
+    names = [step.get("name") for step in steps]
+    probe_name = "Ensure unprivileged user and PID namespaces for portable bootstrap tests"
+    pytest_name = "Run portable runtime diagnostics harness tests"
+    assert probe_name in names and pytest_name in names
+    assert names.index(probe_name) < names.index(pytest_name)
+    probe_step = steps[names.index(probe_name)]
+    assert probe_step.get("shell") == "bash"
+    assert "if" not in probe_step and "continue-on-error" not in probe_step
+    script = probe_step["run"]
+
+    expected_probe = " ".join(test_core_install_bootstrap._unshare() + ["true"])
+    assert f"probe=({expected_probe})" in script
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_file = tmp_path / "ns.log"
+    remedied_file = tmp_path / "remedied"
+    mode_file = tmp_path / "mode"
+
+    unshare_stub = bin_dir / "unshare"
+    unshare_stub.write_text(
+        "#!/bin/sh\n"
+        f'printf "unshare %s uid=%s\\n" "$*" "$(id -u)" >> "{log_file}"\n'
+        f'mode="$(cat "{mode_file}" 2>/dev/null || echo pass_first)"\n'
+        'if [ "$mode" = "pass_first" ]; then exit 0; fi\n'
+        f'if [ "$mode" = "pass_after_remedy" ] && [ -f "{remedied_file}" ]; then exit 0; fi\n'
+        'echo "unshare: unshare failed: Permission denied" >&2\n'
+        'exit 1\n',
+        encoding="utf-8",
+    )
+    unshare_stub.chmod(0o755)
+
+    sysctl_stub = bin_dir / "sysctl"
+    sysctl_stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-n" ] && [ "$2" = "kernel.apparmor_restrict_unprivileged_userns" ]; then\n'
+        f'  if [ -f "{remedied_file}" ]; then echo 0; else echo 1; fi\n'
+        '  exit 0\n'
+        'fi\n'
+        'if [ "$1" = "-n" ] && [ "$2" = "kernel.unprivileged_userns_clone" ]; then\n'
+        '  echo 1\n'
+        '  exit 0\n'
+        'fi\n'
+        'if [ "$1" = "-w" ] && [ "$2" = "kernel.apparmor_restrict_unprivileged_userns=0" ]; then\n'
+        f'  touch "{remedied_file}"\n'
+        '  exit 0\n'
+        'fi\n'
+        'exit 1\n',
+        encoding="utf-8",
+    )
+    sysctl_stub.chmod(0o755)
+
+    sudo_stub = bin_dir / "sudo"
+    sudo_stub.write_text(
+        "#!/bin/sh\n"
+        f'printf "sudo %s\\n" "$*" >> "{log_file}"\n'
+        'exec "$@"\n',
+        encoding="utf-8",
+    )
+    sudo_stub.chmod(0o755)
+
+    env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin")
+    uid = os.getuid()
+
+    # 1. Probe passes on first try -> no sudo remedy invoked.
+    mode_file.write_text("pass_first", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert log_file.read_text(encoding="utf-8").splitlines() == [
+        f"unshare --user --map-root-user --pid --fork --mount-proc true uid={uid}",
+    ]
+
+    # 2. First probe fails -> sysctl remedy runs -> second probe runs as same non-root uid and passes.
+    log_file.unlink()
+    remedied_file.unlink(missing_ok=True)
+    mode_file.write_text("pass_after_remedy", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert log_file.read_text(encoding="utf-8").splitlines() == [
+        f"unshare --user --map-root-user --pid --fork --mount-proc true uid={uid}",
+        "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+        f"unshare --user --map-root-user --pid --fork --mount-proc true uid={uid}",
+    ]
+
+    # 3. Probe still fails after remedy -> step fails and reports why.
+    log_file.unlink()
+    remedied_file.unlink(missing_ok=True)
+    mode_file.write_text("always_fail", encoding="utf-8")
+    res = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode != 0
+    assert "unprivileged namespace probe still failed" in res.stderr
+    assert "Permission denied" in res.stderr
+
+    # 4. unshare missing on PATH -> step fails and reports why.
+    import shutil
+
+    unshare_stub.unlink()
+    (bin_dir / "id").symlink_to(shutil.which("id"))
+    res = subprocess.run(
+        ["/bin/bash", "-e", "-c", script],
+        env=dict(os.environ, PATH=str(bin_dir)),
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode != 0
+    assert "unshare is not available on PATH" in res.stderr

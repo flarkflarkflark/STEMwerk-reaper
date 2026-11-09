@@ -411,7 +411,8 @@ def test_caller_argv_reaches_helper_adapter_index(tmp_path, monkeypatch, workflo
     _install_fake_torch_directml(monkeypatch)
     fake_separator = _install_fake_audio_separator(monkeypatch)
     _prepare_helper_run(helper, monkeypatch)
-    monkeypatch.setattr(sys, "argv", [cmd[1], *cmd[2:]])
+    script_idx = cmd.index("--input") - 1
+    monkeypatch.setattr(sys, "argv", cmd[script_idx:])
 
     helper.main()
 
